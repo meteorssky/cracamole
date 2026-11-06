@@ -481,3 +481,27 @@ fn ts_15_scrollback_param_is_capped() {
     let cfg = TerminalConfig::from_params(&p, 96);
     assert_eq!(cfg.options.scrollback, 100_000);
 }
+
+#[tokio::test(start_paused = true)]
+async fn ts_16_idle_session_sends_sync_without_repainting() {
+    let mut r = start(&[], None, true).await;
+    r.frame().await;
+    for _ in 0..4 {
+        tokio::time::advance(Duration::from_secs(5)).await;
+        let heartbeat = r
+            .client
+            .recv_within(Duration::from_millis(10))
+            .await
+            .expect("idle sync keeps the official Java socket alive");
+        assert_eq!(heartbeat.opcode, "sync", "idle heartbeat must not repaint");
+        r.client
+            .send(Instruction::new("sync", [heartbeat.args[0].clone()]))
+            .await
+            .unwrap();
+    }
+    r.client
+        .send(Instruction::new("disconnect", Vec::<String>::new()))
+        .await
+        .unwrap();
+    r.server.await.unwrap().unwrap();
+}

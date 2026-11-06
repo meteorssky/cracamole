@@ -359,6 +359,11 @@ fn rn_cjk_01_wide_glyphs_render_when_a_cjk_font_is_available() {
         eprintln!("SKIP: no CJK font on this machine (set CRACAMOLE_FONT_DIRS)");
         return;
     };
+    assert_eq!(
+        fonts.fallback_count(),
+        1,
+        "system discovery loads one CJK face"
+    );
     let mut r = rig_with(20, 3, fonts, TerminalOptions::default());
     r.term.feed("中a".as_bytes());
     r.draw();

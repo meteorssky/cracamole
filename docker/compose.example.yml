@@ -1,11 +1,3 @@
-# Overlay for an existing Guacamole Compose deployment whose daemon service is "guacd".
-# Keep its webapp, authentication/database, and backend network configuration.
-# docker compose -f /path/to/compose.yml -f /path/to/cracamole/docker/compose.example.yml up -d guacd
-services:
-  guacd:
-    image: cracamole:local
-    environment:
-      LOG_LEVEL: info
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
+﻿# Alias for the primary Java-free deployment.
+include:
+  - path: compose.yml

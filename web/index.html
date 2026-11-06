@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cracamole</title><link rel="stylesheet" href="/assets/style.css">
+  <script defer src="/assets/guacamole.js"></script><script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <section id="login-view" class="login-view">
+    <div class="brand">◒ <span>cracamole</span></div>
+    <form id="login-form" class="login-card">
+      <p class="eyebrow">REMOTE WORKSPACE</p><h1>回到你的工作空間</h1><p class="muted">登入後，即可連線到你的遠端主機。</p>
+      <label>管理員帳號<input name="username" autocomplete="username" required maxlength="128" autofocus></label>
+      <label>密碼<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
+      <button type="submit" class="primary">登入</button><p id="login-error" role="alert"></p>
+    </form>
+  </section>
+  <main id="workspace" hidden>
+    <header><a class="brand" href="/">◒ <span>cracamole</span></a><span class="header-note">你的遠端工作空間</span><button id="logout">登出</button></header>
+    <div class="workspace-body">
+      <aside id="connections-pane">
+        <div class="pane-heading"><div><p class="eyebrow">WORKSPACE</p><h2>我的連線</h2></div><button id="add-connection" class="primary">新增連線</button></div>
+        <p id="empty-state" class="muted">新增第一台主機，開始你的遠端工作。</p><div id="connections-list"></div>
+      </aside>
+      <section class="terminal-panel">
+        <div class="terminal-toolbar"><div><strong id="terminal-name">準備連線</strong><span id="terminal-status" role="status">選擇左側的主機</span></div><div class="toolbar-actions"><button id="toggle-clipboard" disabled>剪貼簿</button><button id="disconnect" disabled>中斷連線</button></div></div>
+        <div id="terminal" tabindex="0" aria-label="遠端終端機"><div id="terminal-placeholder"><span>↗</span><h2>選擇一台主機</h2><p>你的終端機會在這裡開啟。</p></div></div>
+        <section id="clipboard-panel" hidden><label>剪貼簿內容<textarea id="clipboard-text" rows="3" spellcheck="false"></textarea></label><button id="paste-clipboard" class="primary">貼上到終端機</button><button id="copy-clipboard">複製內容</button></section>
+      </section>
+    </div>
+  </main>
+  <dialog id="connection-editor">
+    <form id="connection-form">
+      <div class="dialog-heading"><h2 id="editor-title">新增連線</h2><button id="close-editor" type="button" aria-label="關閉">✕</button></div>
+      <label>連線名稱<input name="name" required maxlength="120" placeholder="例如：開發主機"></label>
+      <div class="form-row"><label>協定<select name="protocol"><option value="ssh">SSH</option><option value="telnet">Telnet</option></select></label><label>連接埠<input name="port" type="number" min="1" max="65535" placeholder="22"></label></div>
+      <label>主機名稱或 IP<input name="hostname" required maxlength="255" placeholder="server.example.com"></label>
+      <div class="form-row"><label>遠端帳號<input name="username" autocomplete="off"></label><label>遠端密碼<input name="password" type="password" autocomplete="new-password"></label></div>
+      <details><summary>進階設定</summary>
+        <label>SSH 私鑰<textarea name="private-key" rows="4" spellcheck="false" placeholder="OpenSSH 或 PEM 私鑰"></textarea></label>
+        <label>私鑰密語<input name="passphrase" type="password" autocomplete="new-password"></label>
+        <label>SSH 主機金鑰<textarea name="host-key" rows="2" spellcheck="false" placeholder="已知的主機公鑰（可選）"></textarea></label>
+        <label>Telnet 登入成功提示<input name="login-success-regex" placeholder="正規表示式，例如：:~[$] "></label>
+        <label>Telnet 登入失敗提示<input name="login-failure-regex" placeholder="例如：Login incorrect"></label>
+        <label class="checkbox"><input name="clear-secrets" type="checkbox">清除已保存的密碼與私鑰</label>
+      </details>
+      <p id="editor-error" role="alert"></p><div class="dialog-footer"><button id="cancel-editor" type="button">取消</button><button type="submit" class="primary">儲存連線</button></div>
+    </form>
+  </dialog>
+  <div id="toast" role="status" hidden></div>
+</body></html>

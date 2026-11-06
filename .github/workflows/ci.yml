@@ -35,7 +35,7 @@ jobs:
       - run: docker build -f docker/cracamole.Dockerfile -t cracamole:ci .
       - name: Smoke test
         run: |
-          docker run -d --name g --read-only --cap-drop ALL --security-opt no-new-privileges -e LOG_LEVEL=debug cracamole:ci
+          docker run -d --name g --memory 1g --pids-limit 64 --read-only --cap-drop ALL --security-opt no-new-privileges -e LOG_LEVEL=debug cracamole:ci
           for i in $(seq 1 60); do
             if docker exec g nc -z 127.0.0.1 4822; then break; fi
             sleep 1
@@ -44,29 +44,36 @@ jobs:
           docker exec g nc -z 127.0.0.1 4822
           docker stop -t 10 g
           test "$(docker inspect g --format '{{.State.ExitCode}}')" = "0"
+      - name: Validate container isolation and graceful shutdown with active sessions
+        run: python scripts/validate_container.py
       - name: Compare live C/Rust args (including C self-comparison)
         run: |
-          docker compose -p cracamole-oracle -f docker/compose.oracle.yml up -d --wait
+          docker compose -p cracamole-oracle -f docker/compose.oracle.yml build oracle
+          docker compose -p cracamole-oracle -f docker/compose.oracle.yml up -d --no-build --wait
           python tests/oracle/compare_args.py
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: tests/e2e/package-lock.json
-      - name: Official Java webapp browser tests
+      - name: Build Java-free application
+        run: docker build -f docker/cracamole-web.Dockerfile -t cracamole-web:ci .
+      - name: Java-free browser tests
         run: |
-          docker compose -p cracamole-e2e -f docker/compose.e2e.yml up -d --wait
-          curl --fail --retry 60 --retry-delay 2 --retry-all-errors http://127.0.0.1:18080/guacamole/ > /dev/null
+          docker compose -p cracamole-e2e -f docker/compose.e2e.yml build backend
+          docker compose -p cracamole-e2e -f docker/compose.e2e.yml up -d --no-build --wait
           cd tests/e2e
           npm ci
           npx playwright install --with-deps chromium
           npm test
+          cd ../..
+          python scripts/validate_web_container.py
       - name: Collect container evidence
         if: always()
         run: |
           mkdir -p target/deployment
           docker compose -p cracamole-e2e -f docker/compose.e2e.yml logs > target/deployment/e2e.log 2>&1
-          docker image inspect cracamole:ci guacamole/guacd:1.6.0 guacamole/guacamole:1.6.0 > target/deployment/images.json
+          docker image inspect cracamole:ci cracamole-web:ci cracamole-oracle:bb1ba8ed > target/deployment/images.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -74,6 +81,7 @@ jobs:
           path: |
             target/oracle/
             target/deployment/
+            target/validation/
             tests/e2e/test-results/
             tests/e2e/playwright-report/
       - name: Clean disposable test containers

@@ -1,0 +1,21 @@
+# Java-free application. Set CRACAMOLE_ADMIN_PASSWORD before starting.
+services:
+  cracamole:
+    image: cracamole-web:local
+    build:
+      context: ..
+      dockerfile: docker/cracamole-web.Dockerfile
+    environment:
+      CRACAMOLE_ADMIN_USERNAME: ${CRACAMOLE_ADMIN_USERNAME:-admin}
+      CRACAMOLE_ADMIN_PASSWORD: ${CRACAMOLE_ADMIN_PASSWORD:?Set a password of at least 12 characters}
+      CRACAMOLE_SECURE_COOKIE: ${CRACAMOLE_SECURE_COOKIE:-false}
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: ["connections:/data"]
+    mem_limit: 1536m
+    pids_limit: 128
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+volumes:
+  connections:

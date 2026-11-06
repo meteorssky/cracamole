@@ -1,5 +1,12 @@
 target
+**/target
+**/node_modules
+**/__pycache__
+tests/e2e/test-results
+tests/e2e/playwright-report
 reference
 .git
+data
+.env
 docs
 tests/golden

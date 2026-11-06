@@ -1,10 +1,12 @@
 # cracamole: drop-in replacement for the official guacamole/guacd image.
-# NOTE: draft, not yet built in CI. Pin base images by digest before releasing.
+# Validated on linux/amd64. Pin base images by digest before releasing.
 
 FROM rust:1-alpine AS build
 RUN apk add --no-cache musl-dev build-base
 WORKDIR /src
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+# Use the toolchain supplied by the Rust base image. Copying the local "stable"
+# override would install a second toolchain (including rustfmt/clippy) in this layer.
+COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN cargo build --release --locked -p guacd
 

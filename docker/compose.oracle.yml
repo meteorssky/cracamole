@@ -1,10 +1,16 @@
-# Test ports are loopback-only. Override C_GUACD_IMAGE with a digest for release evidence.
+# Test ports are loopback-only. The source-pinned oracle matches the migration notes.
 services:
   oracle:
-    image: ${C_GUACD_IMAGE:-guacamole/guacd:1.6.0}
+    image: ${C_GUACD_IMAGE:-cracamole-oracle:bb1ba8ed}
+    build:
+      context: ..
+      dockerfile: docker/oracle.Dockerfile
+    mem_limit: 256m
     ports: ["127.0.0.1:14822:4822"]
   candidate:
     image: cracamole:ci
+    mem_limit: 1g
+    pids_limit: 64
     build:
       context: ..
       dockerfile: docker/cracamole.Dockerfile

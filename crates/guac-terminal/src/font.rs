@@ -153,6 +153,12 @@ impl FontSet {
 }
 
 fn scan_dir(dir: &Path, depth: u32, out: &mut Vec<Arc<Font>>) {
+    // One pan-CJK fallback is sufficient for discovery. fontdue eagerly parses
+    // every glyph: four Noto CJK faces consumed ~1.8 GiB before any session.
+    // Applications can still add explicit fallbacks with add_fallback_bytes().
+    if !out.is_empty() {
+        return;
+    }
     const WANTED: &[&str] = &[
         "cjk",
         "wenquanyi",
@@ -171,8 +177,21 @@ fn scan_dir(dir: &Path, depth: u32, out: &mut Vec<Arc<Font>>) {
         return;
     };
     let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
-    entries.sort();
+    entries.sort_by_key(|path| {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        (
+            name.contains("bold") || name.contains("black") || name.contains("demi"),
+            path.clone(),
+        )
+    });
     for p in entries {
+        if !out.is_empty() {
+            break;
+        }
         if p.is_dir() {
             if depth > 0 {
                 scan_dir(&p, depth - 1, out);
@@ -185,7 +204,7 @@ fn scan_dir(dir: &Path, depth: u32, out: &mut Vec<Arc<Font>>) {
             .unwrap_or("")
             .to_ascii_lowercase();
         let ext_ok = name.ends_with(".ttf") || name.ends_with(".otf") || name.ends_with(".ttc");
-        if ext_ok && WANTED.iter().any(|w| name.contains(w)) && out.len() < 4 {
+        if ext_ok && WANTED.iter().any(|w| name.contains(w)) {
             if let Ok(bytes) = std::fs::read(&p) {
                 if let Some(f) = load(&bytes) {
                     out.push(Arc::new(f));

@@ -76,10 +76,16 @@ def main():
             "stable": oracle == repeat,
             "equal": oracle == candidate,
         }
+        oracle_args = instruction(oracle.decode())[0][2:]
+        candidate_args = instruction(candidate.decode())[0][2:]
+        records[protocol]["candidate_only_args"] = [arg for arg in candidate_args if arg not in oracle_args]
+        records[protocol]["oracle_only_args"] = [arg for arg in oracle_args if arg not in candidate_args]
     options.output.parent.mkdir(parents=True, exist_ok=True)
     options.output.write_text(json.dumps(records, indent=2), encoding="utf-8")
     for protocol, record in records.items():
         print(f"{protocol}: stable={record['stable']} equal={record['equal']}")
+        if not record["equal"]:
+            print(f"  candidate-only: {record['candidate_only_args']}; oracle-only: {record['oracle_only_args']}")
     if not all(r["stable"] and r["equal"] for r in records.values()):
         raise SystemExit(1)
 

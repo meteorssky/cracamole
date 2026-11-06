@@ -167,6 +167,12 @@ pub async fn run_terminal(
 
     let mut dirty = true;
     let mut last_frame: Option<Instant> = None;
+    // The official Java tunnel times out after 15 seconds without guacd output.
+    // Keep idle terminals and credential prompts alive without repainting them.
+    let heartbeat_interval = Duration::from_secs(5);
+    let mut heartbeat =
+        tokio::time::interval_at(Instant::now() + heartbeat_interval, heartbeat_interval);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         let next_frame = match (dirty, last_frame) {
@@ -246,6 +252,9 @@ pub async fn run_terminal(
                         return Ok(());
                     }
                 }
+            }
+            _ = heartbeat.tick() => {
+                ctx.tx.sync().await?;
             }
             _ = frame_due => {
                 term.render(&mut display);
