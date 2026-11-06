@@ -1,0 +1,5 @@
+target
+reference
+.git
+docs
+tests/golden

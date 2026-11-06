@@ -1,0 +1,22 @@
+[package]
+name = "proto-ssh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+guac-session = { path = "../guac-session" }
+guac-terminal = { path = "../guac-terminal" }
+guac-protocol = { path = "../guac-protocol" }
+tokio.workspace = true
+tracing.workspace = true
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+hmac = "0.13"
+sha1 = "0.11"
+base64 = "0.23"
+zeroize = "1"
+
+[dev-dependencies]
+guac-testkit = { path = "../guac-testkit" }
+tokio = { workspace = true, features = ["test-util"] }
+rand = "0.10"

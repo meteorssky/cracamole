@@ -1,0 +1,34 @@
+[package]
+name = "guacd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "guacd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "guacd"
+path = "src/main.rs"
+
+[features]
+default = ["telnet", "ssh"]
+telnet = ["dep:proto-telnet"]
+ssh = ["dep:proto-ssh"]
+
+[dependencies]
+guac-session = { path = "../guac-session" }
+guac-protocol = { path = "../guac-protocol" }
+guac-terminal = { path = "../guac-terminal" }
+proto-telnet = { path = "../proto-telnet", optional = true }
+proto-ssh = { path = "../proto-ssh", optional = true }
+tokio.workspace = true
+tokio-util = "0.7"
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt"] }
+
+[dev-dependencies]
+guac-testkit = { path = "../guac-testkit" }
+tokio = { workspace = true, features = ["test-util"] }
+base64 = "0.23"

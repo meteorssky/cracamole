@@ -1,0 +1,13 @@
+[package]
+name = "guac-display"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+guac-protocol = { path = "../guac-protocol" }
+png = "0.18"
+base64 = "0.23"
+
+[dev-dependencies]
+guac-testkit = { path = "../guac-testkit" }

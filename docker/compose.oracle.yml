@@ -1,0 +1,14 @@
+# Test ports are loopback-only. Override C_GUACD_IMAGE with a digest for release evidence.
+services:
+  oracle:
+    image: ${C_GUACD_IMAGE:-guacamole/guacd:1.6.0}
+    ports: ["127.0.0.1:14822:4822"]
+  candidate:
+    image: cracamole:ci
+    build:
+      context: ..
+      dockerfile: docker/cracamole.Dockerfile
+    ports: ["127.0.0.1:24822:4822"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
