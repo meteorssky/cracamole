@@ -1,0 +1,134 @@
+/*
+ * Design tokens: the only place colours, spacing, type, radii, shadows and motion are defined.
+ * Dark is the default (terminal-first). Light follows prefers-color-scheme or [data-theme="light"].
+ * Every foreground/background pair is verified by tests/e2e/contrast.test.js.
+ */
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --surface: #0f1512;
+  --surface-raised: #17201b;
+  --surface-sunken: #0a0f0c;
+  --terminal-bg: #000000;
+  --on-terminal: #e8efe9; /* text drawn on the terminal surface, in every theme */
+  --on-terminal-muted: #a9b8ae;
+  --overlay-scrim: rgb(5 10 7 / 72%);
+
+  /* lines */
+  --border: #2c3a32;
+  --border-strong: #6f8277; /* inputs and other UI boundaries: >= 3:1 */
+
+  /* text */
+  --text: #e8efe9;
+  --text-muted: #a9b8ae;
+  --text-danger: #ff9e94;
+  --text-warning: #f0c25e;
+  --text-success: #62cf9b;
+
+  /* actions */
+  --accent: #26784f;
+  --accent-hover: #1e6642;
+  --on-accent: #ffffff;
+  --danger: #c4342b;
+  --danger-hover: #a92d25;
+  --on-danger: #ffffff;
+  --focus: #8fd8b4;
+
+  /* spacing (4px base) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  /* type: never below 0.875rem for UI text */
+  --font-ui: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC",
+    "Microsoft JhengHei", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Noto Sans Mono CJK TC", Menlo, monospace;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --leading: 1.55;
+
+  /* shape and depth */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 40%);
+  --shadow-3: 0 24px 64px rgb(0 0 0 / 55%);
+
+  /* layout */
+  --topbar-h: 2.75rem;
+  --statusbar-h: 2rem;
+  --drawer-w: 20rem;
+  --tap: 2.75rem; /* 44px touch target */
+
+  /* motion */
+  --dur: 160ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --surface: #f5f7f2;
+    --surface-raised: #ffffff;
+    --surface-sunken: #e9eee7;
+    --overlay-scrim: rgb(20 30 24 / 55%);
+    --border: #cfd9d1;
+    --border-strong: #6c7f73;
+    --text: #1b2a22;
+    --text-muted: #53635a;
+    --text-danger: #a61f17;
+    --text-warning: #7a4f00;
+    --text-success: #17633f;
+    --accent: #1f6b47;
+    --accent-hover: #185738;
+    --danger: #b3261e;
+    --danger-hover: #9a1f18;
+    --focus: #1f6b47;
+    --shadow-1: 0 1px 2px rgb(20 40 28 / 12%);
+    --shadow-2: 0 8px 24px rgb(20 40 28 / 16%);
+    --shadow-3: 0 24px 64px rgb(20 40 28 / 24%);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface: #f5f7f2;
+  --surface-raised: #ffffff;
+  --surface-sunken: #e9eee7;
+  --overlay-scrim: rgb(20 30 24 / 55%);
+  --border: #cfd9d1;
+  --border-strong: #6c7f73;
+  --text: #1b2a22;
+  --text-muted: #53635a;
+  --text-danger: #a61f17;
+  --text-warning: #7a4f00;
+  --text-success: #17633f;
+  --accent: #1f6b47;
+  --accent-hover: #185738;
+  --danger: #b3261e;
+  --danger-hover: #9a1f18;
+  --focus: #1f6b47;
+  --shadow-1: 0 1px 2px rgb(20 40 28 / 12%);
+  --shadow-2: 0 8px 24px rgb(20 40 28 / 16%);
+  --shadow-3: 0 24px 64px rgb(20 40 28 / 24%);
+}
+
+@media (pointer: coarse) {
+  :root {
+    --statusbar-h: 2.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 1ms;
+  }
+}

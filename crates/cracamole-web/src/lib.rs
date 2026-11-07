@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod assets;
 mod auth;
 mod store;
 mod tunnel;
@@ -38,10 +39,24 @@ struct App {
 pub struct ApiError {
     status: StatusCode,
     message: &'static str,
+    field: Option<&'static str>,
 }
 impl ApiError {
     fn new(status: StatusCode, message: &'static str) -> Self {
-        Self { status, message }
+        Self {
+            status,
+            message,
+            field: None,
+        }
+    }
+}
+impl From<store::Invalid> for ApiError {
+    fn from(invalid: store::Invalid) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: invalid.message,
+            field: Some(invalid.field),
+        }
     }
 }
 impl From<StatusCode> for ApiError {
@@ -58,7 +73,11 @@ impl From<StatusCode> for ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({"error":self.message}))).into_response()
+        let body = match self.field {
+            Some(field) => json!({"error":self.message,"field":field}),
+            None => json!({"error":self.message}),
+        };
+        (self.status, Json(body)).into_response()
     }
 }
 fn storage_error(error: std::io::Error) -> ApiError {
@@ -77,56 +96,9 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
         shutdown: config.shutdown,
     });
     Ok(Router::new()
-        .route(
-            "/",
-            get(|| async { Html(include_str!("../../../web/index.html")) }),
-        )
-        .route(
-            "/assets/app.js",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_str!("../../../web/app.js"),
-                )
-            }),
-        )
-        .route(
-            "/assets/style.css",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    include_str!("../../../web/style.css"),
-                )
-            }),
-        )
-        .route(
-            "/assets/guacamole.js",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_str!("../../../web/vendor/guacamole.js"),
-                )
-            }),
-        )
+        .route("/", get(|| async { Html(assets::INDEX) }))
+        .route("/assets/{*path}", get(asset))
         .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
-        .route(
-            "/assets/NOTICE",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                    include_str!("../../../web/vendor/NOTICE"),
-                )
-            }),
-        )
-        .route(
-            "/assets/LICENSE",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                    include_str!("../../../web/vendor/LICENSE"),
-                )
-            }),
-        )
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/session", get(session))
@@ -139,6 +111,12 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
         .layer(DefaultBodyLimit::max(128 * 1024))
         .layer(middleware::from_fn(security_headers))
         .with_state(app))
+}
+
+async fn asset(Path(path): Path<String>) -> Result<Response, ApiError> {
+    let asset =
+        assets::find(&path).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "找不到檔案"))?;
+    Ok(([(header::CONTENT_TYPE, asset.mime)], asset.body).into_response())
 }
 
 async fn security_headers(request: axum::extract::Request, next: Next) -> Response {
@@ -236,7 +214,7 @@ async fn create(
 ) -> Result<Response, ApiError> {
     app.auth.authorize(&headers).await?;
     auth::same_origin(&headers)?;
-    store::validate(&draft).map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e))?;
+    store::validate(&draft)?;
     let connection = app
         .store
         .save(None, draft)
@@ -254,7 +232,7 @@ async fn update(
 ) -> Result<Json<store::PublicConnection>, ApiError> {
     app.auth.authorize(&headers).await?;
     auth::same_origin(&headers)?;
-    store::validate(&draft).map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e))?;
+    store::validate(&draft)?;
     app.store
         .save(Some(&id), draft)
         .await

@@ -1,0 +1,15 @@
+/* Helper keys for touch devices: keys a soft keyboard does not offer. */
+.keybar {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  overflow-x: auto;
+  background: var(--surface-raised);
+  border-block-start: 1px solid var(--border);
+}
+
+.keybar .btn {
+  flex: none;
+  min-inline-size: 2.75rem;
+  font-family: var(--font-mono);
+}

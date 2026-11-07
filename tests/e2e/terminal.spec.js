@@ -1,83 +1,5 @@
-﻿const { test, expect } = require('@playwright/test');
-const { execFileSync } = require('node:child_process');
-const path = require('node:path');
-const PASSWORD = 'fixture-admin-password-2026';
-
-function compose(args) {
-  const remote = process.env.CRACAMOLE_E2E_SSH;
-  const directory = process.env.CRACAMOLE_E2E_REMOTE_DIR;
-  if (remote && !directory) throw new Error('CRACAMOLE_E2E_REMOTE_DIR is required');
-  const file = remote ? `${directory}/docker/compose.e2e.yml` : path.resolve(__dirname, '../../docker/compose.e2e.yml');
-  const command = ['compose', '-p', 'cracamole-e2e', '-f', file, ...args];
-  const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
-  return execFileSync(remote ? 'ssh' : 'docker', remote
-    ? ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', remote, ['docker', ...command].map(quote).join(' ')]
-    : command, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
-}
-function remoteFile(file, service = 'backend') {
-  const container = service === 'rdp' && process.env.CRACAMOLE_E2E_RDP_CONTAINER;
-  if (container) {
-    try { return execFileSync('ssh', ['-o', 'BatchMode=yes', process.env.CRACAMOLE_E2E_SSH, `docker exec ${container} cat ${file}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 }); } catch { return ''; }
-  }
-  try { return compose(['exec', '-T', service, 'cat', file]); } catch { return ''; } }
-// Run a shell command as the RDP session user inside the xrdp fixture.
-function rdpExec(script) {
-  const container = process.env.CRACAMOLE_E2E_RDP_CONTAINER;
-  const inner = ['exec', '-u', 'tester', '-e', 'DISPLAY=:10', container || 'rdp', 'sh', '-c', script];
-  if (container) {
-    const quote = value => "'" + value.replaceAll("'", "'\''") + "'";
-    return execFileSync('ssh', ['-o', 'BatchMode=yes', process.env.CRACAMOLE_E2E_SSH, ['docker', ...inner].map(quote).join(' ')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
-  }
-  return compose([...inner.slice(0, 5), 'rdp', 'sh', '-c', script].map(String)).toString();
-}
-async function ready(request) {
-  await expect.poll(async () => { try { return (await request.get('health', { timeout: 3000 })).status(); } catch { return 0; } }, { timeout: 90000 }).toBe(200);
-}
-async function login(page) {
-  await page.goto('./');
-  await page.locator('#login-form [name=username]').fill('admin');
-  await page.locator('#login-form [name=password]').fill(PASSWORD);
-  await page.getByRole('button', { name: '登入', exact: true }).click();
-  await expect(page.locator('#workspace')).toBeVisible();
-}
-async function visibleInk(page, clip) {
-  const screenshot = await (clip ? page.screenshot({ clip }) : page.locator('#terminal').screenshot());
-  return page.evaluate(async encoded => {
-    const image = new Image();
-    image.src = 'data:image/png;base64,' + encoded;
-    await image.decode();
-    const canvas = document.createElement('canvas');
-    canvas.width = image.width; canvas.height = image.height;
-    const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
-    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    let ink = 0;
-    for (let i = 0; i < pixels.length; i += 4)
-      if (pixels[i + 3] && pixels[i] + pixels[i + 1] + pixels[i + 2] > 100) ink++;
-    return ink;
-  }, screenshot.toString('base64'));
-}
-async function addConnection(page, name, protocol, host='backend', port='', password='tester-pw') {
-  await page.getByRole('button', { name: '新增連線', exact: true }).click();
-  const form = page.locator('#connection-form');
-  await form.locator('[name=name]').fill(name);
-  await form.locator('[name=protocol]').selectOption(protocol);
-  await form.locator('[name=hostname]').fill(host);
-  if (port) await form.locator('[name=port]').fill(String(port));
-  await form.locator('[name=username]').fill('tester');
-  await form.locator('[name=password]').fill(password);
-  if (protocol === 'rdp') {
-    await form.locator('summary').click();
-    await form.locator('[name=ignore-cert]').check();
-  }
-  if (protocol === 'telnet') {
-    await form.locator('summary').click();
-    await form.locator('[name=login-success-regex]').fill(':~[$] ');
-    await form.locator('[name=login-failure-regex]').fill('Login incorrect');
-  }
-  await form.getByRole('button', { name: '儲存連線' }).click();
-  await expect(page.locator('#connection-editor')).not.toBeVisible();
-  await expect(page.getByRole('button', { name: `連線 ${name}`, exact: true })).toBeVisible();
-}
+const { test, expect } = require('@playwright/test');
+const { compose, remoteFile, rdpExec, ready, login, visibleInk, addConnection } = require('./helpers');
 
 test.beforeAll(async ({ request }) => ready(request));
 
@@ -88,7 +10,7 @@ test.beforeEach(async ({ page }) => {
 
 test('rdp: connect to xrdp, paint the desktop, keyboard reaches the remote session', async ({ page }) => {
   const name = `RDP ${Date.now()}`;
-  await login(page);
+  await login(page, { fresh: true });
   await addConnection(page, name, 'rdp', process.env.CRACAMOLE_RDP_HOST || 'rdp', process.env.CRACAMOLE_RDP_PORT || '');
   const profile = (await (await page.request.get('api/connections')).json()).find(c => c.name === name);
   expect(profile.protocol).toBe('rdp');
@@ -200,7 +122,7 @@ test('partial screen updates keep earlier content and large images decode', asyn
 for (const protocol of ['ssh', 'telnet']) {
   test(`${protocol}: Java-free login, connection management, vim, resize, clipboard, CJK and idle`, async ({ page }, info) => {
     const name = `${protocol.toUpperCase()} ${Date.now()}`;
-    await login(page);
+    await login(page, { fresh: true });
     await addConnection(page, name, protocol);
     const listing = await page.request.get('api/connections');
     const profile = (await listing.json()).find(c => c.name === name);
@@ -264,17 +186,17 @@ test('Java-free connection editing, credential redaction, restart persistence an
   await addConnection(page, name, 'ssh', 'example.invalid');
   await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click();
   const form = page.locator('#connection-form');
-  await expect(form.locator('[name=password]')).toHaveValue('');
-  await expect(form.locator('[name=password]')).toHaveAttribute('placeholder', '已設定；留空保留');
-  await form.locator('[name=name]').fill(name + ' edited');
+  await expect(form.getByLabel('密碼', { exact: true })).toHaveValue('');
+  await expect(form.getByText('已設定密碼。留空會保留目前的密碼。')).toBeVisible();
+  await form.getByLabel('連線名稱').fill(name + ' edited');
   await form.getByRole('button', { name: '儲存連線' }).click();
   await expect(page.getByRole('button', { name: `連線 ${name} edited`, exact: true })).toBeVisible();
   compose(['restart', 'web']);
   await ready(request);
   await login(page);
   await expect(page.getByRole('button', { name: `連線 ${name} edited`, exact: true })).toBeVisible();
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: `刪除 ${name} edited`, exact: true }).click();
+  await page.getByRole('button', { name: '刪除這台主機', exact: true }).click();
   await expect(page.getByRole('button', { name: `連線 ${name} edited`, exact: true })).toHaveCount(0);
 });
 

@@ -75,6 +75,8 @@ npm test
 
 更簡單的做法是一個指令（本機不需要 Docker）：`scripts/e2e_remote.sh user@docker-host [playwright 參數]`。它會把工作目錄（含未提交變更）同步到遠端的獨立目錄、以獨立的 compose 專案啟動 Rust 應用與 sshd／telnetd、建立 SSH 轉發，於 Chromium、Firefox 與 WebKit 執行整套 Playwright，結束後自動清理，不影響遠端已部署的服務。
 
+前端的快速檢查不需要任何主機：`cd tests/e2e && node --test contrast.test.js syntax.test.js`（色彩對比與 ES module 語法）。介面行為與無障礙（axe）案例在 `tests/e2e/ui.spec.js`，可用 `scripts/rdp_dev.sh user@docker-host -g "ui:"` 在本機編譯的程式上執行。前端規範見 `web/GUIDELINES.md`。
+
 RDP 的快速開發迴圈：`scripts/rdp_dev.sh user@docker-host`。只在遠端啟動 xrdp 測試容器、建立 SSH 轉發，並使用本機編譯的 `cracamole-web` 執行 RDP 的 Playwright 案例（略過約 40 分鐘的完整映像建置）。
 
 Windows 若遇中斷建置留下的增量連結錯誤，可先設定 `$env:CARGO_INCREMENTAL='0'`。部分既有測試需要 `ssh-keygen`、`sh`、參考 C 原始碼或 CJK 字型；缺少時會跳過，檢視結果時須留意。

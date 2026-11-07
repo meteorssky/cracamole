@@ -1,19 +1,25 @@
 # syntax=docker/dockerfile:1
-FROM rust:1-alpine AS build
-RUN apk add --no-cache musl-dev build-base
+# Dependencies are compiled in their own layer (cargo-chef). That layer is rebuilt only when
+# Cargo.toml / Cargo.lock change, so a code or front-end change recompiles just the workspace crates.
+FROM rust:1-alpine AS chef
+RUN apk add --no-cache musl-dev build-base  && cargo install cargo-chef --locked
 WORKDIR /src
+
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY web ./web
-ARG TARGETARCH
-ARG JOBS=2
-RUN --mount=type=cache,id=cracamole-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=cracamole-target-${TARGETARCH},target=/src/target \
-    # Copied source mtimes may predate the cached Cargo fingerprints.
-    # Refresh local sources so a changed Docker context cannot reuse a stale binary.
-    find crates web -type f -exec touch {} + \
- && cargo build --release --locked -p cracamole-web --jobs ${JOBS} \
- && mkdir -p /out && cp target/release/cracamole-web /out/cracamole-web
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS build
+# Empty means "use every core"; set JOBS=2 on small CI runners to bound memory.
+ARG JOBS=
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release --locked -p cracamole-web ${JOBS:+--jobs "$JOBS"} --recipe-path recipe.json
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY web ./web
+RUN cargo build --release --locked -p cracamole-web ${JOBS:+--jobs "$JOBS"}  && mkdir -p /out && cp target/release/cracamole-web /out/cracamole-web
 
 FROM alpine:3
 RUN apk add --no-cache font-noto-cjk \

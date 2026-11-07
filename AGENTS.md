@@ -11,10 +11,11 @@
 
 ## 架構與資料
 
-- Workspace 共九個 crate；維持依賴方向，底層不得依賴 Web 層，`guac-testkit` 僅作 dev-dependency。
+- Workspace 共十個 crate；維持依賴方向，底層不得依賴 Web 層，`guac-testkit` 僅作 dev-dependency。
 - 管理員帳密由環境變數提供，沒有正式預設密碼。沿用 Argon2id、HttpOnly／SameSite cookie、同源檢查與登入限流；登出、session 到期與關機須關閉相關 tunnel。
 - 連線設定保存於私有 JSON／Docker volume。機密目前未做靜態加密，Unix 目錄／檔案權限為 0700／0600；不得宣稱已加密。API 不回傳密碼、私鑰或密語；不得寫入 URL、日誌或 Git。編輯時未提供的機密保留，明確空值才清除。
 - daemon 僅監聽私人 loopback，不發布 4822。正式 Compose 預設僅發布主機 loopback HTTP；遠端使用透過 HTTPS reverse proxy，保留 Host 與 WebSocket，啟用 Secure cookie。
+- 前端（`web/`）的任何變更必須遵守 `web/GUIDELINES.md`（無建置步驟、CSP、token、無障礙、測試與完成定義）；設計背景見本機 `docs/ux-redesign.md`。
 - `web/vendor/` 的 Apache JavaScript 保留 LICENSE／NOTICE；更新時使用釘選來源與 checksum。
 
 ## 驗證與回歸

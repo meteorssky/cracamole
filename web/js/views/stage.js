@@ -1,0 +1,179 @@
+// The stage: the remote display plus everything about its state (overlay, status bar, helper keys, clipboard).
+import { $, el } from '../util/dom.js';
+import { endpoint, protocolLabel } from '../util/protocols.js';
+import { createSession } from '../session/guac.js';
+import { CTRL_ALT_DEL, KEYS } from '../session/keys.js';
+import { toast } from '../ui/toast.js';
+import { setDrawerOpen } from './drawer.js';
+
+let current = null; // { connection, session }
+let hooks = { onEdit: () => {}, onActive: () => {} };
+
+function setStatus(text, dotState) {
+  $('terminal-status').textContent = text;
+  $('status-dot').dataset.state = dotState;
+  $('chip-dot').dataset.state = dotState;
+}
+
+function setControls(connected) {
+  for (const id of ['toggle-clipboard', 'toggle-keybar', 'disconnect']) $(id).disabled = !connected;
+  if (!connected) {
+    $('clipboard-panel').hidden = true;
+    $('toggle-clipboard').setAttribute('aria-expanded', 'false');
+  }
+}
+
+function showOverlay({ connecting = false, title, detail = '', tone = 'neutral', canRetry = false, canEdit = false }) {
+  $('overlay-spinner').hidden = !connecting;
+  const heading = $('overlay-title');
+  heading.textContent = title;
+  heading.dataset.tone = tone;
+  $('overlay-detail').textContent = detail;
+  $('overlay-detail').hidden = !detail;
+  $('overlay-retry').hidden = !canRetry;
+  $('overlay-edit').hidden = !canEdit;
+  $('overlay-close').hidden = connecting;
+  $('overlay').hidden = false;
+  $('overlay').setAttribute('role', tone === 'error' ? 'alert' : 'status');
+}
+
+function hideOverlay() {
+  $('overlay').hidden = true;
+}
+
+function renderKeybar(modifiers = { ctrl: false, alt: false }) {
+  const buttons = KEYS.map(key =>
+    el(
+      'button',
+      {
+        class: 'btn btn--small',
+        type: 'button',
+        'aria-label': key.aria,
+        'aria-pressed': key.modifier ? String(Boolean(modifiers[key.modifier])) : null,
+        // keep the soft keyboard (and terminal focus) where it is while tapping helper keys
+        onmousedown: event => event.preventDefault(),
+        onclick: () => {
+          if (!current) return;
+          if (key.modifier) current.session.toggleModifier(key.modifier);
+          else current.session.sendKey(key.keysym);
+        },
+      },
+      key.label,
+    ),
+  );
+  $('keybar').replaceChildren(...buttons);
+}
+
+function setKeybarVisible(visible) {
+  $('keybar').hidden = !visible;
+  $('toggle-keybar').setAttribute('aria-pressed', String(visible));
+}
+
+function onSessionState(connection, state, info) {
+  if (!current || current.connection.id !== connection.id) return;
+  if (state === 'connecting') {
+    setStatus('正在連線…', 'connecting');
+    showOverlay({ connecting: true, title: '正在連線到 ' + connection.name + '…' });
+    return;
+  }
+  if (state === 'connected') {
+    hideOverlay();
+    setStatus('已連線', 'connected');
+    setControls(true);
+    current.session.focus();
+    return;
+  }
+  setControls(false);
+  setKeybarVisible(false);
+  if (info.reason === 'user') {
+    setStatus('未連線', 'idle');
+    return;
+  }
+  setStatus(info.status, info.tone === 'error' ? 'error' : 'closed');
+  showOverlay(info);
+}
+
+export function openSession(connection) {
+  closeSession();
+  current = { connection, session: null };
+  hooks.onActive(connection.id);
+  setDrawerOpen(false);
+  $('terminal-placeholder').hidden = true;
+  $('session-chip').hidden = false;
+  $('terminal-name').textContent = connection.name;
+  $('status-meta').textContent = protocolLabel(connection.protocol) + ' · ' + endpoint(connection);
+  $('send-cad').hidden = connection.protocol !== 'rdp';
+  renderKeybar();
+  const session = createSession({
+    connection,
+    mount: $('terminal'),
+    onState: (state, info) => onSessionState(connection, state, info),
+    onClipboard: text => {
+      $('clipboard-text').value = text;
+    },
+    onModifiers: modifiers => renderKeybar(modifiers),
+  });
+  current.session = session;
+  if (window.matchMedia('(pointer: coarse)').matches) setKeybarVisible(true);
+}
+
+export function closeSession() {
+  if (!current) return;
+  current.session?.dispose();
+  current = null;
+  hooks.onActive(null);
+  hideOverlay();
+  setControls(false);
+  setKeybarVisible(false);
+  $('terminal-placeholder').hidden = false;
+  $('session-chip').hidden = true;
+  $('send-cad').hidden = true;
+  $('status-meta').textContent = '';
+  $('clipboard-text').value = '';
+  setStatus('未連線', 'idle');
+  setDrawerOpen(true);
+}
+
+export function activeConnectionId() {
+  return current?.connection.id ?? null;
+}
+
+// First-run guidance lives where the user is looking: in the empty stage.
+export function showEmptyGuidance(hasConnections) {
+  $('empty-actions').hidden = hasConnections;
+  $('empty-title').textContent = hasConnections ? '選擇一台主機' : '新增你的第一台主機';
+  $('empty-text').textContent = hasConnections
+    ? '從左側連線庫選擇主機，終端機會在這裡開啟。'
+    : '選擇協定並填寫主機資訊，儲存後就能從這裡連線。';
+}
+
+export function initStage(callbacks) {
+  hooks = callbacks;
+  setStatus('未連線', 'idle');
+  $('overlay-retry').addEventListener('click', () => current && openSession(current.connection));
+  $('overlay-edit').addEventListener('click', () => current && hooks.onEdit(current.connection));
+  $('overlay-close').addEventListener('click', closeSession);
+  $('disconnect').addEventListener('click', closeSession);
+  $('toggle-keybar').addEventListener('click', () => setKeybarVisible($('keybar').hidden));
+  $('send-cad').addEventListener('click', () => current?.session.sendCombo(CTRL_ALT_DEL));
+  $('toggle-clipboard').addEventListener('click', () => {
+    const panel = $('clipboard-panel');
+    panel.hidden = !panel.hidden;
+    $('toggle-clipboard').setAttribute('aria-expanded', String(!panel.hidden));
+    if (!panel.hidden) $('clipboard-text').focus();
+  });
+  $('paste-clipboard').addEventListener('click', () => {
+    current?.session.paste($('clipboard-text').value);
+    current?.session.focus();
+  });
+  $('copy-clipboard').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('clipboard-text').value);
+      toast('已複製');
+    } catch {
+      $('clipboard-text').select();
+      toast('瀏覽器不允許自動複製，請手動複製所選內容。');
+    }
+  });
+  window.addEventListener('beforeunload', () => current?.session.dispose());
+}

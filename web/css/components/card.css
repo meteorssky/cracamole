@@ -1,0 +1,76 @@
+.card-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.card {
+  position: relative;
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.card:hover {
+  background: var(--surface-sunken);
+}
+
+.card[data-active="true"] {
+  border-color: var(--accent-hover);
+  box-shadow: 0 0 0 1px var(--accent-hover);
+}
+
+.card__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.card__open {
+  min-inline-size: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* the whole card is the click target */
+.card__open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+}
+
+.card__open:focus-visible {
+  outline: none;
+}
+
+.card__open:focus-visible::after {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.card__meta {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.card__actions {
+  position: relative; /* above the stretched button so edit/delete stay clickable */
+  z-index: 1;
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}

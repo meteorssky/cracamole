@@ -1,0 +1,77 @@
+/* Message layer on top of the terminal: connecting, closed, failed. */
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--overlay-scrim);
+  text-align: center;
+}
+
+.overlay__panel {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: center;
+  max-inline-size: 30rem;
+  padding: var(--space-5);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.overlay__title {
+  font-size: var(--text-lg);
+}
+
+.overlay__title[data-tone="error"] {
+  color: var(--text-danger);
+}
+
+.overlay__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+.spinner {
+  inline-size: 1.75rem;
+  block-size: 1.75rem;
+  border: 3px solid var(--border-strong);
+  border-block-start-color: var(--focus);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.empty {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: center;
+  place-content: center;
+  block-size: 100%;
+  padding: var(--space-5);
+  text-align: center;
+  color: var(--on-terminal);
+}
+
+.empty .muted {
+  color: var(--on-terminal-muted);
+}
+
+.empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}

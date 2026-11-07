@@ -24,7 +24,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== build and start fixture (Rust app + sshd/telnetd)"
-ssh "$HOST" "$COMPOSE up -d --build --wait" 2>&1 | tail -5
+ssh "$HOST" "$COMPOSE build --build-arg JOBS=${CRACAMOLE_E2E_JOBS:-} && $COMPOSE up -d --wait" 2>&1 | tail -5
 
 echo "== tunnel localhost:$PORT -> $HOST"
 ssh -o ExitOnForwardFailure=yes -N -L "$PORT:127.0.0.1:18080" "$HOST" &

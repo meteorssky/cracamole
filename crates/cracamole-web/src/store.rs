@@ -50,13 +50,27 @@ impl Connection {
     }
 }
 
-pub fn validate(draft: &Draft) -> Result<(), &'static str> {
+/// A rejected draft: which form field is wrong and what the user should do.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Invalid {
+    pub field: &'static str,
+    pub message: &'static str,
+}
+
+fn invalid(field: &'static str, message: &'static str) -> Invalid {
+    Invalid { field, message }
+}
+
+pub fn validate(draft: &Draft) -> Result<(), Invalid> {
     if draft.name.trim().is_empty() || draft.name.chars().count() > 120 {
-        return Err("連線名稱須為 1–120 字元");
+        return Err(invalid("name", "請輸入 1 到 120 個字元的連線名稱。"));
     }
     let registry = guacd::Registry::builtin();
     let Some(plugin) = registry.get(&draft.protocol) else {
-        return Err("不支援的協定（可用：SSH、Telnet、RDP）");
+        return Err(invalid(
+            "protocol",
+            "不支援這個協定，請改選 SSH、Telnet 或 RDP。",
+        ));
     };
     if draft.params.len() > 64
         || draft.params.iter().any(|(key, value)| {
@@ -65,18 +79,27 @@ pub fn validate(draft: &Draft) -> Result<(), &'static str> {
                 || value.contains('\0')
         })
     {
-        return Err("連線參數無效或超過限制");
+        return Err(invalid(
+            "params",
+            "有欄位的內容無效或過長，請檢查後重新儲存。",
+        ));
     }
     if draft
         .params
         .get("hostname")
         .is_none_or(|s| s.trim().is_empty() || s.len() > 255)
     {
-        return Err("請填寫主機名稱");
+        return Err(invalid(
+            "hostname",
+            "請填寫主機名稱或 IP（最長 255 字元）。",
+        ));
     }
     if let Some(port) = draft.params.get("port").filter(|s| !s.is_empty()) {
         if port.parse::<u16>().ok().filter(|p| *p > 0).is_none() {
-            return Err("連接埠須為 1–65535");
+            return Err(invalid(
+                "port",
+                "連接埠須為 1 到 65535 的數字，或留空使用預設值。",
+            ));
         }
     }
     Ok(())

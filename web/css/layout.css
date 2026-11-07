@@ -1,0 +1,189 @@
+/* Page layout: login, top bar, library drawer, stage (terminal), status bar. */
+
+.login {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-5);
+  padding: var(--space-5);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 700;
+  font-size: var(--text-lg);
+  text-decoration: none;
+  color: var(--text);
+}
+
+.brand__mark {
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  color: var(--accent-hover);
+}
+
+.login__card {
+  inline-size: min(26rem, 100%);
+  padding: var(--space-6);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* ---- workspace ---- */
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr); /* the remote display must never widen the page */
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
+  block-size: 100vh;
+  block-size: 100dvh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-inline: var(--space-3);
+  background: var(--surface-raised);
+  border-block-end: 1px solid var(--border);
+}
+
+.topbar__spacer {
+  flex: 1;
+}
+
+.session-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.session-chip strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-inline-size: 16rem;
+}
+
+/* flex, not grid: with the drawer hidden the stage must still take the full width. */
+.shell {
+  position: relative;
+  display: flex;
+  min-block-size: 0;
+}
+
+.drawer {
+  flex: none;
+  inline-size: var(--drawer-w);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border-inline-end: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.drawer[hidden] {
+  display: none;
+}
+
+.drawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.stage {
+  flex: 1 1 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  min-block-size: 0;
+  background: var(--terminal-bg);
+}
+
+.terminal {
+  position: relative;
+  flex: 1;
+  min-block-size: 0;
+  overflow: hidden;
+  background: var(--terminal-bg);
+  isolation: isolate; /* keeps Guacamole's negative-z canvas above the background */
+}
+
+.terminal:focus-visible {
+  outline-offset: -2px;
+}
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-inline: var(--space-3);
+  background: var(--surface-raised);
+  border-block-start: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.statusbar__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.statusbar__meta {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.statusbar__actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+@media (max-width: 760px) {
+  .drawer {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 20;
+    inline-size: min(24rem, 100%);
+    box-shadow: var(--shadow-3);
+  }
+
+  .session-chip strong {
+    max-inline-size: 8rem;
+  }
+
+  .statusbar__meta {
+    display: none;
+  }
+
+  .statusbar__actions {
+    margin-inline-start: auto;
+  }
+
+  .brand__text {
+    display: none;
+  }
+}

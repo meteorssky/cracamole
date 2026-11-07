@@ -1,0 +1,15 @@
+.toast {
+  position: fixed;
+  inset-block-end: calc(var(--statusbar-h) + var(--space-4));
+  inset-inline: 0;
+  margin-inline: auto;
+  inline-size: fit-content;
+  max-inline-size: calc(100vw - 2rem);
+  z-index: 60;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-raised);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
