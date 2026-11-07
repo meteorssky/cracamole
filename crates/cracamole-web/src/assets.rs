@@ -32,8 +32,6 @@ pub static ASSETS: &[Asset] = &[
     asset!("favicon.png", PNG, "favicon.png"),
     asset!("logo-emblem.png", PNG, "logo-emblem.png"),
     asset!("logo-with-text.png", PNG, "logo-with-text.png"),
-    asset!("logo.svg", SVG, "logo.svg"),
-    asset!("logo-horizontal.svg", SVG, "logo-horizontal.svg"),
     asset!("css/tokens.css", CSS, "css/tokens.css"),
     asset!("css/base.css", CSS, "css/base.css"),
     asset!("css/layout.css", CSS, "css/layout.css"),

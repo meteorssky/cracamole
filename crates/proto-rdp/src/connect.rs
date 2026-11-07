@@ -231,6 +231,17 @@ pub async fn establish(
         CertPin::Fingerprint(pin) => Some(pin.clone()),
         CertPin::None => None,
     };
+    if s.ignore_cert && pinned.is_none() {
+        // Without a pin anyone on the path can present a certificate. Plain TLS would then send
+        // the password in clear text, so only NLA (which at worst leaks a salted challenge) is allowed.
+        if s.security != Security::Nla {
+            return Err(SessionError::plugin(
+                Status::ClientBadRequest,
+                "ignore-cert without a pinned fingerprint requires security=nla.",
+            ));
+        }
+        tracing::warn!(host = %s.hostname, "RDP server certificate is not verified (ignore-cert)");
+    }
     let validation = if s.ignore_cert || pinned.is_some() {
         CertificateValidation::DangerouslyAcceptInvalidCertificate
     } else {

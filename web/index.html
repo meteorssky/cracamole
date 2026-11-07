@@ -245,9 +245,9 @@
             <div class="field">
               <label class="field__label" for="f-security">安全性</label>
               <select class="input" id="f-security" name="security">
-                <option value="any">自動（NLA 或 TLS）</option>
-                <option value="nla">僅 NLA</option>
-                <option value="tls">僅 TLS</option>
+                <option value="nla">僅 NLA（建議）</option>
+                <option value="any">自動（NLA 或 TLS，可能被降級）</option>
+                <option value="tls">僅 TLS（密碼以 TLS 傳送，須驗證憑證）</option>
               </select>
             </div>
           </div>
@@ -259,7 +259,7 @@
           </div>
           <label class="check">
             <input id="f-ignore-cert" name="ignore-cert" type="checkbox">
-            <span>不驗證伺服器憑證（不建議）<br><span class="field__hint">任何憑證都會被接受，無法偵測中間人攻擊。建議改用上方的憑證指紋。</span></span>
+            <span>不驗證伺服器憑證（不建議）<br><span class="field__hint">任何憑證都會被接受，無法偵測中間人攻擊；未填指紋時只能搭配「僅 NLA」。建議改用上方的憑證指紋。</span></span>
           </label>
         </fieldset>
 

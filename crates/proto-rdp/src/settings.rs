@@ -68,12 +68,14 @@ impl RdpSettings {
                 }),
         };
         let security = match p.get("security").unwrap_or("") {
-            "" | "any" => Security::Any,
-            "nla" => Security::Nla,
+            // NLA is the default: it keeps the password off the wire in clear text and
+            // refuses a server that downgrades the negotiation. `any`/`tls` must be explicit.
+            "" | "nla" => Security::Nla,
+            "any" => Security::Any,
             "tls" => Security::Tls,
             other => {
-                warnings.push(format!("Unsupported security mode \"{other}\"; using any."));
-                Security::Any
+                warnings.push(format!("Unsupported security mode \"{other}\"; using nla."));
+                Security::Nla
             }
         };
         Some(Self {

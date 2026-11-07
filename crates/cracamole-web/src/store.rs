@@ -157,6 +157,22 @@ pub fn validate(draft: &Draft) -> Result<(), Invalid> {
             ));
         }
     }
+    if draft.protocol == "rdp"
+        && draft.params.get("ignore-cert").is_some_and(|v| v == "true")
+        && draft
+            .params
+            .get("server-cert-sha256")
+            .is_none_or(|s| s.trim().is_empty())
+        && !matches!(
+            draft.params.get("security").map(String::as_str),
+            None | Some("") | Some("nla")
+        )
+    {
+        return Err(invalid(
+            "ignore-cert",
+            "不驗證憑證時必須選「僅 NLA」，或改為填入憑證指紋。",
+        ));
+    }
     if let Some(port) = draft.params.get("port").filter(|s| !s.is_empty()) {
         if port.parse::<u16>().ok().filter(|p| *p > 0).is_none() {
             return Err(invalid(
@@ -287,5 +303,48 @@ impl Store {
         })
         .await
         .map_err(io::Error::other)?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rdp(params: &[(&str, &str)]) -> Draft {
+        let mut map = BTreeMap::from([("hostname".to_string(), "h.example".to_string())]);
+        map.extend(params.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        Draft {
+            name: "rdp".into(),
+            protocol: "rdp".into(),
+            params: map,
+        }
+    }
+
+    #[test]
+    fn ignore_cert_without_pin_requires_nla() {
+        for security in ["any", "tls"] {
+            let draft = rdp(&[("ignore-cert", "true"), ("security", security)]);
+            assert_eq!(validate(&draft).unwrap_err().field, "ignore-cert");
+        }
+        assert!(validate(&rdp(&[("ignore-cert", "true"), ("security", "nla")])).is_ok());
+        assert!(validate(&rdp(&[("ignore-cert", "true")])).is_ok());
+        let pin = "ab".repeat(32);
+        assert!(validate(&rdp(&[
+            ("ignore-cert", "true"),
+            ("security", "any"),
+            ("server-cert-sha256", &pin)
+        ]))
+        .is_ok());
+    }
+
+    #[test]
+    fn destination_change_detection_ignores_pins_and_case() {
+        let a = BTreeMap::from([("hostname".to_string(), "Host".to_string())]);
+        let mut b = a.clone();
+        b.insert("host-key".into(), "pin".into());
+        b.insert("hostname".into(), " host ".into());
+        assert!(same_destination(&a, &b));
+        b.insert("ignore-cert".into(), "true".into());
+        assert!(!same_destination(&a, &b));
     }
 }
