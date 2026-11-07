@@ -5,11 +5,13 @@
 mod args;
 pub mod hostkey;
 pub mod keys;
+mod probe;
 pub mod prompt;
 mod session;
 pub mod settings;
 
 pub use args::ARGS;
+pub use probe::{probe_host_key, HostKeyInfo};
 pub use session::run_ssh;
 pub use settings::SshSettings;
 

@@ -57,8 +57,8 @@ fn performance(s: &RdpSettings) -> PerformanceFlags {
 pub fn build_config(s: &RdpSettings, width: u32, height: u32) -> Config {
     Config {
         desktop_size: DesktopSize {
-            width: width.clamp(200, 8192) as u16,
-            height: height.clamp(200, 8192) as u16,
+            width: width.clamp(200, crate::image::MAX_DIMENSION) as u16,
+            height: height.clamp(200, crate::image::MAX_DIMENSION) as u16,
         },
         monitor_layout: None,
         desktop_scale_factor: 0,
@@ -129,6 +129,21 @@ pub struct CertInfo {
 /// Perform only the X.224 negotiation and TLS handshake, accepting any certificate, and report it.
 /// Nothing is authenticated and no session is opened.
 pub async fn probe_certificate(
+    host: &str,
+    port: u16,
+    timeout_secs: u64,
+) -> Result<CertInfo, SessionError> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs.max(1)),
+        probe_certificate_inner(host, port, timeout_secs),
+    )
+    .await
+    .map_err(|_| {
+        SessionError::plugin(Status::UpstreamTimeout, "RDP certificate probe timed out.")
+    })?
+}
+
+async fn probe_certificate_inner(
     host: &str,
     port: u16,
     timeout_secs: u64,
@@ -273,5 +288,48 @@ pub async fn establish(
     match outcome {
         ConnectionOutcome::Connected(result) => Ok((framed, result)),
         _ => Err(upstream("server redirection is not supported")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn certificate_probe_deadline_covers_x224_and_tls_and_closes_socket() {
+        for respond in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let peer = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut data = [0; 2048];
+                assert!(stream.read(&mut data).await.unwrap() > 0);
+                if respond {
+                    stream
+                        .write_all(&[3, 0, 0, 19, 14, 0xd0, 0, 0, 0, 0, 0, 2, 0, 8, 0, 1, 0, 0, 0])
+                        .await
+                        .unwrap();
+                }
+                loop {
+                    match stream.read(&mut data).await {
+                        Ok(0) | Err(_) => break,
+                        _ => {}
+                    }
+                }
+            });
+            let error = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                probe_certificate("127.0.0.1", port, 1),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
+            assert_eq!(error.status(), Status::UpstreamTimeout);
+            tokio::time::timeout(std::time::Duration::from_secs(1), peer)
+                .await
+                .unwrap()
+                .unwrap();
+        }
     }
 }

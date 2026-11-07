@@ -39,6 +39,9 @@ async fn run() -> Result<(), String> {
             std::env::var_os("CRACAMOLE_DATA_DIR").unwrap_or_else(|| "data".into()),
         ),
         secure_cookie: std::env::var("CRACAMOLE_SECURE_COOKIE").is_ok_and(|s| s == "true"),
+        trusted_proxies: cracamole_web::parse_trusted_proxies(
+            &std::env::var("CRACAMOLE_TRUSTED_PROXIES").unwrap_or_default(),
+        )?,
         backend,
         shutdown: shutdown.clone(),
     })

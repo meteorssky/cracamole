@@ -261,7 +261,13 @@ impl Terminal {
         if self.opts.disable_paste {
             return;
         }
-        let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+        // Pasted ESC can terminate bracketed paste and turn following text into live shell input.
+        // Keep only ordinary text, tabs and line breaks; keyboard events still carry control keys.
+        let safe: String = text
+            .chars()
+            .filter(|c| !c.is_control() || matches!(c, '\t' | '\r' | '\n'))
+            .collect();
+        let normalized = safe.replace("\r\n", "\r").replace('\n', "\r");
         let bracketed = self.term.mode().contains(TermMode::BRACKETED_PASTE);
         if bracketed {
             self.out.extend_from_slice(b"\x1b[200~");

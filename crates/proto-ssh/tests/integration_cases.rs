@@ -20,11 +20,15 @@ struct Rig {
 
 async fn connect(srv: &TestServer, values: &[(&str, &str)]) -> Rig {
     let port = srv.addr.port().to_string();
+    let key = srv.host_key.public_key().to_openssh().unwrap();
     let mut v: Vec<(&str, &str)> = vec![
         ("hostname", "127.0.0.1"),
         ("port", &port),
         ("timeout", "10"),
     ];
+    if !values.iter().any(|(name, _)| *name == "host-key") {
+        v.push(("host-key", &key));
+    }
     v.extend_from_slice(values);
     connect_raw(&v).await
 }
@@ -702,7 +706,7 @@ async fn ssh_h_i_02_wrong_host_key_is_refused_before_authentication() {
     )
     .await;
     let e = r.client.expect("error").await;
-    assert_eq!(e.args[1], "512"); // SERVER_ERROR as in C
+    assert_eq!(e.args[1], "515"); // SERVER_ERROR as in C
     assert!(
         srv.rec.lock().unwrap().auth_methods_tried.is_empty(),
         "no credentials may be sent to an unverified host"
@@ -723,17 +727,95 @@ async fn ssh_h_i_03_entry_for_other_host_means_not_found_and_is_refused() {
     )
     .await;
     let e = r.client.expect("error").await;
-    assert_eq!(e.args[1], "512");
+    assert_eq!(e.args[1], "515");
     assert!(srv.rec.lock().unwrap().auth_methods_tried.is_empty());
 }
 
 #[tokio::test]
-async fn ssh_h_i_04_no_host_key_configured_connects_with_warning() {
-    // Behaviour kept from C (Q2): without any known host keys the identity is not verified.
+async fn ssh_h_i_04_unknown_host_is_refused_before_credentials_are_sent() {
     let srv = start_server(Behaviour::default()).await;
-    let mut r = connect(&srv, &[("username", "alice"), ("password", "secret")]).await;
-    r.pump_until("shell", |_| srv.rec.lock().unwrap().shell)
-        .await;
+    let mut r = connect(
+        &srv,
+        &[
+            ("username", "alice"),
+            ("password", "secret"),
+            ("host-key", ""),
+        ],
+    )
+    .await;
+    assert_eq!(r.client.expect("error").await.args[1], "515");
+    assert!(srv.rec.lock().unwrap().auth_methods_tried.is_empty());
+}
+
+#[tokio::test]
+async fn ssh_host_key_probe_returns_fingerprint_without_authenticating() {
+    let srv = start_server(Behaviour::default()).await;
+    let info = proto_ssh::probe_host_key("127.0.0.1", srv.addr.port(), None, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        info.public_key,
+        srv.host_key.public_key().to_openssh().unwrap()
+    );
+    assert_eq!(
+        info.fingerprint,
+        srv.host_key
+            .public_key()
+            .fingerprint(russh::keys::HashAlg::Sha256)
+            .to_string()
+    );
+    assert!(!info.trusted);
+    assert!(!info.matches);
+    assert!(srv.rec.lock().unwrap().auth_methods_tried.is_empty());
+    let trusted =
+        proto_ssh::probe_host_key("127.0.0.1", srv.addr.port(), Some(&info.public_key), 2)
+            .await
+            .unwrap();
+    assert!(trusted.trusted && trusted.matches);
+    assert!(srv.rec.lock().unwrap().auth_methods_tried.is_empty());
+}
+
+#[tokio::test]
+async fn ssh_host_key_probe_times_out_and_releases_a_silent_connection() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut bytes = [0; 1024];
+        loop {
+            match stream.read(&mut bytes).await {
+                Ok(0) | Err(_) => break,
+                _ => {}
+            }
+        }
+    });
+    let error = proto_ssh::probe_host_key("127.0.0.1", port, None, 1)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), Status::UpstreamTimeout);
+    tokio::time::timeout(Duration::from_secs(2), peer)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn ssh_revoked_allowed_key_is_refused_before_authentication() {
+    let srv = start_server(Behaviour::default()).await;
+    let key = srv.host_key.public_key().to_openssh().unwrap();
+    let config = format!("{key}\n@revoked * {key}");
+    let mut r = connect(
+        &srv,
+        &[
+            ("username", "alice"),
+            ("password", "secret"),
+            ("host-key", &config),
+        ],
+    )
+    .await;
+    assert_eq!(r.client.expect("error").await.args[1], "515");
+    assert!(srv.rec.lock().unwrap().auth_methods_tried.is_empty());
 }
 
 #[tokio::test]

@@ -5,6 +5,7 @@
 mod args;
 mod clipboard;
 mod connect;
+mod image;
 pub mod keymap;
 mod session;
 pub mod settings;

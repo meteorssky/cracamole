@@ -55,4 +55,5 @@ cargo bench -p guac-terminal --bench mvp --locked
 - **測試即規格**:行為先轉成案例 ID,登記於 `docs/TRACEABILITY.md`;與 C 版刻意不同處登記於 `docs/DEVIATIONS.md`。以 `python scripts/validation_report.py` 更新測試證據索引；未對應的規劃 ID 不能自動算通過。
 - 案例預期值標 `⟳C` 者,表示須以運行中的 C 版 guacd 實測回填,**不可憑記憶當作事實**。
 - 舊計畫的 crate 候選與成熟度判斷不代表現況。以 Cargo.toml／Cargo.lock、實際 API、授權檔與驗證證據為準；新增依賴須核對授權與適用性，不可把「已編譯」當作完整審核。
-- C 版既有缺陷(見 `00-index` §2.6)預設：可觀察行為相容，安全缺陷與明顯 bug 不照抄並記入 DEVIATIONS。現行 SSH 未設定 host key 時略過驗證並記 warn；有設定但無法解析或比對失敗時不得降級為不驗證。此行為不是已完成所有安全驗收的宣告。
+- C 版既有缺陷(見 `00-index` §2.6)預設：可觀察行為相容，安全缺陷與明顯 bug 不照抄並記入 DEVIATIONS。SSH 未設定 host key 時拒絕認證，由 Web 顯示指紋供使用者核對並保存信任；撤銷優先，無效設定不得降級為不驗證。RDP 遠端尺寸必須在配置前驗證並取得共用記憶體額度；剪貼簿有總 bytes、串流數與閒置上限，貼上控制碼須過濾。
+- 代理限流：只信任 `CRACAMOLE_TRUSTED_PROXIES` 列出的 TCP peer 所覆寫的單一 `X-Real-IP`，不信任任意 `X-Forwarded-For`。SSH／RDP 身分探測共用併發上限、完整 deadline 及 session／shutdown 取消；細節見 README。這些防護不是全部安全驗收已完成的宣告。

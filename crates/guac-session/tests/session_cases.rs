@@ -363,7 +363,7 @@ async fn in_clipboard_stream_assembled_and_acked() {
 }
 
 #[tokio::test]
-async fn in_clipboard_over_limit_is_truncated() {
+async fn in_clipboard_over_limit_is_rejected_without_pasting_a_prefix() {
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD;
     let cfg = SessionConfig {
@@ -392,7 +392,75 @@ async fn in_clipboard_over_limit_is_truncated() {
         .await
         .unwrap();
     h.client.send(Instruction::new("end", ["1"])).await.unwrap();
-    assert_eq!(h.client.expect("log").await.args[0], "clip=12345");
+    assert_eq!(
+        h.client.expect("error").await.args[1],
+        Status::ClientOverrun.code().to_string()
+    );
+    h.client.expect("disconnect").await;
+    assert!(!h
+        .client
+        .log
+        .iter()
+        .any(|i| i.opcode == "log" && i.args[0].starts_with("clip=")));
+}
+
+#[tokio::test]
+async fn in_clipboard_aggregate_and_stream_count_limits_are_enforced() {
+    use base64::Engine;
+    for aggregate in [true, false] {
+        let mut h = start(
+            Mode::Report,
+            65536,
+            SessionConfig {
+                max_clipboard: 8,
+                ..quick_cfg()
+            },
+        );
+        h.client.handshake("test", &[], 800, 600).await;
+        h.client.expect("log").await;
+        for n in 0..if aggregate { 2 } else { 5 } {
+            let id = n.to_string();
+            h.client
+                .send(Instruction::new("clipboard", [&id, "text/plain"]))
+                .await
+                .unwrap();
+            if aggregate {
+                h.client
+                    .send(Instruction::new(
+                        "blob",
+                        [
+                            id,
+                            base64::engine::general_purpose::STANDARD.encode("12345"),
+                        ],
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+        assert_eq!(
+            h.client.expect("error").await.args[1],
+            Status::ClientOverrun.code().to_string()
+        );
+        h.client.expect("disconnect").await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn in_clipboard_idle_stream_expires_without_more_input() {
+    let mut h = start(Mode::Report, 65536, quick_cfg());
+    h.client.handshake("test", &[], 800, 600).await;
+    h.client.expect("log").await;
+    h.client
+        .send(Instruction::new("clipboard", ["1", "text/plain"]))
+        .await
+        .unwrap();
+    h.client.expect("ack").await;
+    tokio::time::advance(Duration::from_secs(16)).await;
+    assert_eq!(
+        h.client.expect("error").await.args[1],
+        Status::ClientTimeout.code().to_string()
+    );
+    h.client.expect("disconnect").await;
 }
 
 // ---- end-of-session semantics ----

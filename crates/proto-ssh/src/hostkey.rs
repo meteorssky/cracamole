@@ -7,6 +7,7 @@ use sha1::Sha1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
+    pub revoked: bool,
     /// Comma-separated host patterns; `None` for a bare "keytype base64" key that matches any host.
     pub hosts: Option<String>,
     pub key_type: String,
@@ -40,20 +41,28 @@ pub fn parse(text: &str) -> (Vec<Entry>, Vec<String>) {
             continue;
         }
         let mut parts: Vec<&str> = line.split_whitespace().collect();
-        // Optional marker (@cert-authority / @revoked) is not supported: skip such lines.
-        if parts.first().is_some_and(|p| p.starts_with('@')) {
+        let revoked = parts.first() == Some(&"@revoked");
+        if revoked {
+            parts.remove(0);
+            if parts.len() < 3 {
+                errors.push(format!("line {}: invalid revoked key", n + 1));
+                continue;
+            }
+        } else if parts.first().is_some_and(|p| p.starts_with('@')) {
             errors.push(format!("line {}: markers are not supported", n + 1));
             continue;
         }
         let entry = match parts.len() {
             1 => decode_b64(parts[0]).and_then(|blob| {
                 key_type_of(&blob).map(|t| Entry {
+                    revoked,
                     hosts: None,
                     key_type: t,
                     key_blob: blob,
                 })
             }),
             2 => decode_b64(parts[1]).map(|blob| Entry {
+                revoked,
                 hosts: None,
                 key_type: parts[0].into(),
                 key_blob: blob,
@@ -61,12 +70,15 @@ pub fn parse(text: &str) -> (Vec<Entry>, Vec<String>) {
             _ => {
                 parts.truncate(3);
                 decode_b64(parts[2]).map(|blob| Entry {
+                    revoked,
                     hosts: Some(parts[0].to_string()),
                     key_type: parts[1].to_string(),
                     key_blob: blob,
                 })
             }
         };
+        let entry =
+            entry.filter(|e| key_type_of(&e.key_blob).is_some_and(|kind| kind == e.key_type));
         match entry {
             Some(e) => entries.push(e),
             None => errors.push(format!("line {}: invalid host key entry", n + 1)),
@@ -140,8 +152,19 @@ fn hosts_match(patterns: &str, host: &str, port: u16) -> bool {
 
 /// Compare the key the server presented (SSH wire-format blob) with the known entries.
 pub fn verify(entries: &[Entry], host: &str, port: u16, server_blob: &[u8]) -> Verdict {
+    // Revocation wins regardless of record order, including wildcard host patterns.
+    if entries.iter().any(|e| {
+        e.revoked
+            && e.key_blob == server_blob
+            && e.hosts.as_ref().is_none_or(|h| hosts_match(h, host, port))
+    }) {
+        return Verdict::Mismatch;
+    }
     let mut applicable = false;
     for e in entries {
+        if e.revoked {
+            continue;
+        }
         let applies = match &e.hosts {
             None => true,
             Some(h) => hosts_match(h, host, port),

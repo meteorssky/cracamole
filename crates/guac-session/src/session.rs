@@ -1,7 +1,7 @@
+use crate::clipboard::Clipboards;
 use crate::{ClientCaps, Handshake, InstructionReader, ProtocolPlugin, SessionError};
 use base64::Engine;
 use guac_protocol::{Instruction, Status};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -123,9 +123,20 @@ async fn read_loop<R: AsyncRead + Unpin>(
     sync: Arc<SyncState>,
     max_clipboard: usize,
 ) -> Result<(), SessionError> {
-    let mut clipboards: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut clipboards = Clipboards::new(max_clipboard);
     let b64 = base64::engine::general_purpose::STANDARD;
-    while let Some(ins) = reader.read().await? {
+    loop {
+        let next = match clipboards.deadline() {
+            Some(deadline) => tokio::time::timeout_at(deadline, reader.read())
+                .await
+                .map_err(|_| {
+                    SessionError::plugin(Status::ClientTimeout, "Clipboard stream expired.")
+                })??,
+            None => reader.read().await?,
+        };
+        let Some(ins) = next else {
+            return Ok(());
+        };
         let int = |i: usize| ins.args.get(i).and_then(|s| s.parse::<i64>().ok());
         let ev = match ins.opcode.as_str() {
             "disconnect" => return Ok(()),
@@ -157,34 +168,26 @@ async fn read_loop<R: AsyncRead + Unpin>(
             },
             "clipboard" => {
                 if let Some(id) = ins.args.first() {
-                    clipboards.insert(id.clone(), Vec::new());
+                    clipboards.open(id, ins.args.get(1).map(String::as_str))?;
                     let _ = out.send(ack(id, Status::Success)).await;
                 }
                 None
             }
             "blob" => {
                 if let (Some(id), Some(data)) = (ins.args.first(), ins.args.get(1)) {
-                    if let Some(buf) = clipboards.get_mut(id) {
-                        if let Ok(bytes) = b64.decode(data) {
-                            if buf.len() + bytes.len() <= max_clipboard {
-                                buf.extend_from_slice(&bytes);
-                            }
-                        }
-                        let _ = out.send(ack(id, Status::Success)).await;
-                    }
+                    let bytes = b64.decode(data).map_err(|_| {
+                        SessionError::plugin(Status::ClientBadRequest, "Invalid clipboard base64.")
+                    })?;
+                    clipboards.append(id, &bytes)?;
+                    let _ = out.send(ack(id, Status::Success)).await;
                 }
                 None
             }
-            "end" => match ins
-                .args
-                .first()
-                .and_then(|id| clipboards.remove(id).map(|b| (id, b)))
-            {
-                Some((id, buf)) => {
+            "end" => match ins.args.first() {
+                Some(id) => {
+                    let text = clipboards.finish(id)?;
                     let _ = out.send(ack(id, Status::Success)).await;
-                    Some(InputEvent::Clipboard(
-                        String::from_utf8_lossy(&buf).into_owned(),
-                    ))
+                    Some(InputEvent::Clipboard(text))
                 }
                 None => None,
             },
@@ -201,7 +204,6 @@ async fn read_loop<R: AsyncRead + Unpin>(
             }
         }
     }
-    Ok(())
 }
 
 fn client_message(e: &SessionError) -> String {
@@ -330,7 +332,7 @@ where
                 plugin_h.abort();
             }
             if let Err(e) = &result {
-                if matches!(e, SessionError::Protocol(_) | SessionError::Timeout) {
+                if matches!(e, SessionError::Protocol(_) | SessionError::Timeout | SessionError::Plugin { .. }) {
                     let _ = out_tx.send(report(e)).await;
                 }
             }

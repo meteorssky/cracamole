@@ -189,9 +189,9 @@
           <input class="input" id="f-passphrase" name="passphrase" type="password" autocomplete="new-password">
         </div>
         <div class="field">
-          <label class="field__label" for="f-host-key">主機金鑰（建議填寫）</label>
+          <label class="field__label" for="f-host-key">主機金鑰（known_hosts）</label>
           <textarea class="input" id="f-host-key" name="host-key" rows="2" spellcheck="false" placeholder="例如：ssh-ed25519 AAAA…" aria-describedby="hint-host-key"></textarea>
-          <p class="field__hint" id="hint-host-key">填寫後，連線時會核對主機身分；沒有填寫時不會驗證，無法偵測中間人攻擊。</p>
+          <p class="field__hint" id="hint-host-key">每次連線都會驗證主機身分。首次連線若尚未設定金鑰，會先顯示指紋供你核對並信任；金鑰改變時會阻擋連線。</p>
         </div>
       </fieldset>
 

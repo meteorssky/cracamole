@@ -9,6 +9,7 @@ services:
       CRACAMOLE_ADMIN_USERNAME: ${CRACAMOLE_ADMIN_USERNAME:-admin}
       CRACAMOLE_ADMIN_PASSWORD: ${CRACAMOLE_ADMIN_PASSWORD:?Set a password of at least 12 characters}
       CRACAMOLE_SECURE_COOKIE: ${CRACAMOLE_SECURE_COOKIE:-false}
+      CRACAMOLE_TRUSTED_PROXIES: ${CRACAMOLE_TRUSTED_PROXIES:-}
     ports: ["127.0.0.1:8080:8080"]
     volumes: ["connections:/data"]
     mem_limit: 1536m

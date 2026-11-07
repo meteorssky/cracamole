@@ -1,11 +1,74 @@
 const { test, expect } = require('@playwright/test');
-const { compose, remoteFile, rdpExec, ready, login, visibleInk, addConnection } = require('./helpers');
+const AxeBuilder = require('@axe-core/playwright').default;
+const { compose, remoteFile, rdpExec, ready, login, visibleInk, addConnection: addSavedConnection } = require('./helpers');
+
+async function addConnection(page, name, protocol, host = 'backend', port = '', password = 'tester-pw', options = {}) {
+  if (protocol === 'ssh' && host === 'backend' && !options.untrusted) {
+    const hostKey = remoteFile('/etc/ssh/ssh_host_ed25519_key.pub')
+      .trim().split(/\s+/).slice(0, 2).join(' ');
+    expect(hostKey).toContain('ssh-ed25519');
+    options = { ...options, hostKey };
+  }
+  await addSavedConnection(page, name, protocol, host, port, password, options);
+}
 
 test.beforeAll(async ({ request }) => ready(request));
 
 // Any browser-side script error fails the test that caused it.
 test.beforeEach(async ({ page }) => {
   page.on('pageerror', error => { throw error; });
+});
+
+test('ssh: unknown host requires approval, then a changed or revoked key is blocked', async ({ page }, info) => {
+  const name = `SSH trust ${Date.now()}`;
+  await login(page);
+  await addConnection(page, name, 'ssh', 'backend', '', 'tester-pw', { untrusted: true });
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  const trust = page.getByRole('button', { name: '信任這把主機金鑰並重新連線' });
+  await expect(page.getByText('尚未信任 SSH 主機金鑰', { exact: true })).toBeVisible();
+  const actual = compose(['exec', '-T', 'backend', 'ssh-keygen', '-lf', '/etc/ssh/ssh_host_ed25519_key.pub']).split(' ')[1];
+  await expect(page.getByText(actual, { exact: false })).toBeVisible();
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const scheme of ['dark', 'light']) {
+      const toggle = page.getByRole('button', { name: /^(淺色主題|深色主題)$/ });
+      if ((await toggle.innerText()) !== (scheme === 'dark' ? '淺色主題' : '深色主題')) {
+        await toggle.click();
+      }
+      const scan = await new AxeBuilder({ page })
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze();
+      expect(scan.violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth))
+        .toBeLessThanOrEqual(0);
+      await page.screenshot({ path: info.outputPath(`ssh-trust-${width}-${scheme}.png`) });
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await trust.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#terminal-status')).toHaveText('已連線');
+  await expect.poll(() => visibleInk(page)).toBeGreaterThan(100);
+  const saved = (await (await page.request.get('api/connections')).json()).find(c => c.name === name);
+  expect(saved.params['host-key']).toContain(remoteFile('/etc/ssh/ssh_host_ed25519_key.pub').trim().split(' ')[1]);
+  await page.getByRole('button', { name: '中斷連線', exact: true }).click();
+  await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click();
+  const key = saved.params['host-key'];
+  await page.getByLabel('主機金鑰（known_hosts）').fill(key + '\n@revoked * ' + key);
+  await page.getByRole('button', { name: '儲存連線' }).click();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  await expect(page.getByText('主機金鑰已變更或遭撤銷', { exact: true })).toBeVisible();
+  await expect(trust).toBeHidden();
+  await expect(page.getByRole('button', { name: '編輯連線', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '編輯連線', exact: true }).click();
+  const otherKey = remoteFile('/etc/ssh/ssh_host_rsa_key.pub')
+    .trim().split(/\s+/).slice(0, 2).join(' ');
+  expect(otherKey).toContain('ssh-rsa');
+  await page.getByLabel('主機金鑰（known_hosts）').fill(otherKey);
+  await page.getByRole('button', { name: '儲存連線' }).click();
+  await page.getByRole('button', { name: '回到連線庫', exact: true }).click();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  await expect(page.getByText('主機金鑰已變更或遭撤銷', { exact: true })).toBeVisible();
+  await expect(trust).toBeHidden();
 });
 
 test('rdp: connect to xrdp, paint the desktop, keyboard reaches the remote session', async ({ page }) => {

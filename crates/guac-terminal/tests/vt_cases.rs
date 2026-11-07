@@ -306,6 +306,20 @@ fn vt_paste_normalizes_newlines_and_honours_bracketed_mode() {
 }
 
 #[test]
+fn vt_paste_cannot_inject_terminal_control_sequences() {
+    let mut t = term();
+    t.feed(b"\x1b[?2004h");
+    t.paste("text\x1b[201~printf marker\n\0\x03\x7f\u{009b}中\t");
+    assert_eq!(
+        t.take_output(),
+        "\x1b[200~text[201~printf marker\r中\t\x1b[201~".as_bytes()
+    );
+    t.feed(b"\x1b[?2004l");
+    t.paste("\x1b[A\x03hello\n");
+    assert_eq!(t.take_output(), b"[Ahello\r");
+}
+
+#[test]
 fn vt_disable_paste() {
     let fonts = FontSet::bundled();
     let opts = TerminalOptions {

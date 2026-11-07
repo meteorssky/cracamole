@@ -2,6 +2,7 @@
 services:
   backend:
     mem_limit: 128m
+    pids_limit: 64
     build:
       context: ../tests/e2e
       dockerfile: backend.Dockerfile
@@ -12,6 +13,7 @@ services:
       retries: 30
   rdp:
     mem_limit: 768m
+    pids_limit: 256
     build:
       context: ../tests/e2e
       dockerfile: rdp.Dockerfile

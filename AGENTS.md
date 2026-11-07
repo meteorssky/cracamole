@@ -13,6 +13,9 @@
 
 - Workspace 共十個 crate；維持依賴方向，底層不得依賴 Web 層，`guac-testkit` 僅作 dev-dependency。
 - 管理員帳密由環境變數提供，沒有正式預設密碼。沿用 Argon2id、HttpOnly／SameSite cookie、同源檢查與登入限流；登出、session 到期與關機須關閉相關 tunnel。
+- SSH 未知金鑰必須先核對指紋並保存信任，不得自動略過驗證；撤銷優先於允許，不支援的安全標記與無效 known_hosts 必須拒絕載入。主機身分探測有總時限與共用併發額度，並隨 session／關機取消。
+- 代理來源只透過 `CRACAMOLE_TRUSTED_PROXIES` 明確列出的 peer IP 信任其覆寫的單一 `X-Real-IP`；不得直接信任任意轉送標頭。設定方式見 README。
+- RDP 解碼圖必須在配置前驗證遠端尺寸並取得共用記憶體額度；剪貼簿須限制活動串流數、總 bytes 與閒置時間。終端機貼上不得讓文字內的 ESC／控制碼突破 bracketed paste 邊界。
 - 連線設定保存於私有 JSON／Docker volume。機密目前未做靜態加密，Unix 目錄／檔案權限為 0700／0600；不得宣稱已加密。API 不回傳密碼、私鑰或密語；不得寫入 URL、日誌或 Git。編輯時未提供的機密保留，明確空值才清除。
 - daemon 僅監聽私人 loopback，不發布 4822。正式 Compose 預設僅發布主機 loopback HTTP；遠端使用透過 HTTPS reverse proxy，保留 Host 與 WebSocket，啟用 Secure cookie。
 - 前端（`web/`）的任何變更必須遵守 `web/GUIDELINES.md`（無建置步驟、CSP、token、無障礙、測試與完成定義）；設計背景見本機 `docs/ux-redesign.md`。

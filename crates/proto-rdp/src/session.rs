@@ -2,6 +2,7 @@
 
 use crate::clipboard::{self, ClipEvent};
 use crate::connect::{establish, Framed};
+use crate::image::Image;
 use crate::keymap::{self, Key};
 use crate::settings::RdpSettings;
 use base64::Engine as _;
@@ -13,7 +14,6 @@ use ironrdp_cliprdr::{CliprdrClient, CliprdrSvcMessages};
 use ironrdp_connector::connection_activation::{
     ConnectionActivationFactory, ConnectionActivationSequence, ConnectionActivationState,
 };
-use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_input::{Database, MouseButton, MousePosition, Operation, Scancode, WheelRotations};
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
@@ -33,18 +33,25 @@ fn session_error(e: impl std::fmt::Display) -> SessionError {
 
 pub async fn run_rdp(mut ctx: SessionCtx, settings: RdpSettings) -> Result<(), SessionError> {
     let caps = ctx.tx.caps().clone();
-    let stream = connect_tcp(&settings.hostname, settings.port, settings.timeout_secs).await?;
-    tracing::info!("RDP TCP connection successful.");
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel();
     let clipboard_enabled = !(settings.disable_copy && settings.disable_paste);
-    let (mut framed, result) = establish(
-        &settings,
-        stream,
-        caps.optimal_width,
-        caps.optimal_height,
-        clipboard_enabled.then_some(clip_tx),
-    )
-    .await?;
+    let connecting = async {
+        let stream = connect_tcp(&settings.hostname, settings.port, settings.timeout_secs).await?;
+        tracing::info!("RDP TCP connection successful.");
+        establish(
+            &settings,
+            stream,
+            caps.optimal_width,
+            caps.optimal_height,
+            clipboard_enabled.then_some(clip_tx),
+        )
+        .await
+    };
+    let (mut framed, result) = tokio::select! {
+        _ = ctx.tx.cancelled() => return Ok(()),
+        result = tokio::time::timeout(Duration::from_secs(settings.timeout_secs), connecting) =>
+            result.map_err(|_| SessionError::plugin(Status::UpstreamTimeout, "RDP handshake timed out."))??,
+    };
     tracing::info!(
         "RDP session established ({}x{}).",
         result.desktop_size.width,
@@ -54,7 +61,7 @@ pub async fn run_rdp(mut ctx: SessionCtx, settings: RdpSettings) -> Result<(), S
     let factory = result.activation_factory.clone();
     let (io_channel_id, user_channel_id) = (result.io_channel_id, result.user_channel_id);
     let (width, height) = (result.desktop_size.width, result.desktop_size.height);
-    let mut image = DecodedImage::new(PixelFormat::RgbA32, width, height);
+    let mut image = Image::new(width, height)?;
     let mut stage: ActiveStage = ActiveStageBuilder {
         static_channels: result.static_channels,
         user_channel_id: result.user_channel_id,
@@ -108,7 +115,8 @@ pub async fn run_rdp(mut ctx: SessionCtx, settings: RdpSettings) -> Result<(), S
             event = ctx.events.recv() => {
                 let Some(event) = event else { return Ok(()) };
                 if let InputEvent::Resize { width, height } = event {
-                    let target = (width & !1, height);
+                    let target = (width.clamp(200, crate::image::MAX_DIMENSION) & !1,
+                        height.clamp(200, crate::image::MAX_DIMENSION));
                     if target.0 >= 200 && target.1 >= 200 && target != (u32::from(desktop.0), u32::from(desktop.1)) {
                         resize = Some((target, Instant::now() + RESIZE_DEBOUNCE));
                     }
@@ -144,7 +152,7 @@ pub async fn run_rdp(mut ctx: SessionCtx, settings: RdpSettings) -> Result<(), S
                     Flow::Terminate => return Ok(()),
                     Flow::Reactivate => {
                         let size = reactivate(&mut stage, &mut framed, &factory, io_channel_id, user_channel_id).await?;
-                        image = DecodedImage::new(PixelFormat::RgbA32, size.0, size.1);
+                        image = Image::new(size.0, size.1)?;
                         display.resize(u32::from(size.0), u32::from(size.1));
                         desktop = size;
                         dirty = true;
@@ -165,7 +173,7 @@ pub async fn run_rdp(mut ctx: SessionCtx, settings: RdpSettings) -> Result<(), S
                     Flow::Terminate => return Ok(()),
                     Flow::Reactivate => {
                         let size = reactivate(&mut stage, &mut framed, &factory, io_channel_id, user_channel_id).await?;
-                        image = DecodedImage::new(PixelFormat::RgbA32, size.0, size.1);
+                        image = Image::new(size.0, size.1)?;
                         display.resize(u32::from(size.0), u32::from(size.1));
                         desktop = size;
                         dirty = true;
@@ -207,7 +215,7 @@ pub async fn run_rdp(mut ctx: SessionCtx, settings: RdpSettings) -> Result<(), S
             }
             _ = resize_due => {
                 if let Some(((w, h), _)) = resize.take() {
-                    match stage.encode_resize(w.clamp(200, 8192), h.clamp(200, 8192), None, None) {
+                    match stage.encode_resize(w, h, None, None) {
                         Some(Ok(frame)) => {
                             tracing::debug!("requesting RDP desktop resize to {w}x{h}");
                             framed.write_all(&frame).await.map_err(|e| {
@@ -302,10 +310,15 @@ async fn reactivate(
 ) -> Result<(u16, u16), SessionError> {
     let mut sequence: ConnectionActivationSequence = factory.create();
     let mut buf = ironrdp_core::WriteBuf::new();
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        single_sequence_step(framed, &mut sequence, &mut buf)
-            .await
-            .map_err(session_error)?;
+        tokio::time::timeout_at(
+            deadline,
+            single_sequence_step(framed, &mut sequence, &mut buf),
+        )
+        .await
+        .map_err(|_| SessionError::plugin(Status::UpstreamTimeout, "RDP reactivation timed out."))?
+        .map_err(session_error)?;
         if let ConnectionActivationState::Finalized {
             desktop_size,
             share_id,

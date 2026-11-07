@@ -24,3 +24,4 @@ pub use guac_protocol::{Instruction, Status};
 pub fn new_connection_id() -> String {
     format!("${}", uuid::Uuid::new_v4())
 }
+mod clipboard;

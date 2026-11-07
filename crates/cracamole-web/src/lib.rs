@@ -2,8 +2,11 @@
 
 mod assets;
 mod auth;
+mod proxy;
 mod store;
+mod trust;
 mod tunnel;
+pub use proxy::parse_trusted_proxies;
 
 use axum::{
     extract::{ConnectInfo, DefaultBodyLimit, Path, State},
@@ -24,6 +27,7 @@ pub struct WebConfig {
     pub password: String,
     pub data_dir: PathBuf,
     pub secure_cookie: bool,
+    pub trusted_proxies: Vec<std::net::IpAddr>,
     pub backend: SocketAddr,
     pub shutdown: CancellationToken,
 }
@@ -33,9 +37,12 @@ struct App {
     store: store::Store,
     backend: SocketAddr,
     tunnels: Arc<Semaphore>,
+    probes: Arc<Semaphore>,
+    trusted_proxies: Vec<std::net::IpAddr>,
     shutdown: CancellationToken,
 }
 
+#[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
     message: &'static str,
@@ -93,6 +100,8 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
             .map_err(|e| e.to_string())?,
         backend: config.backend,
         tunnels: Arc::new(Semaphore::new(32)),
+        probes: Arc::new(Semaphore::new(4)),
+        trusted_proxies: config.trusted_proxies,
         shutdown: config.shutdown,
     });
     Ok(Router::new()
@@ -108,7 +117,11 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
             get(detail).put(update).delete(remove),
         )
         .route("/api/connections/{id}/tunnel", get(tunnel::upgrade))
-        .route("/api/connections/{id}/certificate", post(certificate))
+        .route(
+            "/api/connections/{id}/certificate",
+            post(trust::certificate),
+        )
+        .route("/api/connections/{id}/host-key", post(trust::host_key))
         .layer(DefaultBodyLimit::max(128 * 1024))
         .layer(middleware::from_fn(security_headers))
         .with_state(app))
@@ -141,14 +154,15 @@ async fn login(
     Json(login): Json<Login>,
 ) -> Result<Response, ApiError> {
     auth::same_origin(&headers)?;
+    let source_ip = proxy::client_ip(&headers, peer.ip(), &app.trusted_proxies)?;
     let token = app
         .auth
-        .login(peer.ip(), login.username, login.password)
+        .login(source_ip, login.username, login.password)
         .await
         .map_err(|status| {
             tracing::warn!(
                 "web login failed from {}: HTTP {}",
-                peer.ip(),
+                source_ip,
                 status.as_u16()
             );
             ApiError::new(
@@ -160,7 +174,7 @@ async fn login(
                 },
             )
         })?;
-    tracing::info!("web login succeeded from {}", peer.ip());
+    tracing::info!("web login succeeded from {}", source_ip);
     Ok((
         [(header::SET_COOKIE, app.auth.cookie(&token))],
         Json(json!({"authenticated":true})),
@@ -207,55 +221,6 @@ async fn detail(
         .await
         .map(|c| Json(c.public()))
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "找不到連線"))
-}
-/// The TLS certificate an RDP connection's server presents, so the user can decide to trust it.
-/// Nothing is authenticated and nothing is stored.
-async fn certificate(
-    State(app): State<Arc<App>>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    app.auth.authorize(&headers).await?;
-    auth::same_origin(&headers)?;
-    let connection = app
-        .store
-        .get(&id)
-        .await
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "找不到連線"))?;
-    if connection.protocol != "rdp" {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "只有 RDP 連線有伺服器憑證",
-        ));
-    }
-    let host = connection
-        .params
-        .get("hostname")
-        .cloned()
-        .unwrap_or_default();
-    let port = connection
-        .params
-        .get("port")
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(3389);
-    let info = guacd::probe_certificate(&host, port, 10)
-        .await
-        .map_err(|error| {
-            tracing::warn!("certificate probe for {id} failed: {error}");
-            ApiError::new(StatusCode::BAD_GATEWAY, "無法從 RDP 伺服器取得憑證")
-        })?;
-    let pinned = connection
-        .params
-        .get("server-cert-sha256")
-        .and_then(|p| guacd::normalize_fingerprint(p));
-    tracing::info!("certificate probe for {id}: sha256 {}", info.sha256);
-    Ok(Json(json!({
-        "sha256": info.sha256,
-        "subject": info.subject,
-        "issuer": info.issuer,
-        "pinned": pinned,
-        "matches_pin": pinned.as_deref() == Some(info.sha256.as_str()),
-    })))
 }
 async fn create(
     State(app): State<Arc<App>>,

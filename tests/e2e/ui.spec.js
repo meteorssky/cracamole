@@ -57,7 +57,7 @@ test('ui: first run guides to the first host and opens the editor for the chosen
   const form = page.locator('#connection-form');
   await expect(form.getByLabel('協定', { exact: true })).toHaveValue('rdp');
   await expect(form.getByLabel('網域（可選）')).toBeVisible();
-  await expect(form.getByLabel('主機金鑰（建議填寫）')).toBeHidden();
+  await expect(form.getByLabel('主機金鑰（known_hosts）')).toBeHidden();
   await expect(form.getByLabel('連接埠')).toHaveAttribute('placeholder', '3389');
 });
 
@@ -68,12 +68,12 @@ test('ui: the editor shows only the fields of the selected protocol and explains
   const protocol = form.getByLabel('協定', { exact: true });
 
   // fields follow the protocol
-  await expect(form.getByLabel('主機金鑰（建議填寫）')).toBeVisible();
+  await expect(form.getByLabel('主機金鑰（known_hosts）')).toBeVisible();
   await expect(form.getByLabel('登入成功提示')).toBeHidden();
   await expect(form.getByLabel('網域（可選）')).toBeHidden();
   await protocol.selectOption('telnet');
   await expect(form.getByLabel('登入成功提示')).toBeVisible();
-  await expect(form.getByLabel('主機金鑰（建議填寫）')).toBeHidden();
+  await expect(form.getByLabel('主機金鑰（known_hosts）')).toBeHidden();
   await protocol.selectOption('rdp');
   await expect(form.getByLabel('網域（可選）')).toBeVisible();
   await expect(form.getByRole('checkbox', { name: /不驗證伺服器憑證/ })).toBeVisible();
@@ -303,7 +303,9 @@ test.describe('mobile', () => {
   test('mobile: helper keys reach the remote shell', async ({ page }) => {
     const name = `Mobile ${Date.now()}`;
     await login(page);
-    await addConnection(page, name, 'ssh');
+    const hostKey = remoteFile('/etc/ssh/ssh_host_ed25519_key.pub')
+      .trim().split(/\s+/).slice(0, 2).join(' ');
+    await addConnection(page, name, 'ssh', 'backend', '', 'tester-pw', { hostKey });
     await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
     await expect(page.locator('#terminal-status')).toHaveText('已連線', { timeout: 60000 });
     const keybar = page.getByRole('toolbar', { name: '輔助按鍵' });

@@ -30,6 +30,7 @@ async fn app(
         password: PASSWORD.into(),
         data_dir: directory.into(),
         secure_cookie: false,
+        trusted_proxies: Vec::new(),
         backend,
         shutdown,
     })
@@ -421,6 +422,7 @@ async fn web_login_rate_limit_and_corrupt_storage_fail_explicitly() {
         password: PASSWORD.into(),
         data_dir: dir.path().into(),
         secure_cookie: false,
+        trusted_proxies: Vec::new(),
         backend: "127.0.0.1:1".parse().unwrap(),
         shutdown: CancellationToken::new(),
     })
@@ -434,6 +436,126 @@ async fn web_login_rate_limit_and_corrupt_storage_fail_explicitly() {
 
 struct Spy {
     captured: tokio::sync::mpsc::Sender<Params>,
+}
+
+#[tokio::test]
+async fn web_trusted_proxy_preserves_independent_login_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = router(WebConfig {
+        username: "admin".into(),
+        password: PASSWORD.into(),
+        data_dir: dir.path().into(),
+        secure_cookie: false,
+        trusted_proxies: vec!["127.0.0.1".parse().unwrap()],
+        backend: "127.0.0.1:1".parse().unwrap(),
+        shutdown: CancellationToken::new(),
+    })
+    .await
+    .unwrap();
+    async fn attempt(service: &Router, ip: &str, password: &str) -> StatusCode {
+        service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/login")
+                    .header("host", "localhost")
+                    .header("origin", "http://localhost")
+                    .header("content-type", "application/json")
+                    .header("x-real-ip", ip)
+                    .extension(ConnectInfo(
+                        "127.0.0.1:12345".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .body(Body::from(
+                        json!({"username":"admin","password":password}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+    for _ in 0..10 {
+        assert_eq!(
+            attempt(&service, "192.0.2.1", "wrong").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        attempt(&service, "192.0.2.1", PASSWORD).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        attempt(&service, "192.0.2.2", PASSWORD).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        attempt(&service, "192.0.2.2,192.0.2.3", PASSWORD).await,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn web_identity_probe_requires_auth_origin_and_matching_protocol() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = app(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        CancellationToken::new(),
+    )
+    .await;
+    for suffix in ["host-key", "certificate"] {
+        assert_eq!(
+            call(
+                &service,
+                "POST",
+                &format!("/api/connections/missing/{suffix}"),
+                None,
+                None,
+                "http://localhost"
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let cookie = login(&service).await;
+    let (_, _, connection) = call(
+        &service,
+        "POST",
+        "/api/connections",
+        Some(draft()),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    let id = connection["id"].as_str().unwrap();
+    assert_eq!(
+        call(
+            &service,
+            "POST",
+            &format!("/api/connections/{id}/host-key"),
+            None,
+            Some(&cookie),
+            "https://attacker.invalid"
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &service,
+            "POST",
+            &format!("/api/connections/{id}/certificate"),
+            None,
+            Some(&cookie),
+            "http://localhost"
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
 }
 impl ProtocolPlugin for Spy {
     fn name(&self) -> &'static str {

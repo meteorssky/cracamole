@@ -34,8 +34,11 @@ impl client::Handler for Client {
         key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         if self.entries.is_empty() {
-            tracing::warn!("No known host keys provided, host identity will not be verified.");
-            return Ok(true);
+            *self.failure.lock().unwrap() = Some(
+                "SSH host key is unknown. Verify and save the server host key before connecting."
+                    .into(),
+            );
+            return Ok(false);
         }
         let blob = match key {
             russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => key.public_key_bytes(),
@@ -60,7 +63,7 @@ impl client::Handler for Client {
     }
 }
 
-fn load_known_hosts(settings: &SshSettings) -> Result<Vec<Entry>, SessionError> {
+pub(crate) fn load_known_hosts(settings: &SshSettings) -> Result<Vec<Entry>, SessionError> {
     let text = match &settings.host_key {
         Some(k) => Some(k.clone()),
         None => match std::fs::read_to_string(SYSTEM_KNOWN_HOSTS) {
@@ -77,7 +80,7 @@ fn load_known_hosts(settings: &SshSettings) -> Result<Vec<Entry>, SessionError> 
     match text {
         Some(t) => {
             let (entries, errors) = hostkey::parse(&t);
-            if entries.is_empty() && (settings.host_key.is_some() || !errors.is_empty()) {
+            if !errors.is_empty() || (entries.is_empty() && settings.host_key.is_some()) {
                 return Err(err(
                     Status::ServerError,
                     "Configured host keys contain no usable keys.",
@@ -378,7 +381,7 @@ async fn ssh_task(
         Ok(Ok(h)) => h,
         Ok(Err(e)) => {
             if let Some(m) = failure.lock().unwrap().take() {
-                return Err(err(Status::ServerError, m));
+                return Err(err(Status::UpstreamError, m));
             }
             return Err(err(
                 Status::UpstreamError,

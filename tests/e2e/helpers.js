@@ -126,6 +126,9 @@ async function addConnection(page, name, protocol, host = 'backend', port = '', 
     if (options.ignoreCert !== false) await form.getByRole('checkbox', { name: /不驗證伺服器憑證/ }).check();
     if (options.certPin) await form.getByLabel('已信任的伺服器憑證指紋（SHA-256）').fill(options.certPin);
   }
+  if (protocol === 'ssh' && options.hostKey) {
+    await form.getByLabel('主機金鑰（known_hosts）').fill(options.hostKey);
+  }
   if (protocol === 'telnet') {
     await form.getByLabel('登入成功提示').fill(':~[$] ');
     await form.getByLabel('登入失敗提示').fill('Login incorrect');

@@ -21,9 +21,15 @@ docker compose -f docker/compose.yml up -d --build --wait
 
 管理員帳密由環境變數提供，session 儲存在記憶體，重啟後須重新登入。連線密碼與私鑰以明文保存在權限 `0600` 的 `/data/connections.json`，目錄權限 `0700`；API 不回傳這些機密。請保護 volume、備份及 `.env`。編輯時密碼留空會保留原值，勾選清除才會移除。
 
-SSH 進階設定可填入已知的主機公鑰以驗證伺服器；留空沿用目前 daemon 的不驗證政策。
+SSH 每次連線都驗證主機身分。可在進階設定填入已知的主機公鑰／known_hosts；尚未設定時，首次連線會先阻擋並顯示 SHA-256 指紋。請透過其他可信管道向伺服器管理員核對，再按「信任這把主機金鑰並重新連線」。之後金鑰不符或遭 `@revoked` 撤銷時會拒絕連線；不支援的 known_hosts 標記或無效紀錄也會拒絕載入，不會降級成不驗證。獨立 daemon 沒有 Web 信任介面，必須預先設定 `host-key` 或 `/etc/guacamole/ssh_known_hosts`。
+
+RDP 預設嚴格驗證憑證，也可核對指紋後保存信任。伺服器回報的桌面單邊不得超過 4096 pixels；RDP 圖形配置共用程序內 512 MiB 的預算，包含解碼圖、輸出 framebuffer 與暫存空間的估算，額度不足會拒絕該連線。剪貼簿最多同時 4 條串流、合計 256 KiB，閒置 15 秒會結束連線；超限不會貼上部分文字。SSH／Telnet 貼上會移除 ESC 與其他控制字元（保留 Tab 與換行），避免內容提前結束安全貼上模式。
 
 遠端使用時，在前方配置支援 WebSocket 的 HTTPS reverse proxy，保持相同 Host 與 Origin，並設定 `CRACAMOLE_SECURE_COOKIE=true`。應用程式目前不自行終止 TLS。預設 Compose 只將 8080 發布到 `127.0.0.1`，沒有發布 daemon 連接埠。正式容器以 UID 1000、唯讀根檔案系統及移除全部 capabilities 執行。
+
+透過代理時，另設定 `CRACAMOLE_TRUSTED_PROXIES` 為逗號分隔的實際代理來源 IP（例如原生 loopback 代理為 `127.0.0.1,::1`；Docker 依應用實際看到的 peer IP 設定，不能假設一定是 loopback）。代理必須**覆寫** `X-Real-IP` 為直連客戶端的單一 IP，例如 Nginx 使用 `proxy_set_header X-Real-IP $remote_addr;`。應用只信任列出的 TCP peer，拒絕它們缺漏、重複或無效的 `X-Real-IP`，忽略其他來源的轉送標頭；不使用 `X-Forwarded-For`。未設定時仍以 TCP peer 限流，若經代理，所有使用者會共用同一個來源額度。部署時限制應用的直接存取，並在外層代理一併限流。
+
+主機身分探測（SSH 主機金鑰／RDP 憑證）合計最多同時 4 個，整段 DNS、TCP 與協定握手有 10 秒期限，且隨登出、session 到期或關機取消；探測不提供遠端登入帳密。
 
 本機開發（PowerShell）：
 
