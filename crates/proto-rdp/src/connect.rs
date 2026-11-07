@@ -202,7 +202,7 @@ pub async fn establish(
     stream: TcpStream,
     width: u32,
     height: u32,
-    clipboard: Option<tokio::sync::mpsc::UnboundedSender<crate::clipboard::ClipEvent>>,
+    clipboard: Option<tokio::sync::mpsc::Sender<crate::clipboard::ClipEvent>>,
 ) -> Result<(Framed, ConnectionResult), SessionError> {
     let peer: SocketAddr = stream
         .peer_addr()

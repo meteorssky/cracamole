@@ -26,6 +26,8 @@ const HEARTBEAT: Duration = Duration::from_secs(5);
 /// Window resizes are coalesced: the desktop is resized once the browser size settles.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(300);
 const RESIZE_RETRY: Duration = Duration::from_millis(500);
+/// Pending clipboard events. Further events are dropped, so a hostile server cannot grow memory.
+const EVENT_QUEUE: usize = 8;
 
 fn session_error(e: impl std::fmt::Display) -> SessionError {
     SessionError::plugin(Status::UpstreamError, format!("RDP session error: {e}"))
@@ -33,7 +35,7 @@ fn session_error(e: impl std::fmt::Display) -> SessionError {
 
 pub async fn run_rdp(mut ctx: SessionCtx, settings: RdpSettings) -> Result<(), SessionError> {
     let caps = ctx.tx.caps().clone();
-    let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (clip_tx, mut clip_rx) = tokio::sync::mpsc::channel(EVENT_QUEUE);
     let clipboard_enabled = !(settings.disable_copy && settings.disable_paste);
     let connecting = async {
         let stream = connect_tcp(&settings.hostname, settings.port, settings.timeout_secs).await?;
