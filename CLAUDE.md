@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案現況
 
-cracamole 是不使用 Java 的瀏覽器 SSH／Telnet 系統，採 Rust Web 服務與純 JavaScript 前端。使用者已確認第一版採單一管理員，提供登入、連線新增／編輯／刪除、本機保存及終端機。現有 10 個 crate；`cracamole-web` 是完整系統入口，內嵌私人 loopback daemon。舊版「保留官方 Java webapp」範圍已被使用者取消，不能恢復為部署依賴。完整 MVP 仍待長時間 fuzz、資源／安全及 arm64 等驗收；不要把本機測試全綠當成全部完成。見 `docs/java-free-mvp.md` 與 `docs/MVP-STATUS.md`。
+cracamole 是不使用 Java 的瀏覽器 SSH／Telnet 系統，採 Rust Web 服務與純 JavaScript 前端。使用者已確認第一版採單一管理員，提供登入、連線新增／編輯／刪除、本機保存及終端機。現有 11 個 crate（含 `proto-vnc`）；`cracamole-web` 是完整系統入口，內嵌私人 loopback daemon。舊版「保留官方 Java webapp」範圍已被使用者取消，不能恢復為部署依賴。完整 MVP 仍待長時間 fuzz、資源／安全及 arm64 等驗收；不要把本機測試全綠當成全部完成。見 `docs/java-free-mvp.md` 與 `docs/MVP-STATUS.md`。
 
 常用指令：
 
@@ -45,11 +45,11 @@ cargo bench -p guac-terminal --bench mvp --locked
 
 ## 架構要點(跨文件才看得出來)
 
-- **MVP 範圍**：單一管理員登入、連線 CRUD、本機 JSON 保存及瀏覽器 SSH／Telnet。Rust 服務直接提供頁面與 WebSocket，不需要 Java、Tomcat、PostgreSQL 或 Node.js runtime。RDP 為使用者後續明確要求加入（`crates/proto-rdp`，以 IronRDP 為引擎；已支援畫面、鍵盤、滑鼠、文字剪貼簿與動態縮放，音訊、磁碟機／檔案重新導向與 RemoteApp 尚未完成；`scripts/rdp_dev.sh` 為遠端 xrdp＋本機編譯的快速測試迴圈）；VNC、K8s、Serial、錄影、共享連線、SFTP、多使用者及內建 TLS 不在第一版。
+- **MVP 範圍**：單一管理員登入、連線 CRUD、本機 JSON 保存及瀏覽器 SSH／Telnet。Rust 服務直接提供頁面與 WebSocket，不需要 Java、Tomcat、PostgreSQL 或 Node.js runtime。RDP 為使用者後續明確要求加入（`crates/proto-rdp`，以 IronRDP 為引擎；已支援畫面、鍵盤、滑鼠、文字剪貼簿與動態縮放，音訊、磁碟機／檔案重新導向與 RemoteApp 尚未完成；`scripts/rdp_dev.sh` 為遠端 xrdp＋本機編譯的快速測試迴圈）；VNC 為使用者後續明確要求加入（`crates/proto-vnc`，自製 RFB 客戶端，無第三方 VNC crate；以連線 macOS 螢幕共享為優先：ARD 驗證類型 30、VNC 密碼類型 2；編碼 Raw／CopyRect／Hextile／ZRLE；`scripts/vnc_dev.sh` 於遠端 Docker 主機跑 TigerVNC 容器互通測試，`scripts/vnc_vectors.py` 為 ARD／DES 的獨立已知答案向量；尚未在真實 macOS 上驗證，Tight／Cursor 偽編碼／客戶端發起的縮放不支援）；K8s、Serial、錄影、共享連線、SFTP、多使用者及內建 TLS 不在第一版。
 - **Web 安全與保存**：Argon2id 驗證、HttpOnly/SameSite session、同源檢查、登入限流；登出與到期會關閉該 session 的 tunnel。管理員密碼由環境變數提供，至少 12 字元。連線機密保存在私有 volume 的 0600 JSON，尚未加密，API 只回傳是否已設定；不可將這些值放進日誌、URL 或 Git。
 - **Greenfield**,只保證 Guacamole 線路協定(1.5.0)與連線參數名稱相容;不做 C/Rust 混編、不做 C ABI、不支援動態 `.so` 外掛(協定以 Cargo feature 靜態編入)。
 - **單進程 tokio、每連線一個 task**(D2);外掛只能經 `SessionCtx` 與外界互動,不可碰 socket,以便日後改為 worker 進程隔離。
-- **Crate 依賴單向**:`guac-protocol ← guac-session ← guac-display ← guac-terminal ← proto-* ← guacd ← cracamole-web`。`guac-protocol` 必須無 I/O、無 async、不得 panic。`guac-testkit` 只能是 dev-dependency。`web/` 資產內嵌於 Web binary，`web/vendor/` 的 JavaScript 保留 Apache LICENSE／NOTICE。
+- **Crate 依賴單向**:`guac-protocol ← guac-session ← guac-display ← guac-terminal ← proto-*（含 proto-vnc，僅依賴 guac-session／guac-display／guac-protocol）← guacd ← cracamole-web`。`guac-protocol` 必須無 I/O、無 async、不得 panic。`guac-testkit` 只能是 dev-dependency。`web/` 資產內嵌於 Web binary，`web/vendor/` 的 JavaScript 保留 Apache LICENSE／NOTICE。
 - **終端機實作**：`terminal.rs` 使用 `alacritty_terminal`／`vte` 與 `guac-display`，`font.rs` 使用內建字型與系統 fallback，不用 Pango。舊計畫的 `Grid`／`Renderer` 分層為規劃，不能當作現有 API。
 - **Docker 完整系統**：`docker/compose.yml` 與 `docker/cracamole-web.Dockerfile` 為主要入口，只發布 HTTP。獨立 `guacd` 映像與 CLI 相容性測試仍保留，不能把它們誤當完整 Web 部署。`docker/compose.e2e.yml` 僅含 Rust 應用與 sshd／telnetd 測試主機。
 
