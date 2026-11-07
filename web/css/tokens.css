@@ -63,8 +63,7 @@
   --shadow-3: 0 24px 64px rgb(0 0 0 / 55%);
 
   /* layout */
-  --topbar-h: 2.5rem;
-  --statusbar-h: 1.875rem;
+  --statusbar-h: 2.25rem;
   --drawer-w: 20rem;
   --tap: 2.75rem; /* 44px touch target */
 

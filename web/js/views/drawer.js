@@ -20,7 +20,7 @@ export function setDrawerOverlay(overlay) {
   else delete library.dataset.overlay;
 }
 
-// Collapses the top bar and status bar so the SSH/RDP stage gets 100% of the viewport height.
+// Collapses the bottom status dock so the SSH/RDP stage gets 100% of the viewport height.
 export function setChromeCollapsed(collapsed) {
   const workspace = $('workspace');
   if (collapsed) {
@@ -29,7 +29,6 @@ export function setChromeCollapsed(collapsed) {
   } else {
     delete workspace.dataset.chrome;
   }
-  $('topbar').hidden = collapsed;
   $('statusbar').hidden = collapsed;
   $('chrome-pill').hidden = !collapsed;
   $('collapse-chrome').setAttribute('aria-expanded', String(!collapsed));
@@ -45,15 +44,17 @@ export function initDrawer() {
     setDrawerOpen(false);
     $('toggle-library').focus();
   });
-  document.querySelector('.topbar .brand')?.addEventListener('click', event => {
-    event.preventDefault();
-    setDrawerOpen(!isDrawerOpen());
-  });
   $('library').addEventListener('keydown', event => {
-    if (event.key === 'Escape' && $('library').dataset.overlay === 'true') {
+    if (event.key === 'Escape' && ($('library').dataset.overlay === 'true' || window.matchMedia('(max-width: 1024px)').matches)) {
       event.stopPropagation();
       setDrawerOpen(false);
       $('toggle-library').focus();
+    }
+  });
+  // On tablets/phones or during an active session, tapping the terminal stage dismisses the floating drawer.
+  $('terminal').addEventListener('pointerdown', () => {
+    if (isDrawerOpen() && ($('library').dataset.overlay === 'true' || window.matchMedia('(max-width: 1024px)').matches)) {
+      setDrawerOpen(false);
     }
   });
   $('collapse-chrome').addEventListener('click', () => {

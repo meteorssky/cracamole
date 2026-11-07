@@ -13,18 +13,14 @@ let hooks = { onEdit: () => {}, onActive: () => {}, onTrusted: () => {} };
 
 function setStatus(text, dotState) {
   $('terminal-status').textContent = text;
-  $('status-dot').dataset.state = dotState;
-  $('chip-dot').dataset.state = dotState;
-  $('pill-dot').dataset.state = dotState;
+  for (const id of ['status-dot', 'chip-dot', 'pill-dot', 'overlay-dot']) $(id).dataset.state = dotState;
+  $('overlay-state').textContent = text;
   $('pill-status').textContent = text;
-  $('chip-meta').textContent = text;
   hooks.onActive(current?.connection.id ?? null, dotState, text);
 }
 
 function setControls(connected) {
-  for (const id of ['toggle-clipboard', 'toggle-keybar', 'collapse-chrome', 'disconnect']) {
-    $(id).disabled = !connected;
-  }
+  for (const id of ['toggle-clipboard', 'toggle-keybar', 'collapse-chrome', 'disconnect']) $(id).disabled = !connected;
   if (!connected) {
     $('clipboard-panel').hidden = true;
     $('toggle-clipboard').setAttribute('aria-expanded', 'false');
@@ -32,14 +28,8 @@ function setControls(connected) {
 }
 
 function showOverlay({
-  connecting = false,
-  title,
-  detail = '',
-  tone = 'neutral',
-  canRetry = false,
-  canEdit = false,
-  canTrust = false,
-  identity = null,
+  connecting = false, title, detail = '', tone = 'neutral',
+  canRetry = false, canEdit = false, canTrust = false, identity = null,
 }) {
   $('overlay-spinner').hidden = !connecting;
   const heading = $('overlay-title');
@@ -73,7 +63,6 @@ function renderKeybar(modifiers = { ctrl: false, alt: false }) {
         type: 'button',
         'aria-label': key.aria,
         'aria-pressed': key.modifier ? String(Boolean(modifiers[key.modifier])) : null,
-        // keep the soft keyboard (and terminal focus) where it is while tapping helper keys
         onmousedown: event => event.preventDefault(),
         onclick: () => {
           if (!current) return;
@@ -126,8 +115,7 @@ function onSessionState(connection, state, info) {
   }
 }
 
-// Windows enables NLA by default, which needs the account before the desktop appears. A connection
-// saved without a username fails authentication every time, so say that instead of "wrong password".
+// Windows enables NLA by default, which needs the account before the desktop appears.
 function explainMissingCredentials(connection, info) {
   if (info.reason !== 'auth' || connection.protocol !== 'rdp') return info;
   const noUser = !connection.params.username;
@@ -137,10 +125,7 @@ function explainMissingCredentials(connection, info) {
     return {
       ...info,
       detail:
-        info.detail +
-        ' Windows 帳號若屬於網域，請在「編輯連線」填寫網域，或把帳號寫成「網域' +
-        slash +
-        '帳號」。',
+        info.detail + ' Windows 帳號若屬於網域，請在「編輯連線」填寫網域，或把帳號寫成「網域' + slash + '帳號」。',
     };
   }
   return {
@@ -161,18 +146,18 @@ export function openSession(connection) {
   setDrawerOpen(false);
   $('terminal-placeholder').hidden = true;
   $('session-chip').hidden = false;
+  const meta = protocolLabel(connection.protocol) + ' · ' + endpoint(connection);
   $('terminal-name').textContent = connection.name;
   $('pill-name').textContent = connection.name;
-  $('status-meta').textContent = protocolLabel(connection.protocol) + ' · ' + endpoint(connection);
+  $('status-meta').textContent = meta;
+  $('overlay-endpoint').textContent = meta;
   $('send-cad').hidden = connection.protocol !== 'rdp';
   renderKeybar();
-  const session = createSession({
+  current.session = createSession({
     connection,
     mount: $('terminal'),
     onState: (state, info) => onSessionState(connection, state, info),
-    onClipboard: text => {
-      $('clipboard-text').value = text;
-    },
+    onClipboard: text => { $('clipboard-text').value = text; },
     onClipboardError: message => toast(message),
     onModifiers: modifiers => renderKeybar(modifiers),
     onEscape: () => {
@@ -180,7 +165,6 @@ export function openSession(connection) {
       $('toggle-library').focus();
     },
   });
-  current.session = session;
   if (window.matchMedia('(pointer: coarse)').matches) setKeybarVisible(true);
 }
 
@@ -197,6 +181,7 @@ export function closeSession() {
   $('session-chip').hidden = true;
   $('send-cad').hidden = true;
   $('status-meta').textContent = '';
+  $('overlay-endpoint').textContent = '';
   $('clipboard-text').value = '';
   setStatus('未連線', 'idle');
   setDrawerOpen(true);
@@ -206,7 +191,6 @@ export function activeConnectionId() {
   return current?.connection.id ?? null;
 }
 
-// First-run guidance lives where the user is looking: in the empty stage.
 export function showEmptyGuidance(hasConnections) {
   $('empty-actions').hidden = hasConnections;
   $('empty-title').textContent = hasConnections ? '選擇一台主機' : '新增你的第一台主機';

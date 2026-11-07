@@ -282,9 +282,9 @@ test('ui: collapsible menus, maximized stage, dense option summaries and live st
   const terminalBox = await page.locator('#terminal').boundingBox();
   expect(terminalBox.width).toBe(1280);
 
-  // 3. Collapsing chrome gives the terminal the entire 1280x900 viewport while keeping live status visible
+  // 3. No top title bar: terminal starts at y=0, and collapsing chrome gives the full 1280x900 viewport
+  expect(terminalBox.y).toBe(0);
   await page.getByRole('button', { name: '最大畫面' }).click();
-  await expect(page.locator('#topbar')).toBeHidden();
   await expect(page.locator('#statusbar')).toBeHidden();
   await expect(page.locator('#chrome-pill')).toBeVisible();
   await expect(page.locator('#chrome-pill')).toContainText(name);
@@ -293,7 +293,6 @@ test('ui: collapsible menus, maximized stage, dense option summaries and live st
   expect(maxBox.width).toBe(1280);
   expect(maxBox.height).toBe(900);
   await page.getByRole('button', { name: '展開選單' }).click();
-  await expect(page.locator('#topbar')).toBeVisible();
   await expect(page.locator('#statusbar')).toBeVisible();
 
   // 4. Opening the drawer during a session overlays it without shrinking the terminal width
@@ -348,6 +347,18 @@ test.describe('mobile', () => {
     const add = await page.getByRole('button', { name: '新增連線', exact: true }).boundingBox();
     expect(add.height).toBeGreaterThanOrEqual(43.5);
     await expectAccessible(page, 'mobile workspace');
+    for (const [width, height] of [[768, 1024], [1024, 768]]) {
+      await page.setViewportSize({ width, height });
+      expect(await overflow()).toBeLessThanOrEqual(0);
+      const box = await page.locator('#terminal').boundingBox();
+      expect(box.y).toBe(0);
+      expect(box.width).toBe(width);
+    }
+    await expect(page.locator('#library')).toBeVisible();
+    await page.locator('#terminal').dispatchEvent('pointerdown');
+    await expect(page.locator('#library')).toBeHidden();
+    await page.getByRole('button', { name: '開啟連線庫' }).click();
+    await expect(page.locator('#library')).toBeVisible();
   });
 
   test('mobile: helper keys reach the remote shell', async ({ page }) => {

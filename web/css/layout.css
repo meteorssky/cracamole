@@ -36,31 +36,18 @@
   gap: var(--space-4);
 }
 
-/* ---- workspace ---- */
+/* ---- workspace (zero title bar: stage starts at y=0) ---- */
 
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr); /* the remote display must never widen the page */
-  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
+  grid-template-rows: minmax(0, 1fr) auto;
   block-size: 100vh;
   block-size: 100dvh;
 }
 
 .workspace[data-chrome="collapsed"] {
   grid-template-rows: minmax(0, 1fr);
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding-inline: var(--space-3);
-  background: var(--surface-raised);
-  border-block-end: 1px solid var(--border);
-}
-
-.topbar__spacer {
-  flex: 1;
 }
 
 .session-chip {
@@ -70,6 +57,7 @@
   min-inline-size: 0;
   padding: var(--space-1) var(--space-3);
   background: var(--surface-sunken);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   font-size: var(--text-sm);
 }
@@ -84,7 +72,10 @@
 .session-chip__meta {
   color: var(--text-muted);
   font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  max-inline-size: 16rem;
 }
 
 /* flex, not grid: with the drawer hidden the stage must still take the full width. */
@@ -181,9 +172,12 @@
 
 .statusbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
-  padding-inline: var(--space-3);
+  gap: var(--space-2);
+  min-block-size: var(--statusbar-h);
+  padding-block: var(--space-1) max(var(--space-1), env(safe-area-inset-bottom));
+  padding-inline: max(var(--space-3), env(safe-area-inset-left)) max(var(--space-3), env(safe-area-inset-right));
   background: var(--surface-raised);
   border-block-start: 1px solid var(--border);
   font-size: var(--text-sm);
@@ -194,23 +188,26 @@
   align-items: center;
   gap: var(--space-2);
   min-inline-size: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-weight: 600;
 }
 
-.statusbar__meta {
+.statusbar__spacer {
   flex: 1;
-  min-inline-size: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
 }
 
 .statusbar__actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1);
 }
 
-@media (max-width: 760px) {
+/* Tablets (768px–1024px portrait/landscape/split-view) and phones (<=760px) */
+@media (max-width: 1024px) {
   .drawer {
     position: absolute;
     inset-block: 0;
@@ -220,19 +217,17 @@
     box-shadow: var(--shadow-3);
   }
 
+  .session-chip__meta {
+    display: none;
+  }
+
+  .statusbar__actions .btn:disabled {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
   .session-chip strong {
     max-inline-size: 8rem;
-  }
-
-  .statusbar__meta {
-    display: none;
-  }
-
-  .statusbar__actions {
-    margin-inline-start: auto;
-  }
-
-  .brand__text {
-    display: none;
   }
 }
