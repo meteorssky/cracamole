@@ -48,4 +48,6 @@ pub const ARGS: &[&str] = &[
     "wol-broadcast-addr",
     "wol-udp-port",
     "wol-wait-time",
+    // Rust extension: text conversion is independent of the remote LANG environment.
+    "character-encoding",
 ];

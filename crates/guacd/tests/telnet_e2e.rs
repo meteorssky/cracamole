@@ -16,6 +16,75 @@ const WILL: u8 = 251;
 const SB: u8 = 250;
 const SE: u8 = 240;
 
+#[tokio::test]
+async fn tel_legacy_encoding_covers_split_prompts_credentials_and_input() {
+    let (gaddr, shutdown) = start_guacd().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let wire = vec![0xa4, 0xa4, 0xa4, 0xe5]; // Big5 中文
+    let expected = wire.clone();
+    let peer = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        stream.write_all(&[IAC, WILL, 1]).await.unwrap();
+        let mut acc = vec![];
+        read_until(&mut stream, &mut acc, &[IAC, DO, 1]).await;
+        for byte in &expected {
+            stream.write_all(&[*byte]).await.unwrap();
+        }
+        stream.write_all(b":").await.unwrap();
+        acc.clear();
+        let credential = [expected.clone(), b"\r".to_vec()].concat();
+        read_until(&mut stream, &mut acc, &credential).await;
+        acc.clear();
+        stream.write_all(b"Password:").await.unwrap();
+        read_until(&mut stream, &mut acc, &credential).await;
+        acc.clear();
+        stream.write_all(b"OK\r\n").await.unwrap();
+        read_until(&mut stream, &mut acc, &expected).await;
+    });
+    let mut client = SimClient::new(TcpStream::connect(gaddr).await.unwrap());
+    client
+        .handshake(
+            "telnet",
+            &[
+                ("hostname", "127.0.0.1"),
+                ("port", &port),
+                ("username", "中文"),
+                ("password", "中文"),
+                ("username-regex", "中文:"),
+                ("login-success-regex", "OK"),
+                ("login-failure-regex", "incorrect"),
+                ("character-encoding", "Big5"),
+            ],
+            800,
+            480,
+        )
+        .await;
+    let mut replay = DisplayReplay::new();
+    drain_frames(&mut client, &mut replay, 200).await;
+    use base64::Engine;
+    client
+        .send(Instruction::new("clipboard", ["1", "text/plain"]))
+        .await
+        .unwrap();
+    client
+        .send(Instruction::new(
+            "blob",
+            [
+                "1".to_string(),
+                base64::engine::general_purpose::STANDARD.encode("中文"),
+            ],
+        ))
+        .await
+        .unwrap();
+    client.send(Instruction::new("end", ["1"])).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), peer)
+        .await
+        .unwrap()
+        .unwrap();
+    shutdown.cancel();
+}
+
 async fn start_guacd() -> (SocketAddr, CancellationToken) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

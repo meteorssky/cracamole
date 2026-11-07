@@ -118,7 +118,7 @@ async fn send_clipboard(ctx: &SessionCtx, stream: u32, text: &str) -> Result<(),
             [id.clone(), "text/plain".into()],
         ))
         .await?;
-    for chunk in text.as_bytes().chunks(4096) {
+    for chunk in text.as_bytes().chunks(4095) {
         let b64 = base64::engine::general_purpose::STANDARD.encode(chunk);
         ctx.tx
             .send(Instruction::new("blob", [id.clone(), b64]))

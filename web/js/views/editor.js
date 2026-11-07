@@ -2,7 +2,14 @@ import { api, ApiError } from '../api.js';
 import { $ } from '../util/dom.js';
 import { openDialog } from '../ui/dialog.js';
 import { DEFAULT_PORTS } from '../util/protocols.js';
-import { fillOptions, readOptions, renderOptions, validateOptions } from './options.js';
+import {
+  collapseAllOptions,
+  fillOptions,
+  readOptions,
+  renderOptions,
+  updateOptionSummaries,
+  validateOptions,
+} from './options.js';
 
 const SECRET_FIELDS = ['password', 'private-key', 'passphrase'];
 const FIELD_ERROR_IDS = {
@@ -20,16 +27,19 @@ const RDP_ONLY = ['domain', 'security', 'ignore-cert', 'server-cert-sha256'];
 const TERMINAL_ONLY = ['terminal-type', 'func-keys-and-keypad'];
 
 let editing = null;
+let connectAfterSave = false;
 let onSaved = async () => {};
 
 const form = () => $('connection-form');
 
 function applyProtocol() {
-  const protocol = form().elements.protocol.value;
-  for (const group of form().querySelectorAll('[data-protocols]')) {
+  const f = form();
+  const protocol = f.elements.protocol.value;
+  for (const group of f.querySelectorAll('[data-protocols]')) {
     group.hidden = !group.dataset.protocols.split(' ').includes(protocol);
   }
   $('f-port').placeholder = DEFAULT_PORTS[protocol] || '';
+  updateOptionSummaries(f, protocol);
 }
 
 function clearErrors() {
@@ -133,7 +143,7 @@ export function openEditor(connection = null, protocol = null) {
   for (const name of ['hostname', 'port', 'username', 'host-key', 'login-success-regex', 'login-failure-regex', 'domain', 'server-cert-sha256']) {
     f.elements[name].value = params[name] || '';
   }
-  fillOptions(f, params);
+  fillOptions(f, params, Boolean(connection));
   f.elements.security.value = params.security || 'any';
   f.elements['ignore-cert'].checked = params['ignore-cert'] === 'true';
   fillSecretHints(connection);
@@ -143,18 +153,33 @@ export function openEditor(connection = null, protocol = null) {
 
 export function initEditor({ saved }) {
   onSaved = saved;
-  renderOptions($('protocol-options'));
+  const optionsBox = $('protocol-options');
+  renderOptions(optionsBox);
   const dialog = $('connection-editor');
+  const syncSummaries = () => updateOptionSummaries(form(), form().elements.protocol.value);
+  optionsBox.addEventListener('input', syncSummaries);
+  optionsBox.addEventListener('change', syncSummaries);
+  optionsBox.addEventListener('toggle', syncSummaries, true);
+  $('collapse-options').addEventListener('click', () => {
+    collapseAllOptions(form(), form().elements.protocol.value);
+  });
   $('close-editor').addEventListener('click', () => dialog.close());
   $('cancel-editor').addEventListener('click', () => dialog.close());
+  $('save-and-connect').addEventListener('click', () => {
+    connectAfterSave = true;
+    form().requestSubmit();
+  });
   dialog.addEventListener('close', () => {
     editing = null;
+    connectAfterSave = false;
     form().reset();
   });
   form().elements.protocol.addEventListener('change', applyProtocol);
   form().addEventListener('submit', async event => {
     event.preventDefault();
     const f = event.target;
+    const shouldConnect = connectAfterSave;
+    connectAfterSave = false;
     clearErrors();
     const problem = validate(f);
     if (problem) {
@@ -163,23 +188,26 @@ export function initEditor({ saved }) {
     }
     const protocol = f.elements.protocol.value;
     const button = $('save-connection');
+    const connectBtn = $('save-and-connect');
     button.disabled = true;
+    connectBtn.disabled = true;
     button.setAttribute('aria-busy', 'true');
     try {
       const params = buildParams(f, protocol);
       readOptions(f, protocol, params);
       const body = { name: f.elements.name.value.trim(), protocol, params };
-      const saved = await api('/connections' + (editing ? '/' + editing.id : ''), {
+      const savedConn = await api('/connections' + (editing ? '/' + editing.id : ''), {
         method: editing ? 'PUT' : 'POST',
         body,
       });
       dialog.close();
-      await onSaved(saved);
+      await onSaved(savedConn, { connect: shouldConnect });
     } catch (failure) {
       if (failure instanceof ApiError) showError(failure.field, failure.message);
       else showError(null, '儲存失敗，請再試一次。');
     } finally {
       button.disabled = false;
+      connectBtn.disabled = false;
       button.removeAttribute('aria-busy');
     }
   });

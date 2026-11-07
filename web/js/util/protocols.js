@@ -7,6 +7,7 @@ export function protocolLabel(protocol) {
 
 export function endpoint(connection) {
   const params = connection.params || {};
+  const user = params.username ? params.username + '@' : '';
   const port = params.port || DEFAULT_PORTS[connection.protocol] || '';
-  return params.hostname + (port ? ':' + port : '');
+  return user + params.hostname + (port ? ':' + port : '');
 }

@@ -6,6 +6,7 @@ pub mod config;
 pub mod logging;
 mod server;
 
+pub use guac_terminal::TextEncoding;
 pub use server::{serve, Registry, ServerConfig};
 
 /// Inspect an RDP server's TLS certificate without authenticating (for the "trust this certificate" flow).

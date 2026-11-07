@@ -256,6 +256,56 @@ test('ui: an invalid advanced value is explained next to its field, even inside 
   expect((await response.json()).field).toBe('timeout');
 });
 
+test('ui: collapsible menus, maximized stage, dense option summaries and live status work together', async ({ page }) => {
+  const name = `StageMax ${Date.now()}`;
+  await login(page);
+
+  // 1. Dense settings show configured counts on collapsed summaries and can be collapsed in one click
+  await page.getByRole('button', { name: '新增連線', exact: true }).click();
+  const form = page.locator('#connection-form');
+  await form.getByLabel('連線名稱').fill(name);
+  await form.getByLabel('主機名稱或 IP').fill('no-such-host.invalid');
+  await expect(section(form, '終端機外觀與輸入')).toContainText('預設');
+  await section(form, '終端機外觀與輸入').click();
+  await form.getByLabel('字型大小（pt）').fill('16');
+  await expect(section(form, '終端機外觀與輸入')).toContainText('已設定 1 項');
+  await expect(form.locator('#options-summary')).toHaveText('進階設定（已自訂 1 項）');
+  await form.getByRole('button', { name: '全部收合' }).click();
+  await expect(form.getByLabel('字型大小（pt）')).toBeHidden();
+
+  // 2. Save & connect launches the session immediately and collapses the drawer so the stage gets full width
+  await form.getByRole('button', { name: '儲存並連線' }).click();
+  await expect(page.locator('#connection-editor')).not.toBeVisible();
+  const library = page.getByRole('complementary', { name: '連線庫' });
+  await expect(library).toBeHidden();
+  await expect(page.locator('#terminal-status')).toHaveText('已連線');
+  const terminalBox = await page.locator('#terminal').boundingBox();
+  expect(terminalBox.width).toBe(1280);
+
+  // 3. Collapsing chrome gives the terminal the entire 1280x900 viewport while keeping live status visible
+  await page.getByRole('button', { name: '最大畫面' }).click();
+  await expect(page.locator('#topbar')).toBeHidden();
+  await expect(page.locator('#statusbar')).toBeHidden();
+  await expect(page.locator('#chrome-pill')).toBeVisible();
+  await expect(page.locator('#chrome-pill')).toContainText(name);
+  await expect(page.locator('#chrome-pill')).toContainText('已連線');
+  const maxBox = await page.locator('#terminal').boundingBox();
+  expect(maxBox.width).toBe(1280);
+  expect(maxBox.height).toBe(900);
+  await page.getByRole('button', { name: '展開選單' }).click();
+  await expect(page.locator('#topbar')).toBeVisible();
+  await expect(page.locator('#statusbar')).toBeVisible();
+
+  // 4. Opening the drawer during a session overlays it without shrinking the terminal width
+  await page.getByRole('button', { name: '開啟連線庫' }).click();
+  await expect(library).toBeVisible();
+  expect((await page.locator('#terminal').boundingBox()).width).toBe(1280);
+  await expect(library).toContainText('已連線');
+  await library.getByRole('button', { name: '收合選單' }).click();
+  await expect(library).toBeHidden();
+  await page.getByRole('button', { name: '中斷連線' }).click();
+});
+
 for (const scheme of ['light', 'dark']) {
   test(`ui: no serious accessibility violations (${scheme})`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme });

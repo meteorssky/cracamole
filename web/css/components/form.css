@@ -87,6 +87,10 @@ textarea.input {
 }
 
 .group--details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
   cursor: pointer;
   font-weight: 600;
   font-size: var(--text-sm);
@@ -94,12 +98,19 @@ textarea.input {
 }
 
 .group--details[open] > summary {
-  margin-block-end: var(--space-4);
+  margin-block-end: var(--space-3);
+}
+
+.options__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
 }
 
 .options {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .form-error {

@@ -55,6 +55,12 @@ def args_at(host, port, protocol):
         raise RuntimeError("response exceeded protocol limits")
 
 
+def accepted_args(oracle, candidate, allow_terminal_encoding=False):
+    """Keep raw equality meaningful; accept only the documented appended extension when requested."""
+    extension = b",18.character-encoding;"
+    return oracle == candidate or (allow_terminal_encoding and candidate == oracle[:-1] + extension)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--oracle-host", default="127.0.0.1")
@@ -62,6 +68,7 @@ def main():
     parser.add_argument("--candidate-host", default="127.0.0.1")
     parser.add_argument("--candidate-port", type=int, default=24822)
     parser.add_argument("--output", type=Path, default=Path("target/oracle/args.json"))
+    parser.add_argument("--allow-terminal-encoding-extension", action="store_true")
     options = parser.parse_args()
     records = {}
     for protocol in ["ssh", "telnet"]:
@@ -75,6 +82,7 @@ def main():
             "candidate": candidate.decode(),
             "stable": oracle == repeat,
             "equal": oracle == candidate,
+            "accepted": accepted_args(oracle, candidate, options.allow_terminal_encoding_extension),
         }
         oracle_args = instruction(oracle.decode())[0][2:]
         candidate_args = instruction(candidate.decode())[0][2:]
@@ -83,10 +91,10 @@ def main():
     options.output.parent.mkdir(parents=True, exist_ok=True)
     options.output.write_text(json.dumps(records, indent=2), encoding="utf-8")
     for protocol, record in records.items():
-        print(f"{protocol}: stable={record['stable']} equal={record['equal']}")
+        print(f"{protocol}: stable={record['stable']} equal={record['equal']} accepted={record['accepted']}")
         if not record["equal"]:
             print(f"  candidate-only: {record['candidate_only_args']}; oracle-only: {record['oracle_only_args']}")
-    if not all(r["stable"] and r["equal"] for r in records.values()):
+    if not all(r["stable"] and r["accepted"] for r in records.values()):
         raise SystemExit(1)
 
 

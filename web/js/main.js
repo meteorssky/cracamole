@@ -62,7 +62,12 @@ async function boot() {
   });
   initDrawer();
   initLogin({ onLoggedIn: enterWorkspace });
-  initEditor({ saved: refreshConnections });
+  initEditor({
+    saved: async (savedConn, options = {}) => {
+      await refreshConnections();
+      if (options.connect && savedConn) openSession(savedConn);
+    },
+  });
   initLibrary({
     onAdd: () => openEditor(),
     onOpen: connection => openSession(connection),
@@ -71,7 +76,7 @@ async function boot() {
   });
   initStage({
     onEdit: connection => openEditor(connection),
-    onActive: id => setActive(id),
+    onActive: (id, dot, text) => setActive(id, dot, text),
     onTrusted: async connection => {
       await refreshConnections();
       openSession(connection);

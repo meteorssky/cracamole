@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 pub struct Negotiator {
     terminal_type: String,
-    username: Option<String>,
+    username: Option<Vec<u8>>,
     cols: u16,
     rows: u16,
     us: HashSet<u8>,
@@ -46,10 +46,14 @@ fn accepts_them(opt: u8) -> bool {
 }
 
 impl Negotiator {
+    pub fn set_username_bytes(&mut self, username: Option<Vec<u8>>) {
+        self.username = username;
+    }
+
     pub fn new(terminal_type: &str, username: Option<&str>, cols: u16, rows: u16) -> Self {
         Self {
             terminal_type: terminal_type.to_string(),
-            username: username.map(str::to_string),
+            username: username.map(|s| s.as_bytes().to_vec()),
             cols,
             rows,
             us: HashSet::new(),
@@ -140,7 +144,7 @@ impl Negotiator {
                         body.push(0); // VAR
                         body.extend(b"USER");
                         body.push(1); // VALUE
-                        body.extend(u.as_bytes());
+                        body.extend(u);
                     }
                     r.send.extend(subnegotiation(OPT_NEW_ENVIRON, &body));
                 }

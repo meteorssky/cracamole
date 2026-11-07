@@ -97,7 +97,8 @@ fn ssh_p_06_unsupported_features_warn() {
 
 #[test]
 fn ssh_p_07_args_shape() {
-    assert_eq!(ARGS.len(), 45);
+    assert_eq!(ARGS.len(), 46);
+    assert_eq!(ARGS.last(), Some(&"character-encoding"));
     assert_eq!(
         &ARGS[..8],
         [
@@ -165,7 +166,10 @@ fn ssh_p_08_args_equal_c_source_if_available() {
     }
     assert_eq!(
         names,
-        ARGS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        ARGS[..ARGS.len() - 1]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
     );
 }
 

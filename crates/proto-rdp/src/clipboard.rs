@@ -109,6 +109,15 @@ mod tests {
     }
 
     #[test]
+    fn unicode_clipboard_preserves_surrogate_pairs_and_combining_characters() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut backend = Backend::new(tx);
+        let text = "中文 日本語 한국어 😀𠮷 e\u{301}\n";
+        backend.on_format_data_response(FormatDataResponse::new_unicode_string(&to_remote(text)));
+        assert!(matches!(rx.try_recv(), Ok(ClipEvent::RemoteText(value)) if value == text));
+    }
+
+    #[test]
     fn remote_text_is_forwarded_and_errors_are_not() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut backend = Backend::new(tx);

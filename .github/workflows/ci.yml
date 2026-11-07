@@ -50,7 +50,7 @@ jobs:
         run: |
           docker compose -p cracamole-oracle -f docker/compose.oracle.yml build oracle
           docker compose -p cracamole-oracle -f docker/compose.oracle.yml up -d --no-build --wait
-          python tests/oracle/compare_args.py
+          python tests/oracle/compare_args.py --allow-terminal-encoding-extension
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

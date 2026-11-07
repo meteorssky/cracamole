@@ -104,7 +104,13 @@ impl Rig {
 
     async fn type_text(&mut self, s: &str) {
         for ch in s.chars() {
-            let k = if ch == '\r' { 0xFF0D } else { ch as u32 };
+            let k = if ch == '\r' {
+                0xFF0D
+            } else if ch as u32 > 0xff {
+                0x0100_0000 | ch as u32
+            } else {
+                ch as u32
+            };
             for p in ["1", "0"] {
                 self.client
                     .send(Instruction::new("key", [k.to_string(), p.to_string()]))
@@ -138,6 +144,186 @@ async fn wait_until<F: Fn() -> bool>(what: &str, f: F) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("timed out waiting for: {what}");
+}
+
+async fn copy_first_four_cells(rig: &mut Rig) -> String {
+    let (cw, ch, _) = guac_terminal::FontSet::bundled().metrics(16.0);
+    for (x, mask) in [
+        (cw / 4, 1),
+        (cw * 3 + cw * 3 / 4, 1),
+        (cw * 3 + cw * 3 / 4, 0),
+    ] {
+        rig.client
+            .send(Instruction::new(
+                "mouse",
+                [x.to_string(), (ch / 2).to_string(), mask.to_string()],
+            ))
+            .await
+            .unwrap();
+    }
+    let mut id = None;
+    let mut bytes = Vec::new();
+    loop {
+        let instruction = rig.client.recv().await.unwrap();
+        match instruction.opcode.as_str() {
+            "sync" => rig
+                .client
+                .send(Instruction::new("sync", [&instruction.args[0]]))
+                .await
+                .unwrap(),
+            "clipboard" => id = Some(instruction.args[0].clone()),
+            "blob" if id.as_ref() == instruction.args.first() => bytes.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(&instruction.args[1])
+                    .unwrap(),
+            ),
+            "end" if id.as_ref() == instruction.args.first() => {
+                return String::from_utf8(bytes).unwrap()
+            }
+            _ => {}
+        }
+    }
+}
+
+fn encoding_sentinel_drawn(rig: &Rig) -> bool {
+    let (cw, ch, _) = guac_terminal::FontSet::bundled().metrics(16.0);
+    (0..ch).any(|y| {
+        (cw * 4..cw * 5).any(|x| {
+            rig.replay
+                .pixel(0, x as usize, y as usize)
+                .is_some_and(|p| p[3] == 255 && p[..3] != [0, 0, 0])
+        })
+    })
+}
+
+#[tokio::test]
+async fn ssh_legacy_text_decodes_chunks_and_encodes_keyboard_and_clipboard() {
+    for (name, text, wire) in [
+        ("Big5", "中文", vec![0xa4, 0xa4, 0xa4, 0xe5]),
+        ("GBK", "中文", vec![0xd6, 0xd0, 0xce, 0xc4]),
+        ("Shift_JIS", "日本", vec![0x93, 0xfa, 0x96, 0x7b]),
+        ("EUC-JP", "日本", vec![0xc6, 0xfc, 0xcb, 0xdc]),
+        ("EUC-KR", "가나", vec![0xb0, 0xa1, 0xb3, 0xaa]),
+    ] {
+        let mut raw_greeting = vec![(false, b"\x1b[?25l".to_vec())];
+        raw_greeting.extend(wire.iter().map(|b| (false, vec![*b])));
+        raw_greeting.push((false, b"z".to_vec()));
+        let srv = start_server(Behaviour {
+            raw_greeting,
+            ..Default::default()
+        })
+        .await;
+        let mut rig = connect(
+            &srv,
+            &[
+                ("username", "alice"),
+                ("password", "secret"),
+                ("character-encoding", name),
+            ],
+        )
+        .await;
+        rig.pump_until("multibyte greeting", encoding_sentinel_drawn)
+            .await;
+        assert_eq!(copy_first_four_cells(&mut rig).await, text, "{name} output");
+        rig.type_text(text).await;
+        wait_until("encoded keyboard", || {
+            srv.rec.lock().unwrap().received == wire
+        })
+        .await;
+        rig.client
+            .send(Instruction::new("clipboard", ["3", "text/plain"]))
+            .await
+            .unwrap();
+        rig.client
+            .send(Instruction::new(
+                "blob",
+                [
+                    "3".into(),
+                    base64::engine::general_purpose::STANDARD.encode(text),
+                ],
+            ))
+            .await
+            .unwrap();
+        rig.client
+            .send(Instruction::new("end", ["3"]))
+            .await
+            .unwrap();
+        wait_until("encoded clipboard", || {
+            srv.rec.lock().unwrap().received == [wire.clone(), wire.clone()].concat()
+        })
+        .await;
+        rig.client
+            .send(Instruction::new("disconnect", Vec::<String>::new()))
+            .await
+            .unwrap();
+        assert!(rig.server.await.unwrap().is_ok());
+    }
+}
+
+#[tokio::test]
+async fn ssh_stdout_and_stderr_decode_independently() {
+    let srv = start_server(Behaviour {
+        raw_greeting: vec![
+            (false, b"\x1b[?25l".to_vec()),
+            (false, vec![0xa4]),
+            (true, vec![0xba]),
+            (false, vec![0xa4]),
+            (true, vec![0x7e]),
+            (false, b"z".to_vec()),
+        ],
+        ..Default::default()
+    })
+    .await;
+    let mut rig = connect(
+        &srv,
+        &[
+            ("username", "alice"),
+            ("password", "secret"),
+            ("character-encoding", "Big5"),
+        ],
+    )
+    .await;
+    rig.pump_until("greeting", encoding_sentinel_drawn).await;
+    assert_eq!(copy_first_four_cells(&mut rig).await, "中漢");
+}
+
+#[tokio::test]
+async fn ssh_legacy_unrepresentable_paste_never_sends_a_command_prefix() {
+    let srv = start_server(Behaviour::default()).await;
+    let mut rig = connect(
+        &srv,
+        &[
+            ("username", "alice"),
+            ("password", "secret"),
+            ("character-encoding", "Big5"),
+        ],
+    )
+    .await;
+    rig.pump_until("shell", |_| srv.rec.lock().unwrap().shell)
+        .await;
+    rig.client
+        .send(Instruction::new("clipboard", ["3", "text/plain"]))
+        .await
+        .unwrap();
+    rig.client
+        .send(Instruction::new(
+            "blob",
+            [
+                "3".into(),
+                base64::engine::general_purpose::STANDARD.encode("prefix😀suffix\n"),
+            ],
+        ))
+        .await
+        .unwrap();
+    rig.client
+        .send(Instruction::new("end", ["3"]))
+        .await
+        .unwrap();
+    assert_eq!(
+        rig.client.expect("error").await.args[1],
+        Status::ClientBadType.code().to_string()
+    );
+    assert!(srv.rec.lock().unwrap().received.is_empty());
 }
 
 // ---------- SSH-I: integration ----------

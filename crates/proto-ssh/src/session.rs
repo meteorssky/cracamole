@@ -4,7 +4,7 @@ use crate::prompt::Prompter;
 use crate::settings::{SshSettings, SYSTEM_KNOWN_HOSTS};
 use guac_protocol::Status;
 use guac_session::{connect_tcp, Params, SessionCtx, SessionError};
-use guac_terminal::{run_terminal, RemoteCmd, RemoteIo, TerminalConfig};
+use guac_terminal::{run_terminal, RemoteCmd, RemoteIo, TerminalConfig, TextEncoding};
 use russh::client::{self, KeyboardInteractiveAuthResponse};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyBase64};
 use russh::{ChannelMsg, Disconnect, MethodKind, Pty};
@@ -238,14 +238,14 @@ async fn authenticate(
 /// Wait for the reply to a channel request, forwarding any early output.
 async fn await_reply(
     ch: &mut russh::Channel<client::Msg>,
-    early: &mut Vec<Vec<u8>>,
+    early: &mut Vec<(bool, Vec<u8>)>,
 ) -> Result<bool, SessionError> {
     loop {
         match ch.wait().await {
             Some(ChannelMsg::Success) => return Ok(true),
             Some(ChannelMsg::Failure) => return Ok(false),
-            Some(ChannelMsg::Data { data }) => early.push(data.to_vec()),
-            Some(ChannelMsg::ExtendedData { data, .. }) => early.push(data.to_vec()),
+            Some(ChannelMsg::Data { data }) => early.push((false, data.to_vec())),
+            Some(ChannelMsg::ExtendedData { data, .. }) => early.push((true, data.to_vec())),
             Some(_) => {}
             None => {
                 return Err(err(
@@ -259,6 +259,7 @@ async fn await_reply(
 
 async fn ssh_task(
     settings: SshSettings,
+    encoding: TextEncoding,
     to_term: mpsc::Sender<Vec<u8>>,
     cmd_rx: mpsc::Receiver<RemoteCmd>,
 ) -> Result<(), SessionError> {
@@ -403,7 +404,7 @@ async fn ssh_task(
             format!("Unable to open terminal channel: {e}"),
         )
     })?;
-    let mut early: Vec<Vec<u8>> = vec![];
+    let mut early: Vec<(bool, Vec<u8>)> = vec![];
 
     if let Some(tz) = &settings.timezone {
         if channel.set_env(false, "TZ", tz.as_str()).await.is_err() {
@@ -468,8 +469,13 @@ async fn ssh_task(
             }
         }
     }
-    for d in early {
-        if to_term.send(d).await.is_err() {
+    // stdout and extended-data must not complete one another's partial multibyte character.
+    let mut stdout = encoding.decoder();
+    let mut stderr = encoding.decoder();
+    for (extended, bytes) in early {
+        let decoder = if extended { &mut stderr } else { &mut stdout };
+        let decoded = decoder.decode(&bytes, false)?;
+        if !decoded.is_empty() && to_term.send(decoded).await.is_err() {
             return Ok(());
         }
     }
@@ -482,7 +488,7 @@ async fn ssh_task(
             cmd = cmd_rx.recv() => {
                 let Some(cmd) = cmd else { break };
                 let r = match cmd {
-                    RemoteCmd::Data(d) => channel.data_bytes(d).await,
+                    RemoteCmd::Data(d) => channel.data_bytes(encoding.encode_input(&d, settings.backspace)?).await,
                     RemoteCmd::Resize { cols, rows, width_px, height_px } => {
                         channel.window_change(cols as u32, rows as u32, width_px, height_px).await
                     }
@@ -491,8 +497,13 @@ async fn ssh_task(
             }
             msg = channel.wait() => {
                 match msg {
-                    Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                        if to_term.send(data.to_vec()).await.is_err() { break; }
+                    Some(ChannelMsg::Data { data }) => {
+                        let text = stdout.decode(&data, false)?;
+                        if !text.is_empty() && to_term.send(text).await.is_err() { break; }
+                    }
+                    Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        let text = stderr.decode(&data, false)?;
+                        if !text.is_empty() && to_term.send(text).await.is_err() { break; }
                     }
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
                         tracing::debug!("remote exit status {exit_status}");
@@ -501,6 +512,12 @@ async fn ssh_task(
                     Some(_) => {}
                 }
             }
+        }
+    }
+    for decoder in [&mut stdout, &mut stderr] {
+        let tail = decoder.decode(&[], true)?;
+        if !tail.is_empty() {
+            let _ = to_term.send(tail).await;
         }
     }
     let _ = handle
@@ -515,6 +532,7 @@ pub async fn run_ssh(
     settings: SshSettings,
     params: Params,
 ) -> Result<(), SessionError> {
+    let encoding = TextEncoding::parse(params.get("character-encoding"))?;
     let (to_term, from_remote) = mpsc::channel::<Vec<u8>>(64);
     let (to_remote, cmd_rx) = mpsc::channel::<RemoteCmd>(64);
 
@@ -522,7 +540,7 @@ pub async fn run_ssh(
     cfg.options.backspace = settings.backspace;
 
     let tx = ctx.tx.clone();
-    let mut io = tokio::spawn(ssh_task(settings, to_term, cmd_rx));
+    let mut io = tokio::spawn(ssh_task(settings, encoding, to_term, cmd_rx));
     let mut term = Box::pin(run_terminal(
         ctx,
         cfg,

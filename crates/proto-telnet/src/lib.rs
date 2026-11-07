@@ -30,6 +30,7 @@ impl ProtocolPlugin for TelnetPlugin {
 
     fn run(&self, ctx: SessionCtx, params: Params) -> BoxFuture<Result<(), SessionError>> {
         Box::pin(async move {
+            guac_terminal::TextEncoding::parse(params.get("character-encoding"))?;
             let settings = TelnetSettings::from_params(&params).ok_or_else(|| {
                 SessionError::plugin(Status::ClientBadRequest, "No hostname provided.")
             })?;

@@ -5,9 +5,9 @@ import { endpoint, protocolLabel } from '../util/protocols.js';
 import { createSession } from '../session/guac.js';
 import { CTRL_ALT_DEL, KEYS } from '../session/keys.js';
 import { toast } from '../ui/toast.js';
-import { setDrawerOpen } from './drawer.js';
+import { setChromeCollapsed, setDrawerOpen, setDrawerOverlay } from './drawer.js';
 
-let current = null; // { connection, session, attempt, certificate }
+let current = null; // { connection, session, attempt, identity }
 let attempts = 0;
 let hooks = { onEdit: () => {}, onActive: () => {}, onTrusted: () => {} };
 
@@ -15,10 +15,16 @@ function setStatus(text, dotState) {
   $('terminal-status').textContent = text;
   $('status-dot').dataset.state = dotState;
   $('chip-dot').dataset.state = dotState;
+  $('pill-dot').dataset.state = dotState;
+  $('pill-status').textContent = text;
+  $('chip-meta').textContent = text;
+  hooks.onActive(current?.connection.id ?? null, dotState, text);
 }
 
 function setControls(connected) {
-  for (const id of ['toggle-clipboard', 'toggle-keybar', 'disconnect']) $(id).disabled = !connected;
+  for (const id of ['toggle-clipboard', 'toggle-keybar', 'collapse-chrome', 'disconnect']) {
+    $(id).disabled = !connected;
+  }
   if (!connected) {
     $('clipboard-panel').hidden = true;
     $('toggle-clipboard').setAttribute('aria-expanded', 'false');
@@ -44,8 +50,8 @@ function showOverlay({
   const cert = $('overlay-cert');
   cert.hidden = !identity;
   cert.textContent = identity ? identityText(identity) : '';
-  $('overlay-trust').textContent = identity?.kind === 'ssh'
-    ? '信任這把主機金鑰並重新連線' : '信任這張憑證並重新連線';
+  $('overlay-trust').textContent =
+    identity?.kind === 'ssh' ? '信任這把主機金鑰並重新連線' : '信任這張憑證並重新連線';
   $('overlay-trust').hidden = !canTrust;
   $('overlay-retry').hidden = !canRetry;
   $('overlay-edit').hidden = !canEdit;
@@ -102,15 +108,19 @@ function onSessionState(connection, state, info) {
   }
   setControls(false);
   setKeybarVisible(false);
+  setChromeCollapsed(false);
   if (info.reason === 'user') {
     setStatus('未連線', 'idle');
     return;
   }
   setStatus(info.status, info.tone === 'error' ? 'error' : 'closed');
   showOverlay(explainMissingCredentials(connection, info));
-  if (info.reason === 'upstream' && (connection.protocol === 'ssh'
-    || (connection.protocol === 'rdp' && (connection.params['ignore-cert'] !== 'true'
-      || connection.params['server-cert-sha256'])))) {
+  if (
+    info.reason === 'upstream' &&
+    (connection.protocol === 'ssh' ||
+      (connection.protocol === 'rdp' &&
+        (connection.params['ignore-cert'] !== 'true' || connection.params['server-cert-sha256'])))
+  ) {
     const target = current;
     inspectIdentity(target, () => current === target, showOverlay);
   }
@@ -124,12 +134,22 @@ function explainMissingCredentials(connection, info) {
   const noPassword = !(connection.configured_secrets || []).includes('password');
   if (!noUser && !noPassword) {
     const slash = String.fromCharCode(92);
-    return { ...info, detail: info.detail + ' Windows 帳號若屬於網域，請在「編輯連線」填寫網域，或把帳號寫成「網域' + slash + '帳號」。' };
+    return {
+      ...info,
+      detail:
+        info.detail +
+        ' Windows 帳號若屬於網域，請在「編輯連線」填寫網域，或把帳號寫成「網域' +
+        slash +
+        '帳號」。',
+    };
   }
   return {
     ...info,
     title: '這條連線還沒有設定' + (noUser ? '帳號' : '密碼'),
-    detail: 'Windows 預設要求先通過網路層級驗證（NLA），必須在連線前提供帳號與密碼。請到「編輯連線」填寫' + (noUser && noPassword ? '帳號與密碼' : noUser ? '帳號' : '密碼') + '後再連線。',
+    detail:
+      'Windows 預設要求先通過網路層級驗證（NLA），必須在連線前提供帳號與密碼。請到「編輯連線」填寫' +
+      (noUser && noPassword ? '帳號與密碼' : noUser ? '帳號' : '密碼') +
+      '後再連線。',
     canEdit: true,
   };
 }
@@ -137,11 +157,12 @@ function explainMissingCredentials(connection, info) {
 export function openSession(connection) {
   closeSession();
   current = { connection, session: null, attempt: ++attempts, identity: null };
-  hooks.onActive(connection.id);
+  setDrawerOverlay(true);
   setDrawerOpen(false);
   $('terminal-placeholder').hidden = true;
   $('session-chip').hidden = false;
   $('terminal-name').textContent = connection.name;
+  $('pill-name').textContent = connection.name;
   $('status-meta').textContent = protocolLabel(connection.protocol) + ' · ' + endpoint(connection);
   $('send-cad').hidden = connection.protocol !== 'rdp';
   renderKeybar();
@@ -152,7 +173,12 @@ export function openSession(connection) {
     onClipboard: text => {
       $('clipboard-text').value = text;
     },
+    onClipboardError: message => toast(message),
     onModifiers: modifiers => renderKeybar(modifiers),
+    onEscape: () => {
+      setChromeCollapsed(false);
+      $('toggle-library').focus();
+    },
   });
   current.session = session;
   if (window.matchMedia('(pointer: coarse)').matches) setKeybarVisible(true);
@@ -162,10 +188,11 @@ export function closeSession() {
   if (!current) return;
   current.session?.dispose();
   current = null;
-  hooks.onActive(null);
   hideOverlay();
   setControls(false);
   setKeybarVisible(false);
+  setChromeCollapsed(false);
+  setDrawerOverlay(false);
   $('terminal-placeholder').hidden = false;
   $('session-chip').hidden = true;
   $('send-cad').hidden = true;

@@ -49,7 +49,7 @@
   </section>
 
   <div id="workspace" class="workspace" hidden>
-    <header class="topbar">
+    <header id="topbar" class="topbar">
       <button id="toggle-library" class="btn btn--quiet btn--icon" type="button" aria-controls="library" aria-expanded="true" aria-label="收合連線庫">
         <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
@@ -60,6 +60,7 @@
       <div id="session-chip" class="session-chip" hidden>
         <span id="chip-dot" class="dot" data-state="idle" aria-hidden="true"></span>
         <strong id="terminal-name">準備連線</strong>
+        <span id="chip-meta" class="session-chip__meta"></span>
       </div>
       <span class="topbar__spacer"></span>
       <button id="theme-toggle" class="btn btn--quiet btn--small" type="button">淺色主題</button>
@@ -70,17 +71,26 @@
       <aside id="library" class="drawer" aria-label="連線庫">
         <div class="drawer__head">
           <h2>連線庫</h2>
-          <button id="add-connection" class="btn btn--primary btn--small" type="button">新增連線</button>
+          <div class="drawer__actions">
+            <button id="add-connection" class="btn btn--primary btn--small" type="button">新增連線</button>
+            <button id="close-library" class="btn btn--quiet btn--small" type="button" aria-label="收合選單">收合</button>
+          </div>
         </div>
         <div class="field">
           <label class="field__label visually-hidden" for="library-search">搜尋連線</label>
-          <input class="input" id="library-search" type="search" placeholder="搜尋名稱、主機或協定" autocomplete="off">
+          <input class="input" id="library-search" type="search" placeholder="搜尋名稱、主機或協定（按 / 聚焦）" autocomplete="off">
         </div>
         <div id="connections-list" class="card-list"></div>
         <p id="no-match" class="muted small" hidden>沒有符合的連線。</p>
       </aside>
 
       <main id="main" class="stage" tabindex="-1">
+        <div id="chrome-pill" class="chrome-pill" role="region" aria-label="連線狀態與選單控制" hidden>
+          <span id="pill-dot" class="dot" data-state="idle" aria-hidden="true"></span>
+          <strong id="pill-name"></strong>
+          <span id="pill-status" class="muted"></span>
+          <button id="expand-chrome" class="btn btn--small" type="button">展開選單</button>
+        </div>
         <div id="terminal" class="terminal" tabindex="0" role="group" aria-label="遠端終端機">
           <div id="terminal-placeholder" class="empty">
             <h2 id="empty-title">選擇一台主機</h2>
@@ -120,13 +130,15 @@
       </main>
     </div>
 
-    <footer class="statusbar">
+    <footer id="statusbar" class="statusbar">
       <span class="statusbar__state"><span id="status-dot" class="dot" data-state="idle" aria-hidden="true"></span><span id="terminal-status" role="status">未連線</span></span>
       <span id="status-meta" class="statusbar__meta"></span>
       <div class="statusbar__actions">
         <button id="toggle-clipboard" class="btn btn--quiet btn--small" type="button" aria-expanded="false" aria-controls="clipboard-panel" disabled>剪貼簿</button>
         <button id="toggle-keybar" class="btn btn--quiet btn--small" type="button" aria-pressed="false" aria-controls="keybar" disabled>輔助鍵</button>
         <button id="send-cad" class="btn btn--quiet btn--small" type="button" hidden>Ctrl+Alt+Del</button>
+        <button id="collapse-chrome" class="btn btn--quiet btn--small" type="button" aria-expanded="true" disabled>最大畫面</button>
+        <button id="toggle-fullscreen" class="btn btn--quiet btn--small" type="button" aria-pressed="false">全螢幕</button>
         <button id="disconnect" class="btn btn--quiet btn--small" type="button" disabled>中斷連線</button>
       </div>
     </footer>
@@ -139,114 +151,123 @@
         <button id="close-editor" class="btn btn--quiet btn--icon" type="button" aria-label="關閉">✕</button>
       </div>
 
-      <div class="field">
-        <label class="field__label" for="f-name">連線名稱</label>
-        <input class="input" id="f-name" name="name" required maxlength="120" placeholder="例如：開發主機" aria-describedby="error-name">
-        <p class="field__error" id="error-name" hidden></p>
-      </div>
-      <div class="form-grid">
-        <div class="field">
-          <label class="field__label" for="f-protocol">協定</label>
-          <select class="input" id="f-protocol" name="protocol">
-            <option value="ssh">SSH</option>
-            <option value="telnet">Telnet</option>
-            <option value="rdp">RDP（遠端桌面）</option>
-          </select>
-          <p class="field__error" id="error-protocol" hidden></p>
-        </div>
-        <div class="field">
-          <label class="field__label" for="f-port">連接埠</label>
-          <input class="input" id="f-port" name="port" type="number" min="1" max="65535" aria-describedby="error-port">
-          <p class="field__error" id="error-port" hidden></p>
-        </div>
-      </div>
-      <div class="field">
-        <label class="field__label" for="f-hostname">主機名稱或 IP</label>
-        <input class="input" id="f-hostname" name="hostname" required maxlength="255" placeholder="server.example.com" aria-describedby="error-hostname">
-        <p class="field__error" id="error-hostname" hidden></p>
-      </div>
-      <div class="form-grid">
-        <div class="field">
-          <label class="field__label" for="f-username">帳號</label>
-          <input class="input" id="f-username" name="username" autocomplete="off">
-        </div>
-        <div class="field">
-          <label class="field__label" for="f-password">密碼</label>
-          <input class="input" id="f-password" name="password" type="password" autocomplete="new-password" aria-describedby="hint-password">
-          <p class="field__hint" id="hint-password" hidden></p>
-        </div>
-      </div>
-
-      <fieldset class="group" data-protocols="ssh">
-        <legend>SSH 驗證與信任</legend>
-        <div class="field">
-          <label class="field__label" for="f-private-key">私鑰（可選）</label>
-          <textarea class="input" id="f-private-key" name="private-key" rows="4" spellcheck="false" placeholder="OpenSSH 或 PEM 私鑰" aria-describedby="hint-private-key"></textarea>
-          <p class="field__hint" id="hint-private-key" hidden></p>
-        </div>
-        <div class="field">
-          <label class="field__label" for="f-passphrase">私鑰密語</label>
-          <input class="input" id="f-passphrase" name="passphrase" type="password" autocomplete="new-password">
-        </div>
-        <div class="field">
-          <label class="field__label" for="f-host-key">主機金鑰（known_hosts）</label>
-          <textarea class="input" id="f-host-key" name="host-key" rows="2" spellcheck="false" placeholder="例如：ssh-ed25519 AAAA…" aria-describedby="hint-host-key"></textarea>
-          <p class="field__hint" id="hint-host-key">每次連線都會驗證主機身分。首次連線若尚未設定金鑰，會先顯示指紋供你核對並信任；金鑰改變時會阻擋連線。</p>
-        </div>
-      </fieldset>
-
-      <fieldset class="group" data-protocols="telnet" hidden>
-        <legend>Telnet 自動登入</legend>
-        <div class="field">
-          <label class="field__label" for="f-login-success">登入成功提示</label>
-          <input class="input" id="f-login-success" name="login-success-regex" placeholder="例如：:~[$] " aria-describedby="hint-success">
-          <p class="field__hint" id="hint-success">看到符合這個正規表示式的文字，就視為登入成功。</p>
-        </div>
-        <div class="field">
-          <label class="field__label" for="f-login-failure">登入失敗提示</label>
-          <input class="input" id="f-login-failure" name="login-failure-regex" placeholder="例如：Login incorrect">
-        </div>
-      </fieldset>
-
-      <fieldset class="group" data-protocols="rdp" hidden>
-        <legend>RDP 驗證與憑證</legend>
-        <p class="field__hint">Windows 預設啟用網路層級驗證（NLA）：連線前就必須在上方填寫帳號與密碼，否則會驗證失敗。</p>
+      <div class="dialog__body">
         <div class="form-grid">
           <div class="field">
-            <label class="field__label" for="f-domain">網域（可選）</label>
-            <input class="input" id="f-domain" name="domain" autocomplete="off" placeholder="例如：CORP">
+            <label class="field__label" for="f-name">連線名稱</label>
+            <input class="input" id="f-name" name="name" required maxlength="120" placeholder="例如：開發主機" aria-describedby="error-name">
+            <p class="field__error" id="error-name" hidden></p>
           </div>
           <div class="field">
-            <label class="field__label" for="f-security">安全性</label>
-            <select class="input" id="f-security" name="security">
-              <option value="any">自動（NLA 或 TLS）</option>
-              <option value="nla">僅 NLA</option>
-              <option value="tls">僅 TLS</option>
+            <label class="field__label" for="f-protocol">協定</label>
+            <select class="input" id="f-protocol" name="protocol">
+              <option value="ssh">SSH</option>
+              <option value="telnet">Telnet</option>
+              <option value="rdp">RDP（遠端桌面）</option>
             </select>
+            <p class="field__error" id="error-protocol" hidden></p>
           </div>
         </div>
-        <div class="field">
-          <label class="field__label" for="f-cert">已信任的伺服器憑證指紋（SHA-256）</label>
-          <input class="input" id="f-cert" name="server-cert-sha256" spellcheck="false" autocomplete="off" placeholder="首次連線時會顯示指紋，確認後可一鍵信任" aria-describedby="hint-cert error-server-cert-sha256">
-          <p class="field__hint" id="hint-cert">只接受指紋相符的憑證（自簽憑證也可以）；憑證改變時會擋下連線。清空會改回驗證憑證簽發者。</p>
-          <p class="field__error" id="error-server-cert-sha256" hidden></p>
+        <div class="form-grid">
+          <div class="field">
+            <label class="field__label" for="f-hostname">主機名稱或 IP</label>
+            <input class="input" id="f-hostname" name="hostname" required maxlength="255" placeholder="server.example.com" aria-describedby="error-hostname">
+            <p class="field__error" id="error-hostname" hidden></p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="f-port">連接埠</label>
+            <input class="input" id="f-port" name="port" type="number" min="1" max="65535" aria-describedby="error-port">
+            <p class="field__error" id="error-port" hidden></p>
+          </div>
         </div>
-        <label class="check">
-          <input id="f-ignore-cert" name="ignore-cert" type="checkbox">
-          <span>不驗證伺服器憑證（不建議）<br><span class="field__hint">任何憑證都會被接受，無法偵測中間人攻擊。建議改用上方的憑證指紋。</span></span>
+        <div class="form-grid">
+          <div class="field">
+            <label class="field__label" for="f-username">帳號</label>
+            <input class="input" id="f-username" name="username" autocomplete="off">
+          </div>
+          <div class="field">
+            <label class="field__label" for="f-password">密碼</label>
+            <input class="input" id="f-password" name="password" type="password" autocomplete="new-password" aria-describedby="hint-password">
+            <p class="field__hint" id="hint-password" hidden></p>
+          </div>
+        </div>
+
+        <fieldset class="group" data-protocols="ssh">
+          <legend>SSH 驗證與信任</legend>
+          <div class="field">
+            <label class="field__label" for="f-private-key">私鑰（可選）</label>
+            <textarea class="input" id="f-private-key" name="private-key" rows="2" spellcheck="false" placeholder="OpenSSH 或 PEM 私鑰" aria-describedby="hint-private-key"></textarea>
+            <p class="field__hint" id="hint-private-key" hidden></p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="f-passphrase">私鑰密語</label>
+            <input class="input" id="f-passphrase" name="passphrase" type="password" autocomplete="new-password">
+          </div>
+          <div class="field">
+            <label class="field__label" for="f-host-key">主機金鑰（known_hosts）</label>
+            <textarea class="input" id="f-host-key" name="host-key" rows="2" spellcheck="false" placeholder="例如：ssh-ed25519 AAAA…" aria-describedby="hint-host-key"></textarea>
+            <p class="field__hint" id="hint-host-key">每次連線都會驗證主機身分。首次連線若尚未設定金鑰，會先顯示指紋供你核對並信任；金鑰改變時會阻擋連線。</p>
+          </div>
+        </fieldset>
+
+        <fieldset class="group" data-protocols="telnet" hidden>
+          <legend>Telnet 自動登入</legend>
+          <div class="field">
+            <label class="field__label" for="f-login-success">登入成功提示</label>
+            <input class="input" id="f-login-success" name="login-success-regex" placeholder="例如：:~[$] " aria-describedby="hint-success">
+            <p class="field__hint" id="hint-success">看到符合這個正規表示式的文字，就視為登入成功。</p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="f-login-failure">登入失敗提示</label>
+            <input class="input" id="f-login-failure" name="login-failure-regex" placeholder="例如：Login incorrect">
+          </div>
+        </fieldset>
+
+        <fieldset class="group" data-protocols="rdp" hidden>
+          <legend>RDP 驗證與憑證</legend>
+          <p class="field__hint">Windows 預設啟用網路層級驗證（NLA）：連線前就必須在上方填寫帳號與密碼，否則會驗證失敗。</p>
+          <div class="form-grid">
+            <div class="field">
+              <label class="field__label" for="f-domain">網域（可選）</label>
+              <input class="input" id="f-domain" name="domain" autocomplete="off" placeholder="例如：CORP">
+            </div>
+            <div class="field">
+              <label class="field__label" for="f-security">安全性</label>
+              <select class="input" id="f-security" name="security">
+                <option value="any">自動（NLA 或 TLS）</option>
+                <option value="nla">僅 NLA</option>
+                <option value="tls">僅 TLS</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label class="field__label" for="f-cert">已信任的伺服器憑證指紋（SHA-256）</label>
+            <input class="input" id="f-cert" name="server-cert-sha256" spellcheck="false" autocomplete="off" placeholder="首次連線時會顯示指紋，確認後可一鍵信任" aria-describedby="hint-cert error-server-cert-sha256">
+            <p class="field__hint" id="hint-cert">只接受指紋相符的憑證（自簽憑證也可以）；憑證改變時會擋下連線。清空會改回驗證憑證簽發者。</p>
+            <p class="field__error" id="error-server-cert-sha256" hidden></p>
+          </div>
+          <label class="check">
+            <input id="f-ignore-cert" name="ignore-cert" type="checkbox">
+            <span>不驗證伺服器憑證（不建議）<br><span class="field__hint">任何憑證都會被接受，無法偵測中間人攻擊。建議改用上方的憑證指紋。</span></span>
+          </label>
+        </fieldset>
+
+        <div class="options__head">
+          <span id="options-summary" class="field__label">進階設定</span>
+          <button id="collapse-options" class="btn btn--quiet btn--small" type="button">全部收合</button>
+        </div>
+        <div id="protocol-options" class="options"></div>
+
+        <label id="clear-secrets-row" class="check" hidden>
+          <input id="f-clear-secrets" name="clear-secrets" type="checkbox">
+          <span>清除已保存的密碼與私鑰</span>
         </label>
-      </fieldset>
 
-      <div id="protocol-options" class="options"></div>
-
-      <label id="clear-secrets-row" class="check" hidden>
-        <input id="f-clear-secrets" name="clear-secrets" type="checkbox">
-        <span>清除已保存的密碼與私鑰</span>
-      </label>
-
-      <p id="editor-error" class="form-error" role="alert" hidden></p>
+        <p id="editor-error" class="form-error" role="alert" hidden></p>
+      </div>
       <div class="dialog__footer">
         <button id="cancel-editor" class="btn" type="button">取消</button>
+        <button id="save-and-connect" class="btn" type="button">儲存並連線</button>
         <button id="save-connection" class="btn btn--primary" type="submit">儲存連線</button>
       </div>
     </form>
@@ -254,8 +275,10 @@
 
   <dialog id="confirm-dialog" class="dialog dialog--confirm" aria-labelledby="confirm-title">
     <form method="dialog" class="dialog__form">
-      <h2 id="confirm-title"></h2>
-      <p id="confirm-message" class="muted"></p>
+      <div class="dialog__body">
+        <h2 id="confirm-title"></h2>
+        <p id="confirm-message" class="muted"></p>
+      </div>
       <div class="dialog__footer">
         <button id="confirm-cancel" class="btn" type="submit" value="cancel">取消</button>
         <button id="confirm-ok" class="btn btn--danger" type="submit" value="ok"></button>

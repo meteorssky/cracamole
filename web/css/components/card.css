@@ -29,6 +29,16 @@
   min-inline-size: 0;
 }
 
+.card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-start: auto;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .card__open {
   min-inline-size: 0;
   padding: 0;

@@ -557,6 +557,69 @@ async fn web_identity_probe_requires_auth_origin_and_matching_protocol() {
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn web_terminal_encoding_is_validated_and_preserved_without_affecting_rdp() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = app(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        CancellationToken::new(),
+    )
+    .await;
+    let cookie = login(&service).await;
+    for protocol in ["ssh", "telnet"] {
+        for encoding in [
+            "UTF-8",
+            "Big5",
+            "GBK",
+            "GB18030",
+            "Shift_JIS",
+            "EUC-JP",
+            "EUC-KR",
+        ] {
+            let body = json!({"name":"多國文字 😀", "protocol":protocol,
+                "params":{"hostname":"example.invalid","character-encoding":encoding}});
+            let (status, _, value) = call(
+                &service,
+                "POST",
+                "/api/connections",
+                Some(body),
+                Some(&cookie),
+                "http://localhost",
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED);
+            assert_eq!(value["params"]["character-encoding"], encoding);
+        }
+    }
+    let bad = json!({"name":"bad", "protocol":"ssh", "params":{"hostname":"h","character-encoding":"UTF-16LE"}});
+    let (status, _, error) = call(
+        &service,
+        "POST",
+        "/api/connections",
+        Some(bad),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["field"], "character-encoding");
+    let rdp = json!({"name":"RDP", "protocol":"rdp", "params":{"hostname":"h","character-encoding":"Big5"}});
+    assert_eq!(
+        call(
+            &service,
+            "POST",
+            "/api/connections",
+            Some(rdp),
+            Some(&cookie),
+            "http://localhost"
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+}
 impl ProtocolPlugin for Spy {
     fn name(&self) -> &'static str {
         "ssh"

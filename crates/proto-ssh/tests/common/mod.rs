@@ -32,6 +32,7 @@ pub struct Behaviour {
     pub refuse_pty: bool,
     /// Greeting written after the shell starts.
     pub greeting: String,
+    pub raw_greeting: Vec<(bool, Vec<u8>)>,
     /// Which auth methods to advertise.
     pub methods: Vec<MethodKind>,
     pub allow_none: bool,
@@ -45,6 +46,7 @@ impl Default for Behaviour {
             kbd: None,
             refuse_pty: false,
             greeting: "Welcome\r\n$ ".into(),
+            raw_greeting: Vec::new(),
             methods: vec![
                 MethodKind::Password,
                 MethodKind::PublicKey,
@@ -224,7 +226,17 @@ impl server::Handler for Srv {
     ) -> Result<(), Self::Error> {
         self.rec.lock().unwrap().shell = true;
         session.channel_success(channel)?;
-        session.data(channel, self.beh.greeting.clone().into_bytes())?;
+        if self.beh.raw_greeting.is_empty() {
+            session.data(channel, self.beh.greeting.clone().into_bytes())?;
+        } else {
+            for (extended, data) in &self.beh.raw_greeting {
+                if *extended {
+                    session.extended_data(channel, 1, data.clone())?;
+                } else {
+                    session.data(channel, data.clone())?;
+                }
+            }
+        }
         Ok(())
     }
 

@@ -439,7 +439,8 @@ fn st_06_invalid_regex_warns_not_fails() {
 
 #[test]
 fn st_07_args_match_c_implementation_order() {
-    assert_eq!(ARGS.len(), 37);
+    assert_eq!(ARGS.len(), 38);
+    assert_eq!(ARGS.last(), Some(&"character-encoding"));
     assert_eq!(
         &ARGS[..8],
         [
@@ -488,6 +489,9 @@ fn st_08_args_equal_c_source_if_available() {
     }
     assert_eq!(
         names,
-        ARGS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        ARGS[..ARGS.len() - 1]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
     );
 }

@@ -39,4 +39,5 @@ pub const ARGS: &[&str] = &[
     "wol-broadcast-addr",
     "wol-udp-port",
     "wol-wait-time",
+    "character-encoding",
 ];

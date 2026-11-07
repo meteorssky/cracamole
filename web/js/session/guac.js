@@ -1,8 +1,8 @@
 // The only module that touches the Guacamole client library. The rest of the app sees a Session.
 import { MODIFIER_KEYSYMS } from './keys.js';
 import { classify } from './reasons.js';
+import { encodeClipboard, receiveClipboard, sendClipboard } from './text.js';
 
-const CLIPBOARD_LIMIT = 262144;
 const keyboards = new WeakMap(); // Guacamole.Keyboard cannot be detached, so one per mount element
 
 function keyboardFor(element) {
@@ -22,7 +22,8 @@ function keyboardFor(element) {
  * @param {(text:string) => void} options.onClipboard
  * @param {(modifiers:{ctrl:boolean, alt:boolean}) => void} options.onModifiers
  */
-export function createSession({ connection, mount, onState, onClipboard, onModifiers }) {
+export function createSession({ connection, mount, onState, onClipboard, onModifiers, onEscape,
+  onClipboardError = () => {} }) {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const tunnel = new Guacamole.WebSocketTunnel(
     scheme + '//' + location.host + '/api/connections/' + encodeURIComponent(connection.id) + '/tunnel',
@@ -102,12 +103,7 @@ export function createSession({ connection, mount, onState, onClipboard, onModif
   };
   client.onclipboard = (stream, mimetype) => {
     if (!mimetype.startsWith('text/')) return;
-    const reader = new Guacamole.StringReader(stream);
-    let text = '';
-    reader.ontext = part => {
-      if (text.length < CLIPBOARD_LIMIT) text += part;
-    };
-    reader.onend = () => onClipboard(text);
+    receiveClipboard(stream, onClipboard, onClipboardError);
   };
 
   const mouse = new Guacamole.Mouse(display.getElement());
@@ -125,8 +121,17 @@ export function createSession({ connection, mount, onState, onClipboard, onModif
   mount.addEventListener('blur', onBlur);
 
   // Ctrl+V is handled by the paste event so the remote receives the text, not a keystroke.
+  // Ctrl+Shift+Escape is the keyboard escape hatch out of the terminal focus trap.
   const onKeyDown = event => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') event.stopImmediatePropagation();
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (event.ctrlKey && event.shiftKey && event.key === 'Escape') {
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      onEscape?.();
+    }
   };
   const onPaste = event => {
     event.preventDefault();
@@ -142,9 +147,12 @@ export function createSession({ connection, mount, onState, onClipboard, onModif
     },
     paste(text) {
       if (state !== 'connected' || !text) return;
-      const writer = new Guacamole.StringWriter(client.createClipboardStream('text/plain'));
-      writer.sendText(text);
-      writer.sendEnd();
+      try {
+        const bytes = encodeClipboard(text);
+        sendClipboard(client, bytes);
+      } catch (error) {
+        onClipboardError(error.message);
+      }
     },
     sendKey(keysym) {
       if (state !== 'connected') return;

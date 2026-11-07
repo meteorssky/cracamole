@@ -137,6 +137,14 @@ pub fn validate(draft: &Draft) -> Result<(), Invalid> {
             }
         }
     }
+    if let Some(label) = draft.params.get("character-encoding") {
+        if guacd::TextEncoding::parse(Some(label)).is_err() {
+            return Err(invalid(
+                "character-encoding",
+                "不支援這個文字編碼，請選擇 UTF-8 或清單中的舊編碼。",
+            ));
+        }
+    }
     if let Some(pin) = draft
         .params
         .get("server-cert-sha256")

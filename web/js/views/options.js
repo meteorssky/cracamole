@@ -1,6 +1,7 @@
 // Protocol-specific advanced settings. One table drives how they are drawn, filled and saved,
 // so a setting is declared once and only appears for the protocols that really use it.
-import { el } from '../util/dom.js';
+import { $, el } from '../util/dom.js';
+import { TEXT_ENCODINGS } from '../util/encodings.js';
 
 const ALL = ['ssh', 'telnet', 'rdp'];
 
@@ -10,6 +11,8 @@ export const OPTION_SECTIONS = [
     title: '終端機外觀與輸入',
     protocols: ['ssh', 'telnet'],
     fields: [
+      { name: 'character-encoding', label: '文字編碼', type: 'select', options: TEXT_ENCODINGS,
+        hint: '只影響遠端終端機文字，需配合主機設定；LANG 語系不等於編碼轉換。' },
       { name: 'font-size', label: '字型大小（pt）', type: 'number', min: 6, max: 72, placeholder: '12' },
       {
         name: 'color-scheme',
@@ -35,10 +38,7 @@ export const OPTION_SECTIONS = [
         name: 'backspace',
         label: '退格鍵送出的代碼',
         type: 'select',
-        options: [
-          ['', '預設（127，大多數系統）'],
-          ['8', 'Ctrl+H（8，部分舊系統與設備）'],
-        ],
+        options: [['', '預設（127，大多數系統）'], ['8', 'Ctrl+H（8，部分舊系統與設備）']],
       },
     ],
   },
@@ -113,36 +113,18 @@ function fieldNode(field) {
   const errorId = 'error-' + field.name;
   const describedBy = [field.hint ? hintId : null, errorId].filter(Boolean).join(' ');
   if (field.type === 'checkbox') {
-    return el(
-      'label',
-      { class: 'check' },
-      el('input', { id, name: field.name, type: 'checkbox' }),
-      el('span', {}, field.label),
-    );
+    return el('label', { class: 'check' }, el('input', { id, name: field.name, type: 'checkbox' }), el('span', {}, field.label));
   }
   const control =
     field.type === 'select'
-      ? el(
-          'select',
-          { class: 'input', id, name: field.name, 'aria-describedby': describedBy },
-          field.options.map(([value, label]) => el('option', { value }, label)),
-        )
+      ? el('select', { class: 'input', id, name: field.name, 'aria-describedby': describedBy }, field.options.map(([value, label]) => el('option', { value }, label)))
       : el('input', {
-          class: 'input',
-          id,
-          name: field.name,
-          type: field.type === 'number' ? 'number' : 'text',
-          min: field.min,
-          max: field.max,
-          maxlength: field.maxlength,
-          placeholder: field.placeholder,
-          autocomplete: 'off',
-          spellcheck: field.type === 'text' ? 'false' : null,
-          'aria-describedby': describedBy,
+          class: 'input', id, name: field.name, type: field.type === 'number' ? 'number' : 'text',
+          min: field.min, max: field.max, maxlength: field.maxlength, placeholder: field.placeholder,
+          autocomplete: 'off', spellcheck: field.type === 'text' ? 'false' : null, 'aria-describedby': describedBy,
         });
   return el(
-    'div',
-    { class: 'field' },
+    'div', { class: 'field' },
     el('label', { class: 'field__label', for: id }, field.label),
     control,
     field.hint ? el('p', { class: 'field__hint', id: hintId }, field.hint) : null,
@@ -157,7 +139,12 @@ export function renderOptions(container) {
       el(
         'details',
         { class: 'group group--details', 'data-protocols': section.protocols.join(' '), 'data-section': section.id },
-        el('summary', {}, section.title),
+        el(
+          'summary',
+          {},
+          el('span', {}, section.title),
+          el('span', { class: 'badge', 'data-summary-for': section.id }, '預設'),
+        ),
         el(
           'div',
           { class: 'stack' },
@@ -171,13 +158,51 @@ export function renderOptions(container) {
 
 const fieldsOf = section => section.fields;
 
-export function fillOptions(form, params) {
+function isFieldSet(form, field) {
+  const control = form.elements[field.name];
+  return field.type === 'checkbox' ? control.checked : Boolean(control.value.trim());
+}
+
+export function updateOptionSummaries(form, protocol) {
+  let total = 0;
+  let anyOpen = false;
   for (const section of OPTION_SECTIONS) {
+    const count = fieldsOf(section).filter(field => isFieldSet(form, field)).length;
+    const badge = form.querySelector('[data-summary-for="' + section.id + '"]');
+    if (badge) {
+      badge.textContent = count > 0 ? '已設定 ' + count + ' 項' : '預設';
+      if (count > 0) badge.dataset.configured = 'true';
+      else delete badge.dataset.configured;
+    }
+    if (section.protocols.includes(protocol)) {
+      total += count;
+      const details = form.querySelector('[data-section="' + section.id + '"]');
+      if (details?.open) anyOpen = true;
+    }
+  }
+  $('options-summary').textContent = total > 0 ? '進階設定（已自訂 ' + total + ' 項）' : '進階設定';
+  $('collapse-options').hidden = !anyOpen;
+}
+
+export function collapseAllOptions(form, protocol) {
+  for (const details of form.querySelectorAll('.group--details')) details.open = false;
+  updateOptionSummaries(form, protocol);
+}
+
+export function fillOptions(form, params, isEditing = false) {
+  for (const section of OPTION_SECTIONS) {
+    let hasValue = false;
     for (const field of fieldsOf(section)) {
       const control = form.elements[field.name];
       const value = params[field.name] || '';
       if (field.type === 'checkbox') control.checked = value === 'true';
       else control.value = value;
+      if (field.type === 'checkbox' ? control.checked : Boolean(value)) hasValue = true;
+    }
+    const details = form.querySelector('[data-section="' + section.id + '"]');
+    if (details) {
+      if (!isEditing) details.open = false;
+      else if (hasValue) details.open = true;
     }
   }
 }

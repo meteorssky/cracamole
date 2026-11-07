@@ -14,9 +14,9 @@
 }
 
 .dialog__form {
-  display: grid;
-  gap: var(--space-4);
-  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  max-block-size: calc(100dvh - 1.5rem);
 }
 
 .dialog__head {
@@ -24,6 +24,17 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-block-end: 1px solid var(--border);
+}
+
+.dialog__body {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
 }
 
 .dialog__footer {
@@ -31,6 +42,9 @@
   flex-wrap: wrap;
   gap: var(--space-2);
   justify-content: flex-end;
+  padding: var(--space-3) var(--space-5);
+  border-block-start: 1px solid var(--border);
+  background: var(--surface-raised);
 }
 
 .dialog--confirm {
@@ -44,5 +58,9 @@
     block-size: 100dvh;
     max-block-size: 100dvh;
     border-radius: 0;
+  }
+
+  .dialog__form {
+    max-block-size: 100dvh;
   }
 }

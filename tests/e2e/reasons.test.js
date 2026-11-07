@@ -12,6 +12,14 @@ test('a user disconnect is silent', async () => {
   assert.strictEqual(classify(ended(null, { userInitiated: true })).reason, 'user');
 });
 
+test('unrepresentable input explains the encoding and does not retry automatically', async () => {
+  const { classify } = await load();
+  const result = classify(ended({ code: 783, message: 'Aborted. See logs.' }));
+  assert.equal(result.reason, 'encoding');
+  assert.equal(result.canEdit, true);
+  assert.equal(result.canRetry, false);
+});
+
 test('authentication failures are recognised (status 769 and 771)', async () => {
   const { classify } = await load();
   for (const code of [769, 771]) {
