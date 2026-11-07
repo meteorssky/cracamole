@@ -20,7 +20,8 @@ function setStatus(text, dotState) {
 }
 
 function setControls(connected) {
-  for (const id of ['toggle-clipboard', 'toggle-keybar', 'collapse-chrome', 'disconnect']) $(id).disabled = !connected;
+  for (const id of ['toggle-clipboard', 'toggle-keybar', 'collapse-chrome']) $(id).disabled = !connected;
+  $('disconnect').disabled = !current;
   if (!connected) {
     $('clipboard-panel').hidden = true;
     $('toggle-clipboard').setAttribute('aria-expanded', 'false');
@@ -45,7 +46,7 @@ function showOverlay({
   $('overlay-trust').hidden = !canTrust;
   $('overlay-retry').hidden = !canRetry;
   $('overlay-edit').hidden = !canEdit;
-  $('overlay-close').hidden = connecting;
+  $('overlay-close').hidden = false;
   $('overlay').hidden = false;
   $('overlay').setAttribute('role', tone === 'error' ? 'alert' : 'status');
 }
@@ -140,12 +141,18 @@ function explainMissingCredentials(connection, info) {
 }
 
 export function openSession(connection) {
-  closeSession();
+  closeSession({ keepHistory: true });
   current = { connection, session: null, attempt: ++attempts, identity: null };
+  if (history.state?.cracamole !== 'session') {
+    history.replaceState({ cracamole: 'menu' }, '');
+    history.pushState({ cracamole: 'session', id: connection.id }, '', '#session');
+  }
   setDrawerOverlay(true);
   setDrawerOpen(false);
   $('terminal-placeholder').hidden = true;
   $('session-chip').hidden = false;
+  $('back-to-menu').hidden = false;
+  $('disconnect').disabled = false;
   const meta = protocolLabel(connection.protocol) + ' · ' + endpoint(connection);
   $('terminal-name').textContent = connection.name;
   $('pill-name').textContent = connection.name;
@@ -168,10 +175,13 @@ export function openSession(connection) {
   if (window.matchMedia('(pointer: coarse)').matches) setKeybarVisible(true);
 }
 
-export function closeSession() {
+export function closeSession({ fromHistory = false, keepHistory = false } = {}) {
   if (!current) return;
   current.session?.dispose();
   current = null;
+  if (!fromHistory && !keepHistory && location.hash === '#session') {
+    history.replaceState({ cracamole: 'menu' }, '', location.pathname + location.search);
+  }
   hideOverlay();
   setControls(false);
   setKeybarVisible(false);
@@ -179,6 +189,7 @@ export function closeSession() {
   setDrawerOverlay(false);
   $('terminal-placeholder').hidden = false;
   $('session-chip').hidden = true;
+  $('back-to-menu').hidden = true;
   $('send-cad').hidden = true;
   $('status-meta').textContent = '';
   $('overlay-endpoint').textContent = '';
@@ -202,14 +213,21 @@ export function showEmptyGuidance(hasConnections) {
 export function initStage(callbacks) {
   hooks = callbacks;
   setStatus('未連線', 'idle');
+  if (!history.state?.cracamole) history.replaceState({ cracamole: 'menu' }, '');
+  window.addEventListener('popstate', () => {
+    if (current) closeSession({ fromHistory: true });
+    else setDrawerOpen(true);
+  });
   $('overlay-trust').addEventListener('click', () => {
     const target = current;
     saveIdentity(target, () => current === target, hooks.onTrusted);
   });
   $('overlay-retry').addEventListener('click', () => current && openSession(current.connection));
   $('overlay-edit').addEventListener('click', () => current && hooks.onEdit(current.connection));
-  $('overlay-close').addEventListener('click', closeSession);
-  $('disconnect').addEventListener('click', closeSession);
+  $('overlay-close').addEventListener('click', () => closeSession());
+  $('disconnect').addEventListener('click', () => closeSession());
+  $('back-to-menu').addEventListener('click', () => closeSession());
+  $('pill-back').addEventListener('click', () => closeSession());
   $('toggle-keybar').addEventListener('click', () => setKeybarVisible($('keybar').hidden));
   $('send-cad').addEventListener('click', () => current?.session.sendCombo(CTRL_ALT_DEL));
   $('toggle-clipboard').addEventListener('click', () => {

@@ -302,7 +302,10 @@ test('ui: collapsible menus, maximized stage, dense option summaries and live st
   await expect(library).toContainText('已連線');
   await library.getByRole('button', { name: '收合選單' }).click();
   await expect(library).toBeHidden();
-  await page.getByRole('button', { name: '中斷連線' }).click();
+  // 5. Browser Back button returns to the connection menu instead of leaving to a blank page
+  await page.goBack();
+  await expect(library).toBeVisible();
+  await expect(page.locator('#terminal-status')).toHaveText('未連線');
 });
 
 for (const scheme of ['light', 'dark']) {

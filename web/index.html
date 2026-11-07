@@ -75,6 +75,7 @@
           <strong id="pill-name"></strong>
           <span id="pill-status" class="muted"></span>
           <button id="expand-chrome" class="btn btn--small" type="button">展開選單</button>
+          <button id="pill-back" class="btn btn--small" type="button">← 返回選單</button>
         </div>
         <div id="terminal" class="terminal" tabindex="0" role="group" aria-label="遠端終端機">
           <div id="terminal-placeholder" class="empty">
@@ -125,10 +126,11 @@
     </div>
 
     <footer id="statusbar" class="statusbar">
-      <button id="toggle-library" class="btn btn--quiet btn--small" type="button" aria-controls="library" aria-expanded="true" aria-label="收合連線庫">
+      <button id="toggle-library" class="btn btn--small" type="button" aria-controls="library" aria-expanded="true" aria-label="收合連線庫">
         <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         <span>連線庫</span>
       </button>
+      <button id="back-to-menu" class="btn btn--small" type="button" hidden>← 返回選單</button>
       <span class="statusbar__state">
         <span id="status-dot" class="dot" data-state="idle" aria-hidden="true"></span>
         <span id="terminal-status" role="status">未連線</span>
@@ -145,7 +147,7 @@
         <button id="send-cad" class="btn btn--quiet btn--small" type="button" hidden>Ctrl+Alt+Del</button>
         <button id="collapse-chrome" class="btn btn--quiet btn--small" type="button" aria-expanded="true" disabled>最大畫面</button>
         <button id="toggle-fullscreen" class="btn btn--quiet btn--small" type="button" aria-pressed="false">全螢幕</button>
-        <button id="disconnect" class="btn btn--quiet btn--small" type="button" disabled>中斷連線</button>
+        <button id="disconnect" class="btn btn--small" type="button" disabled>中斷連線</button>
         <button id="theme-toggle" class="btn btn--quiet btn--small" type="button">淺色主題</button>
         <button id="logout" class="btn btn--quiet btn--small" type="button">登出</button>
       </div>
