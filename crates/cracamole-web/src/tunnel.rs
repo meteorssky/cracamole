@@ -16,7 +16,7 @@ use tokio::{
     net::TcpStream,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 pub struct Size {
     #[serde(default = "width")]
     width: u32,
@@ -73,9 +73,22 @@ pub async fn upgrade(
         .max_write_buffer_size(128 * 1024)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
+            let started = std::time::Instant::now();
+            tracing::info!(
+                "web tunnel opened: {} ({}, {}x{})",
+                connection.id,
+                connection.protocol,
+                size.width,
+                size.height
+            );
             let result = bridge(socket, backend, expires, cancel, app.shutdown.clone()).await;
-            if let Err(error) = result {
-                tracing::debug!("web tunnel ended: {error}");
+            let seconds = started.elapsed().as_secs();
+            match result {
+                Ok(()) => tracing::info!("web tunnel closed: {} after {seconds}s", connection.id),
+                Err(error) => tracing::warn!(
+                    "web tunnel failed: {} after {seconds}s: {error}",
+                    connection.id
+                ),
             }
         }))
 }

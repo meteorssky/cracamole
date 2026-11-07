@@ -5,7 +5,7 @@
 ## 現行產品範圍
 
 - 整套系統不使用 Java。伺服器為 Rust，瀏覽器使用 HTML／CSS／JavaScript；不得恢復 Java webapp、Tomcat 或 Maven 作為建置、部署或 E2E 依賴。
-- 第一版採單一管理員，提供登入／登出、連線新增／編輯／刪除、本機保存與瀏覽器 SSH／Telnet。多使用者、角色、RDP／VNC、SFTP、錄影與共享連線延後。
+- 第一版採單一管理員，提供登入／登出、連線新增／編輯／刪除、本機保存與瀏覽器 SSH／Telnet。使用者已要求加入 RDP（`proto-rdp`，IronRDP 引擎），開發中，範圍見 README；多使用者、角色、VNC、SFTP、錄影與共享連線延後。
 - 完整系統入口為 `cracamole-web`，內嵌私人 loopback daemon；`web/` 靜態資產編入 binary。正式執行不需要 Node.js 或外部資料庫；Node.js 僅供瀏覽器測試工具使用。
 - 正式部署使用 `docker/compose.yml`、`docker/cracamole-web.Dockerfile`。`guacd` 獨立映像與 C oracle 僅保留相容性用途，不代表完整 Web 系統。
 

@@ -33,7 +33,7 @@
     <form id="connection-form">
       <div class="dialog-heading"><h2 id="editor-title">新增連線</h2><button id="close-editor" type="button" aria-label="關閉">✕</button></div>
       <label>連線名稱<input name="name" required maxlength="120" placeholder="例如：開發主機"></label>
-      <div class="form-row"><label>協定<select name="protocol"><option value="ssh">SSH</option><option value="telnet">Telnet</option></select></label><label>連接埠<input name="port" type="number" min="1" max="65535" placeholder="22"></label></div>
+      <div class="form-row"><label>協定<select name="protocol"><option value="ssh">SSH</option><option value="telnet">Telnet</option><option value="rdp">RDP（遠端桌面）</option></select></label><label>連接埠<input name="port" type="number" min="1" max="65535" placeholder="22"></label></div>
       <label>主機名稱或 IP<input name="hostname" required maxlength="255" placeholder="server.example.com"></label>
       <div class="form-row"><label>遠端帳號<input name="username" autocomplete="off"></label><label>遠端密碼<input name="password" type="password" autocomplete="new-password"></label></div>
       <details><summary>進階設定</summary>
@@ -42,6 +42,9 @@
         <label>SSH 主機金鑰<textarea name="host-key" rows="2" spellcheck="false" placeholder="已知的主機公鑰（可選）"></textarea></label>
         <label>Telnet 登入成功提示<input name="login-success-regex" placeholder="正規表示式，例如：:~[$] "></label>
         <label>Telnet 登入失敗提示<input name="login-failure-regex" placeholder="例如：Login incorrect"></label>
+        <label>RDP 網域<input name="domain" autocomplete="off" placeholder="例如：CORP（可選）"></label>
+        <label>RDP 安全性<select name="security"><option value="any">自動（NLA 或 TLS）</option><option value="nla">僅 NLA</option><option value="tls">僅 TLS</option></select></label>
+        <label class="checkbox"><input name="ignore-cert" type="checkbox">忽略 RDP 伺服器憑證驗證（自簽憑證）</label>
         <label class="checkbox"><input name="clear-secrets" type="checkbox">清除已保存的密碼與私鑰</label>
       </details>
       <p id="editor-error" role="alert"></p><div class="dialog-footer"><button id="cancel-editor" type="button">取消</button><button type="submit" class="primary">儲存連線</button></div>

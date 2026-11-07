@@ -169,6 +169,13 @@ fn flush_blob_chunking_respects_limit() {
             .len();
         assert!(n <= MAX_BLOB_BYTES);
     }
+    // guacamole.js appends blob payloads verbatim, so only the last may be padded
+    for b in &blobs[..blobs.len() - 1] {
+        assert!(
+            !b.args[1].contains('='),
+            "padding inside a multi-blob image"
+        );
+    }
     // every img has a matching end
     let imgs = out.iter().filter(|i| i.opcode == "img").count();
     assert_eq!(imgs, out.iter().filter(|i| i.opcode == "end").count());
@@ -217,4 +224,16 @@ fn size_is_bounded_so_a_client_cannot_exhaust_memory() {
         [1, 2, 3, 255],
     );
     let _ = d.flush();
+}
+
+#[test]
+fn img_uses_over_not_src_so_partial_updates_cannot_clear_the_layer() {
+    // SRC (12) maps to canvas "copy", which clears the whole layer outside the drawn
+    // rect in browsers. OVER (14) is identical for opaque pixels and clips to the image.
+    let mut d = Display::new(40, 40);
+    d.flush();
+    d.fill_rect(Rect::new(0, 30, 40, 5), [9, 9, 9, 255]);
+    let out = d.flush();
+    let img = out.iter().find(|i| i.opcode == "img").unwrap();
+    assert_eq!(img.args[1], "14");
 }

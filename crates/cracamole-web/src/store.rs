@@ -56,7 +56,7 @@ pub fn validate(draft: &Draft) -> Result<(), &'static str> {
     }
     let registry = guacd::Registry::builtin();
     let Some(plugin) = registry.get(&draft.protocol) else {
-        return Err("僅支援 SSH 與 Telnet");
+        return Err("不支援的協定（可用：SSH、Telnet、RDP）");
     };
     if draft.params.len() > 64
         || draft.params.iter().any(|(key, value)| {

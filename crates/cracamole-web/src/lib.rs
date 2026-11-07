@@ -167,6 +167,11 @@ async fn login(
         .login(peer.ip(), login.username, login.password)
         .await
         .map_err(|status| {
+            tracing::warn!(
+                "web login failed from {}: HTTP {}",
+                peer.ip(),
+                status.as_u16()
+            );
             ApiError::new(
                 status,
                 if status == StatusCode::TOO_MANY_REQUESTS {
@@ -176,6 +181,7 @@ async fn login(
                 },
             )
         })?;
+    tracing::info!("web login succeeded from {}", peer.ip());
     Ok((
         [(header::SET_COOKIE, app.auth.cookie(&token))],
         Json(json!({"authenticated":true})),
@@ -237,6 +243,7 @@ async fn create(
         .await
         .map_err(storage_error)?
         .unwrap();
+    tracing::info!("connection created: {}", connection.id);
     Ok((StatusCode::CREATED, Json(connection)).into_response())
 }
 async fn update(
@@ -263,6 +270,7 @@ async fn remove(
     app.auth.authorize(&headers).await?;
     auth::same_origin(&headers)?;
     if app.store.delete(&id).await.map_err(storage_error)? {
+        tracing::info!("connection deleted: {id}");
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::new(StatusCode::NOT_FOUND, "找不到連線"))

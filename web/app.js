@@ -49,14 +49,16 @@ function renderConnections() {
     actions.append(edit,remove);card.append(open,meta,actions);$('connections-list').append(card);
   }
 }
+const DEFAULT_PORTS={ssh:'22',telnet:'23',rdp:'3389'};
 function editConnection(connection=null) {
   editing=connection;const form=$('connection-form');form.reset();$('editor-error').textContent='';
   $('editor-title').textContent=connection?'編輯連線':'新增連線';
   for(const name of ['name','protocol']) if(connection) form.elements.namedItem(name).value=connection[name];
   const params=connection?.params||{};
-  for(const name of ['hostname','port','username','host-key','login-success-regex','login-failure-regex']) form.elements.namedItem(name).value=params[name]||'';
+  for(const name of ['hostname','port','username','host-key','login-success-regex','login-failure-regex','domain']) form.elements.namedItem(name).value=params[name]||'';
+  form.elements.security.value=params.security||'any';form.elements['ignore-cert'].checked=params['ignore-cert']==='true';
   for(const secret of ['password','private-key','passphrase']) form.elements.namedItem(secret).placeholder=connection?.configured_secrets.includes(secret)?'已設定；留空保留':'';
-  form.elements.port.placeholder=form.elements.protocol.value==='ssh'?'22':'23';
+  form.elements.port.placeholder=DEFAULT_PORTS[form.elements.protocol.value];
   $('connection-editor').showModal();form.elements.name.focus();
 }
 function paste(text) {
@@ -115,13 +117,19 @@ $('connection-form').addEventListener('submit',async event=>{
     const value=form.elements.namedItem(key).value;
     if(value||form.elements.namedItem('clear-secrets').checked)params[key]=value;
   }
+  if(protocol==='rdp'){
+    for(const key of ['terminal-type','func-keys-and-keypad','host-key','private-key','passphrase','login-success-regex','login-failure-regex'])delete params[key];
+    params.domain=form.elements.domain.value.trim();params.security=form.elements.security.value;params['ignore-cert']=form.elements['ignore-cert'].checked?'true':'false';
+  } else {
+  for(const key of ['domain','security','ignore-cert'])delete params[key];
   params['terminal-type']='xterm';params['func-keys-and-keypad']='vt100';
   if(protocol==='ssh'){params['host-key']=form.elements.namedItem('host-key').value.trim();delete params['login-success-regex'];delete params['login-failure-regex'];}
   else {params['login-success-regex']=form.elements.namedItem('login-success-regex').value;params['login-failure-regex']=form.elements.namedItem('login-failure-regex').value;delete params['host-key'];delete params['private-key'];delete params.passphrase;}
+  }
   try {await api('/connections'+(editing?'/'+editing.id:''),{method:editing?'PUT':'POST',body:JSON.stringify({name:form.elements.name.value,protocol,params})});$('connection-editor').close();form.reset();await showWorkspace();}
   catch(error){$('editor-error').textContent=error.message;}
 });
-$('connection-form').elements.protocol.onchange=event=>{$('connection-form').elements.port.placeholder=event.target.value==='ssh'?'22':'23';};
+$('connection-form').elements.protocol.onchange=event=>{$('connection-form').elements.port.placeholder=DEFAULT_PORTS[event.target.value];};
 $('add-connection').onclick=()=>editConnection();
 $('close-editor').onclick=$('cancel-editor').onclick=()=>{$('connection-editor').close();$('connection-form').reset();};
 $('disconnect').onclick=disconnect;

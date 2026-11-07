@@ -14,7 +14,22 @@ function compose(args) {
     ? ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', remote, ['docker', ...command].map(quote).join(' ')]
     : command, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
 }
-function remoteFile(file) { try { return compose(['exec', '-T', 'backend', 'cat', file]); } catch { return ''; } }
+function remoteFile(file, service = 'backend') {
+  const container = service === 'rdp' && process.env.CRACAMOLE_E2E_RDP_CONTAINER;
+  if (container) {
+    try { return execFileSync('ssh', ['-o', 'BatchMode=yes', process.env.CRACAMOLE_E2E_SSH, `docker exec ${container} cat ${file}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 }); } catch { return ''; }
+  }
+  try { return compose(['exec', '-T', service, 'cat', file]); } catch { return ''; } }
+// Run a shell command as the RDP session user inside the xrdp fixture.
+function rdpExec(script) {
+  const container = process.env.CRACAMOLE_E2E_RDP_CONTAINER;
+  const inner = ['exec', '-u', 'tester', '-e', 'DISPLAY=:10', container || 'rdp', 'sh', '-c', script];
+  if (container) {
+    const quote = value => "'" + value.replaceAll("'", "'\''") + "'";
+    return execFileSync('ssh', ['-o', 'BatchMode=yes', process.env.CRACAMOLE_E2E_SSH, ['docker', ...inner].map(quote).join(' ')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
+  }
+  return compose([...inner.slice(0, 5), 'rdp', 'sh', '-c', script].map(String)).toString();
+}
 async function ready(request) {
   await expect.poll(async () => { try { return (await request.get('health', { timeout: 3000 })).status(); } catch { return 0; } }, { timeout: 90000 }).toBe(200);
 }
@@ -25,8 +40,8 @@ async function login(page) {
   await page.getByRole('button', { name: '登入', exact: true }).click();
   await expect(page.locator('#workspace')).toBeVisible();
 }
-async function visibleTerminalInk(page) {
-  const screenshot = await page.locator('#terminal').screenshot();
+async function visibleInk(page, clip) {
+  const screenshot = await (clip ? page.screenshot({ clip }) : page.locator('#terminal').screenshot());
   return page.evaluate(async encoded => {
     const image = new Image();
     image.src = 'data:image/png;base64,' + encoded;
@@ -41,14 +56,19 @@ async function visibleTerminalInk(page) {
     return ink;
   }, screenshot.toString('base64'));
 }
-async function addConnection(page, name, protocol, host='backend') {
+async function addConnection(page, name, protocol, host='backend', port='', password='tester-pw') {
   await page.getByRole('button', { name: '新增連線', exact: true }).click();
   const form = page.locator('#connection-form');
   await form.locator('[name=name]').fill(name);
   await form.locator('[name=protocol]').selectOption(protocol);
   await form.locator('[name=hostname]').fill(host);
+  if (port) await form.locator('[name=port]').fill(String(port));
   await form.locator('[name=username]').fill('tester');
-  await form.locator('[name=password]').fill('tester-pw');
+  await form.locator('[name=password]').fill(password);
+  if (protocol === 'rdp') {
+    await form.locator('summary').click();
+    await form.locator('[name=ignore-cert]').check();
+  }
   if (protocol === 'telnet') {
     await form.locator('summary').click();
     await form.locator('[name=login-success-regex]').fill(':~[$] ');
@@ -61,6 +81,122 @@ async function addConnection(page, name, protocol, host='backend') {
 
 test.beforeAll(async ({ request }) => ready(request));
 
+// Any browser-side script error fails the test that caused it.
+test.beforeEach(async ({ page }) => {
+  page.on('pageerror', error => { throw error; });
+});
+
+test('rdp: connect to xrdp, paint the desktop, keyboard reaches the remote session', async ({ page }) => {
+  const name = `RDP ${Date.now()}`;
+  await login(page);
+  await addConnection(page, name, 'rdp', process.env.CRACAMOLE_RDP_HOST || 'rdp', process.env.CRACAMOLE_RDP_PORT || '');
+  const profile = (await (await page.request.get('api/connections')).json()).find(c => c.name === name);
+  expect(profile.protocol).toBe('rdp');
+  expect(profile.params.password).toBeUndefined();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  await expect(page.locator('#terminal-status')).toHaveText('已連線', { timeout: 60000 });
+  // The xterm window on the xrdp desktop must show up as pixels.
+  await expect.poll(() => visibleInk(page), { timeout: 60000 }).toBeGreaterThan(300);
+  const terminal = page.locator('#terminal');
+  await terminal.click({ position: { x: 60, y: 60 } });
+  const file = `/tmp/cracamole-rdp-${Date.now()}`;
+  const marker = `rdp-${Date.now()}`;
+  await page.waitForTimeout(1500);
+  await page.keyboard.type(`printf '${marker}' > ${file}`);
+  await page.keyboard.press('Enter');
+  await expect.poll(() => remoteFile(file, 'rdp'), { timeout: 20000 }).toBe(marker);
+  await page.getByRole('button', { name: '登出', exact: true }).click();
+  await expect(page.locator('#login-view')).toBeVisible();
+});
+
+test('rdp: mouse clicks reach the remote session', async ({ page }) => {
+  const name = `RDP mouse ${Date.now()}`;
+  await login(page);
+  await addConnection(page, name, 'rdp', process.env.CRACAMOLE_RDP_HOST || 'rdp', process.env.CRACAMOLE_RDP_PORT || '');
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  await expect(page.locator('#terminal-status')).toHaveText('已連線', { timeout: 60000 });
+  await expect.poll(() => visibleInk(page), { timeout: 60000 }).toBeGreaterThan(300);
+  const terminal = page.locator('#terminal');
+  await terminal.click({ position: { x: 60, y: 60 } });
+  await page.waitForTimeout(1500);
+  // xterm reports clicks as ESC [ M ... once mouse tracking is on; capture the 12 bytes of a click.
+  const file = `/tmp/cracamole-rdp-mouse-${Date.now()}`;
+  await page.keyboard.type(`stty raw -echo; printf '\\033[?1000h'; dd bs=1 count=12 of=${file} 2>/dev/null; stty sane; printf '\\033[?1000l'`);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(1000);
+  await terminal.click({ position: { x: 100, y: 100 } });
+  await expect.poll(() => remoteFile(file, 'rdp').length, { timeout: 20000 }).toBe(12);
+  expect(remoteFile(file, 'rdp').startsWith(String.fromCharCode(27) + '[M')).toBe(true);
+});
+
+test('rdp: clipboard works in both directions', async ({ page }) => {
+  const name = `RDP clip ${Date.now()}`;
+  await login(page);
+  await addConnection(page, name, 'rdp', process.env.CRACAMOLE_RDP_HOST || 'rdp', process.env.CRACAMOLE_RDP_PORT || '');
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  await expect(page.locator('#terminal-status')).toHaveText('已連線', { timeout: 60000 });
+  await expect.poll(() => visibleInk(page), { timeout: 60000 }).toBeGreaterThan(300);
+  await page.waitForTimeout(2000);
+  // browser -> remote
+  const toRemote = `to-remote-${Date.now()}`;
+  await page.getByRole('button', { name: '剪貼簿', exact: true }).click();
+  await page.locator('#clipboard-text').fill(toRemote);
+  await page.getByRole('button', { name: '貼上到終端機' }).click();
+  await expect.poll(() => { try { return rdpExec('xclip -o -selection clipboard'); } catch { return ''; } }, { timeout: 20000 }).toBe(toRemote);
+  // remote -> browser
+  const fromRemote = `from-remote-${Date.now()}`;
+  rdpExec(`printf '%s' '${fromRemote}' | xclip -i -selection clipboard`);
+  await expect(page.locator('#clipboard-text')).toHaveValue(fromRemote, { timeout: 20000 });
+});
+
+test('rdp: browser resize changes the remote desktop size', async ({ page }) => {
+  const name = `RDP resize ${Date.now()}`;
+  await login(page);
+  await addConnection(page, name, 'rdp', process.env.CRACAMOLE_RDP_HOST || 'rdp', process.env.CRACAMOLE_RDP_PORT || '');
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  await expect(page.locator('#terminal-status')).toHaveText('已連線', { timeout: 60000 });
+  await expect.poll(() => visibleInk(page), { timeout: 60000 }).toBeGreaterThan(300);
+  const terminal = page.locator('#terminal');
+  await terminal.click({ position: { x: 60, y: 60 } });
+  await page.waitForTimeout(1500);
+  const prefix = `/tmp/cracamole-rdp-size-${Date.now()}`;
+  const dimensions = async suffix => {
+    await page.keyboard.type(`xdpyinfo | grep dimensions > ${prefix}-${suffix}`);
+    await page.keyboard.press('Enter');
+    await expect.poll(() => remoteFile(`${prefix}-${suffix}`, 'rdp'), { timeout: 20000 }).toMatch(/dimensions: +[0-9]+x[0-9]+ pixels/);
+    const text = remoteFile(`${prefix}-${suffix}`, 'rdp');
+    return /([0-9]+)x([0-9]+) pixels/.exec(text).slice(1).map(Number);
+  };
+  const [w1, h1] = await dimensions('before');
+  await page.setViewportSize({ width: 1000, height: 700 });
+  await expect.poll(async () => { await page.waitForTimeout(1000); const [w, h] = await dimensions(`after-${Date.now()}`); return w < w1 && h < h1; }, { timeout: 45000 }).toBe(true);
+  // The new desktop must still render and accept input.
+  await expect.poll(() => visibleInk(page), { timeout: 20000 }).toBeGreaterThan(300);
+});
+
+test('partial screen updates keep earlier content and large images decode', async ({ page }) => {
+  const name = `Large ${Date.now()}`;
+  await login(page);
+  await addConnection(page, name, 'ssh');
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  await expect(page.locator('#terminal-status')).toHaveText('已連線');
+  const terminal = page.locator('#terminal');
+  await terminal.click({ position: { x: 30, y: 30 } });
+  // A full screen of text is several PNG blobs. Ink must be present in the top half.
+  await page.keyboard.type('clear; ls -lR /usr /etc /bin | head -n 400');
+  await page.keyboard.press('Enter');
+  const topHalf = async () => { const box = await terminal.boundingBox(); return { x: box.x, y: box.y, width: box.width, height: box.height / 2 }; };
+  const ink = async () => visibleInk(page, await topHalf());
+  await expect.poll(ink, { timeout: 20000 }).toBeGreaterThan(2000);
+  // Wait until the 400-line output has finished scrolling before taking the baseline.
+  let before = 0;
+  await expect.poll(async () => { const now = await ink(); const settled = now === before; before = now; return settled; }, { timeout: 20000, intervals: [700] }).toBe(true);
+  // A one-row update (typing) must not wipe the rest of the layer (canvas "copy" bug).
+  await page.keyboard.type('xyz');
+  await page.waitForTimeout(1500);
+  expect(await ink()).toBeGreaterThan(before * 0.9);
+});
+
 for (const protocol of ['ssh', 'telnet']) {
   test(`${protocol}: Java-free login, connection management, vim, resize, clipboard, CJK and idle`, async ({ page }, info) => {
     const name = `${protocol.toUpperCase()} ${Date.now()}`;
@@ -72,7 +208,7 @@ for (const protocol of ['ssh', 'telnet']) {
     expect(profile.configured_secrets).toContain('password');
     await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
     await expect(page.locator('#terminal-status')).toHaveText('已連線');
-    await expect.poll(() => visibleTerminalInk(page)).toBeGreaterThan(100);
+    await expect.poll(() => visibleInk(page)).toBeGreaterThan(100);
     const terminal = page.locator('#terminal');
     await terminal.click({ position: { x: 30, y: 30 } });
     const prefix = `/tmp/cracamole-${protocol}-${Date.now()}`;
@@ -113,7 +249,7 @@ for (const protocol of ['ssh', 'telnet']) {
     await page.keyboard.type(`printf '\\344\\270\\255\\346\\226\\207' | tee ${prefix}-cjk`);
     await page.keyboard.press('Enter');
     await expect.poll(() => remoteFile(`${prefix}-cjk`)).toBe('中文');
-    await expect.poll(() => visibleTerminalInk(page)).toBeGreaterThan(100);
+    await expect.poll(() => visibleInk(page)).toBeGreaterThan(100);
     await page.waitForTimeout(300);
     await page.screenshot({ path: info.outputPath(`${protocol}-cjk.png`) });
     await page.getByRole('button', { name: '登出', exact: true }).click();

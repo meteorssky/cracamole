@@ -10,6 +10,16 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+  rdp:
+    mem_limit: 768m
+    build:
+      context: ../tests/e2e
+      dockerfile: rdp.Dockerfile
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3389"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
   web:
     image: cracamole-web:ci
     build:
@@ -27,5 +37,6 @@ services:
     security_opt: ["no-new-privileges:true"]
     depends_on:
       backend: { condition: service_healthy }
+      rdp: { condition: service_healthy }
 volumes:
   connections:

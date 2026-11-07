@@ -73,11 +73,15 @@ cd tests/e2e
 npm test
 ```
 
+更簡單的做法是一個指令（本機不需要 Docker）：`scripts/e2e_remote.sh user@docker-host [playwright 參數]`。它會把工作目錄（含未提交變更）同步到遠端的獨立目錄、以獨立的 compose 專案啟動 Rust 應用與 sshd／telnetd、建立 SSH 轉發，於 Chromium、Firefox 與 WebKit 執行整套 Playwright，結束後自動清理，不影響遠端已部署的服務。
+
+RDP 的快速開發迴圈：`scripts/rdp_dev.sh user@docker-host`。只在遠端啟動 xrdp 測試容器、建立 SSH 轉發，並使用本機編譯的 `cracamole-web` 執行 RDP 的 Playwright 案例（略過約 40 分鐘的完整映像建置）。
+
 Windows 若遇中斷建置留下的增量連結錯誤，可先設定 `$env:CARGO_INCREMENTAL='0'`。部分既有測試需要 `ssh-keygen`、`sh`、參考 C 原始碼或 CJK 字型；缺少時會跳過，檢視結果時須留意。
 
 ## 原始碼與相容性測試
 
-Workspace 有 9 個 crate：`guac-protocol`、`guac-session`、`guac-display`、`guac-terminal`、`proto-telnet`、`proto-ssh`、`guacd`、`guac-testkit`、`cracamole-web`。`web/` 是前端靜態資產，直接內嵌於 Rust 執行檔；正式執行不需要 Node.js。Apache Guacamole 的 JavaScript 客戶端附於 `web/vendor/`，保留授權與 NOTICE，可用 `python scripts/vendor_guacamole.py` 重建。
+Workspace 有 10 個 crate：`guac-protocol`、`guac-session`、`guac-display`、`guac-terminal`、`proto-telnet`、`proto-ssh`、`proto-rdp`、`guacd`、`guac-testkit`、`cracamole-web`。`web/` 是前端靜態資產，直接內嵌於 Rust 執行檔；正式執行不需要 Node.js。Apache Guacamole 的 JavaScript 客戶端附於 `web/vendor/`，保留授權與 NOTICE，可用 `python scripts/vendor_guacamole.py` 重建。
 
 `guacd` 仍可獨立執行並驗證線路相容性；它不是完整系統的部署入口。C 版 oracle 僅用於測試，預設釘在上游 `bb1ba8ed1414ec6a239cea265d4e9c7e23b9c6a3`，不屬於正式執行環境：
 
@@ -89,4 +93,4 @@ docker compose -p cracamole-oracle -f docker/compose.oracle.yml down -v
 
 `fuzz/` 是獨立工作區，見 [fuzz README](fuzz/README.md)。CI 包含 Rust 檢查、Docker、C args 差分及無 Java 瀏覽器 E2E；設定 CI 不等於已取得執行證據。長時間 fuzz、arm64 與完整效能／安全驗收仍須另行完成。
 
-目前不含多使用者、RDP、VNC、Kubernetes、Serial、SFTP、錄影及共享連線。詳細計畫與驗證記錄位於本機 `docs/`，依既有設定不追蹤。
+RDP 以 `proto-rdp`（IronRDP）提供畫面、鍵盤、滑鼠、文字剪貼簿（雙向）與動態縮放（瀏覽器視窗改變大小，遠端桌面跟著調整）；音訊、磁碟機／檔案重新導向與 RemoteApp 尚未完成。目前不含多使用者、VNC、Kubernetes、Serial、SFTP、錄影及共享連線。詳細計畫與驗證記錄位於本機 `docs/`，依既有設定不追蹤。

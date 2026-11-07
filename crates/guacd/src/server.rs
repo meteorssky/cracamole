@@ -38,6 +38,8 @@ impl Registry {
         let r = r.with(proto_telnet::TelnetPlugin);
         #[cfg(feature = "ssh")]
         let r = r.with(proto_ssh::SshPlugin);
+        #[cfg(feature = "rdp")]
+        let r = r.with(proto_rdp::RdpPlugin);
         r
     }
 

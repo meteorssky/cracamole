@@ -412,3 +412,29 @@ fn rn_delete_lines_while_viewing_history_keeps_viewport_in_bounds() {
     r.draw();
     assert_eq!(r.term.row_text(0), "1");
 }
+
+#[test]
+fn rn_12_long_output_scrolls_and_every_visible_row_is_painted() {
+    for chunked in [false, true] {
+        let mut r = rig(40, 10);
+        let lines: String = (0..400).map(|i| format!("line-{i:04}\r\n")).collect();
+        if chunked {
+            for part in lines.as_bytes().chunks(97) {
+                r.term.feed(part);
+                r.draw();
+            }
+        } else {
+            r.term.feed(lines.as_bytes());
+            r.draw();
+        }
+        r.draw();
+        // 400 lines through a 10-row screen: rows 0..8 hold the last lines, row 9 is the cursor row.
+        for row in 0..9 {
+            assert!(
+                r.ink(0, row, BG) > 5,
+                "row {row} is blank (chunked={chunked}): {:?}",
+                r.term.row_text(row as usize)
+            );
+        }
+    }
+}

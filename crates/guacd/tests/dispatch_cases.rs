@@ -326,7 +326,9 @@ async fn gd_dsp_15_registry_lists_builtins() {
     let r = Registry::builtin();
     #[cfg(feature = "telnet")]
     assert!(r.get("telnet").is_some());
-    assert!(r.get("rdp").is_none());
+    #[cfg(feature = "rdp")]
+    assert!(r.get("rdp").is_some());
+    assert!(r.get("vnc").is_none());
     assert_eq!(Registry::new().names().len(), 0);
 }
 
@@ -367,9 +369,9 @@ async fn gd_dsp_17_ssh_connect_failure_reaches_client_through_guacd() {
     assert_eq!(e.args, vec!["Aborted. See logs.", "520"]);
 }
 
-#[cfg(all(feature = "ssh", feature = "telnet"))]
+#[cfg(all(feature = "ssh", feature = "telnet", feature = "rdp"))]
 #[tokio::test]
-async fn gd_dsp_18_both_builtin_protocols_registered() {
+async fn gd_dsp_18_all_builtin_protocols_registered() {
     let r = Registry::builtin();
-    assert_eq!(r.names(), vec!["ssh", "telnet"]);
+    assert_eq!(r.names(), vec!["rdp", "ssh", "telnet"]);
 }

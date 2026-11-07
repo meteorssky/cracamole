@@ -2,15 +2,18 @@ use crate::Rect;
 use base64::Engine;
 use guac_protocol::Instruction;
 
-/// Maximum decoded bytes per `blob` instruction.
-pub const MAX_BLOB_BYTES: usize = 4096;
+/// Maximum decoded bytes per `blob` instruction. Must be a multiple of 3 so each
+/// chunk base64-encodes without padding: guacamole.js concatenates the chunks.
+pub const MAX_BLOB_BYTES: usize = 4095;
 
 /// Largest width or height of the display in pixels. A client-chosen size must not be able to make
 /// the server allocate an arbitrarily large framebuffer (4096x4096 RGBA is 64 MiB).
 pub const MAX_DIMENSION: u32 = 4096;
 
-/// Composite mode SRC (0xC): replace destination pixels.
-const COMP_SRC: &str = "12";
+/// Composite mode OVER (0xE). The framebuffer is fully opaque, so this equals a replace, but
+/// SRC (0xC) maps to canvas `copy`, which browsers apply to the whole layer (it clears
+/// everything outside the drawn rect), wiping the rest of the terminal on every partial update.
+const COMP_OVER: &str = "14";
 
 /// A single opaque layer (layer 0) backed by an RGBA framebuffer.
 ///
@@ -206,7 +209,7 @@ impl Display {
                 "img",
                 [
                     id.clone(),
-                    COMP_SRC.to_string(),
+                    COMP_OVER.to_string(),
                     "0".to_string(),
                     "image/png".to_string(),
                     band.x.to_string(),

@@ -6,12 +6,13 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY web ./web
 ARG TARGETARCH
+ARG JOBS=2
 RUN --mount=type=cache,id=cracamole-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cracamole-target-${TARGETARCH},target=/src/target \
     # Copied source mtimes may predate the cached Cargo fingerprints.
     # Refresh local sources so a changed Docker context cannot reuse a stale binary.
     find crates web -type f -exec touch {} + \
- && cargo build --release --locked -p cracamole-web --jobs 2 \
+ && cargo build --release --locked -p cracamole-web --jobs ${JOBS} \
  && mkdir -p /out && cp target/release/cracamole-web /out/cracamole-web
 
 FROM alpine:3
