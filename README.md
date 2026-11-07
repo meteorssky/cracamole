@@ -223,6 +223,24 @@ CRACAMOLE_ADMIN_PASSWORD='replace-with-your-own-long-password' cargo run --locke
 
 ## 測試、驗證與品質門檻（Verification & Testing）
 
+### 終端機文字編碼與 Unicode
+
+SSH／Telnet 預設使用 UTF-8。舊系統可在「終端機外觀與輸入 → 文字編碼」明確選擇 Big5、GBK、GB18030、Shift_JIS、EUC-JP 或 EUC-KR；另提供 Windows-1251／1252。設定需配合遠端程式實際輸出的編碼，不自動猜測。SSH 的 `LANG` 只請求遠端語系，不會代替編碼轉換。
+
+轉碼只發生在 SSH 已驗證後的 PTY 文字與 Telnet 應用資料；SSH 驗證、Web API、Guacamole 與瀏覽器剪貼簿仍使用 Unicode。RDP 使用 Unicode 鍵盤事件及 Unicode 文字剪貼簿，不套用終端機的舊編碼設定。文字與密碼不做 Unicode 正規化。
+
+解碼會保留跨封包的多位元組字元；無效遠端 bytes 以替代字元顯示，日誌只記錄編碼名稱。無法用所選編碼表示的鍵盤或貼上輸入會在該次送出前整批拒絕並結束連線，避免送出半截指令。Big5／CP950、Shift_JIS／CP932 等別名採 `encoding_rs` 的網頁相容映射，不保證所有設備私有擴充字集。
+
+字元正確傳輸仍需要伺服器字型具有對應字形；正式映像含 Noto CJK。終端機的複雜文字塑形、雙向文字、彩色 emoji／ZWJ 組合與實機 IME 尚未完整驗收，不能據此宣稱全部語言排版皆受支援。
+
+```sh
+node --test tests/e2e/text.test.js
+# 隔離的遠端 sshd/telnetd + 本機 Rust，三種瀏覽器比較實際合成字形與輸入 bytes
+scripts/text_dev.sh root@10.0.20.130
+```
+
+SSH／Telnet 的參數清單在 C 相容前綴後新增 `character-encoding`；執行下列 oracle 比對時使用明確的延伸許可旗標，原始線路差異仍保留在報告中。
+
 ### 1. Rust 靜態檢查、單元測試與基準測試
 
 ```sh
@@ -285,7 +303,7 @@ scripts/rdp_dev.sh user@docker-host
   ```sh
   python -m unittest discover -s tests/oracle -v
   docker compose -p cracamole-oracle -f docker/compose.oracle.yml up -d --build --wait
-  python tests/oracle/compare_args.py
+  python tests/oracle/compare_args.py --allow-terminal-encoding-extension
   docker compose -p cracamole-oracle -f docker/compose.oracle.yml down -v
   ```
 - **Fuzzing**：獨立工作區位於 [`fuzz/`](fuzz/README.md)，針對協定解析器、終端機 ANSI 序列與 RDP 訊息進行模糊測試。

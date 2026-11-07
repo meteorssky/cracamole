@@ -20,6 +20,7 @@
 - daemon 僅監聽私人 loopback，不發布 4822。正式 Compose 預設僅發布主機 loopback HTTP；遠端使用透過 HTTPS reverse proxy，保留 Host 與 WebSocket，啟用 Secure cookie。
 - 前端（`web/`）的任何變更必須遵守 `web/GUIDELINES.md`（無建置步驟、CSP、token、無障礙、測試與完成定義）；設計背景見本機 `docs/ux-redesign.md`。
 - `web/vendor/` 的 Apache JavaScript 保留 LICENSE／NOTICE；更新時使用釘選來源與 checksum。
+- SSH／Telnet 預設 UTF-8，舊編碼只在遠端終端機文字邊界轉換；串流解碼須保留跨封包字元，無法表示的輸入必須在該次寫入前整批拒絕。不得將舊編碼套用到 SSH 驗證、Web API、Guacamole 或 RDP Unicode 剪貼簿，也不得自行正規化密碼。
 
 ## 驗證與回歸
 

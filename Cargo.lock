@@ -1370,6 +1370,8 @@ dependencies = [
  "proto-rdp",
  "proto-ssh",
  "proto-telnet",
+ "proto-vnc",
+ "serde",
  "tokio",
  "tokio-util",
  "tracing",
@@ -2821,6 +2823,25 @@ dependencies = [
  "guac-terminal",
  "guac-testkit",
  "regex",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "proto-vnc"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "base64 0.23.1",
+ "des",
+ "flate2",
+ "getrandom 0.4.3",
+ "guac-display",
+ "guac-protocol",
+ "guac-session",
+ "guac-testkit",
+ "md-5 0.11.0",
+ "num-bigint 0.4.8",
  "tokio",
  "tracing",
 ]

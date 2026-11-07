@@ -3,7 +3,7 @@
 import { $, el } from '../util/dom.js';
 import { TEXT_ENCODINGS } from '../util/encodings.js';
 
-const ALL = ['ssh', 'telnet', 'rdp'];
+const ALL = ['ssh', 'telnet', 'rdp', 'vnc'];
 
 export const OPTION_SECTIONS = [
   {
@@ -89,6 +89,34 @@ export const OPTION_SECTIONS = [
         maxlength: 15,
         placeholder: 'cracamole',
         hint: '最多 15 個字元，會顯示在遠端的工作階段清單。',
+      },
+    ],
+  },
+  {
+    id: 'vnc-display',
+    title: 'VNC 畫面與剪貼簿',
+    protocols: ['vnc'],
+    hint: '遠端桌面的大小由 Mac 或 VNC 伺服器決定，瀏覽器會自動縮放顯示。單邊超過 4096 像素的螢幕需先調低解析度。',
+    fields: [
+      {
+        name: 'color-depth',
+        label: '色彩深度',
+        type: 'select',
+        options: [
+          ['', '全彩（24 位元，建議）'],
+          ['16', '16 位元（較省頻寬）'],
+          ['8', '8 位元（頻寬最低）'],
+        ],
+      },
+      { name: 'swap-red-blue', label: '對調紅藍色（顏色偏藍或偏紅時使用）', type: 'checkbox' },
+      {
+        name: 'clipboard-encoding',
+        label: '剪貼簿文字編碼',
+        type: 'select',
+        options: [
+          ['', 'ISO 8859-1（標準，僅西歐字元）'],
+          ['UTF-8', 'UTF-8（macOS 螢幕共享的中文剪貼簿請選這個）'],
+        ],
       },
     ],
   },

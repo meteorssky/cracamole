@@ -160,13 +160,13 @@ test('rdp: clipboard works in both directions', async ({ page }) => {
   await expect.poll(() => visibleInk(page), { timeout: 60000 }).toBeGreaterThan(300);
   await page.waitForTimeout(2000);
   // browser -> remote
-  const toRemote = `to-remote-${Date.now()}`;
+  const toRemote = `to-remote-中文 日本語 한국어 😀𠮷 e\u0301-${Date.now()}`;
   await page.getByRole('button', { name: '剪貼簿', exact: true }).click();
   await page.locator('#clipboard-text').fill(toRemote);
   await page.getByRole('button', { name: '貼上到終端機' }).click();
   await expect.poll(() => { try { return rdpExec('xclip -o -selection clipboard'); } catch { return ''; } }, { timeout: 20000 }).toBe(toRemote);
   // remote -> browser
-  const fromRemote = `from-remote-${Date.now()}`;
+  const fromRemote = `from-remote-中文 日本語 한국어 😀𠮷 e\u0301-${Date.now()}`;
   rdpExec(`printf '%s' '${fromRemote}' | xclip -i -selection clipboard`);
   await expect(page.locator('#clipboard-text')).toHaveValue(fromRemote, { timeout: 20000 });
 });

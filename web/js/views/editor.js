@@ -90,6 +90,10 @@ function buildParams(f, protocol) {
   const drop = keys => {
     for (const key of keys) delete params[key];
   };
+  if (protocol === 'vnc') {
+    drop([...TERMINAL_ONLY, ...SSH_ONLY, ...TELNET_ONLY, ...RDP_ONLY]);
+    return params;
+  }
   if (protocol === 'rdp') {
     drop([...TERMINAL_ONLY, ...SSH_ONLY, ...TELNET_ONLY]);
     params.domain = f.elements.domain.value.trim();

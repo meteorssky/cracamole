@@ -97,7 +97,7 @@ pub fn validate(draft: &Draft) -> Result<(), Invalid> {
     let Some(plugin) = registry.get(&draft.protocol) else {
         return Err(invalid(
             "protocol",
-            "不支援這個協定，請改選 SSH、Telnet 或 RDP。",
+            "不支援這個協定，請改選 SSH、Telnet、RDP 或 VNC。",
         ));
     };
     if draft.params.len() > 64

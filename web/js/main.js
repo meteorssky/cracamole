@@ -8,6 +8,7 @@ import { initDrawer, setDrawerOpen } from './views/drawer.js';
 import { openEditor, initEditor } from './views/editor.js';
 import { initLibrary, setActive, setConnections } from './views/library.js';
 import { hideLogin, initLogin, showLogin } from './views/login.js';
+import { initLogs, openLogs } from './views/logs.js';
 import { activeConnectionId, closeSession, initStage, openSession, showEmptyGuidance } from './views/stage.js';
 
 async function refreshConnections() {
@@ -85,6 +86,8 @@ async function boot() {
   for (const button of document.querySelectorAll('[data-new-protocol]')) {
     button.addEventListener('click', () => openEditor(null, button.dataset.newProtocol));
   }
+  initLogs();
+  $('open-logs')?.addEventListener('click', openLogs);
   $('logout').addEventListener('click', async () => {
     try {
       await api('/logout', { method: 'POST' });

@@ -28,7 +28,9 @@ function compose(args) {
 
 // Contents of a file inside a fixture container ('' when it does not exist yet).
 function remoteFile(file, service = 'backend') {
-  const container = service === 'rdp' && process.env.CRACAMOLE_E2E_RDP_CONTAINER;
+  const container = service === 'rdp'
+    ? process.env.CRACAMOLE_E2E_RDP_CONTAINER
+    : process.env.CRACAMOLE_E2E_BACKEND_CONTAINER;
   try {
     if (container) {
       return run('ssh', [...SSH_OPTIONS, process.env.CRACAMOLE_E2E_SSH, `docker exec ${container} cat ${shellQuote(file)}`]);

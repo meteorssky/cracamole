@@ -1,5 +1,5 @@
-export const DEFAULT_PORTS = { ssh: '22', telnet: '23', rdp: '3389' };
-export const PROTOCOL_LABELS = { ssh: 'SSH', telnet: 'Telnet', rdp: 'RDP' };
+export const DEFAULT_PORTS = { ssh: '22', telnet: '23', rdp: '3389', vnc: '5900' };
+export const PROTOCOL_LABELS = { ssh: 'SSH', telnet: 'Telnet', rdp: 'RDP', vnc: 'VNC' };
 
 export function protocolLabel(protocol) {
   return PROTOCOL_LABELS[protocol] || String(protocol).toUpperCase();

@@ -153,7 +153,10 @@ mod tests {
                 .await
                 .unwrap(),
             store: crate::store::Store::open(dir.path().into()).await.unwrap(),
-            backend: "127.0.0.1:1".parse().unwrap(),
+            backend: "127.0.0.1:1"
+                .parse::<std::net::SocketAddr>()
+                .unwrap()
+                .into(),
             tunnels: Arc::new(tokio::sync::Semaphore::new(32)),
             probes: Arc::new(tokio::sync::Semaphore::new(4)),
             trusted_proxies: Vec::new(),

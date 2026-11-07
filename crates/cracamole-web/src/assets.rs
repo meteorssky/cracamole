@@ -25,7 +25,6 @@ pub const INDEX: &[u8] = include_bytes!("../../../web/index.html");
 const CSS: &str = "text/css; charset=utf-8";
 const JS: &str = "text/javascript; charset=utf-8";
 const PNG: &str = "image/png";
-const SVG: &str = "image/svg+xml; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
 
 pub static ASSETS: &[Asset] = &[
@@ -85,6 +84,7 @@ pub static ASSETS: &[Asset] = &[
     asset!("js/views/options.js", JS, "js/views/options.js"),
     asset!("js/views/stage.js", JS, "js/views/stage.js"),
     asset!("js/views/trust.js", JS, "js/views/trust.js"),
+    asset!("js/views/logs.js", JS, "js/views/logs.js"),
     asset!("vendor/guacamole.js", JS, "vendor/guacamole.js"),
     asset!("NOTICE", TEXT, "vendor/NOTICE"),
     asset!("LICENSE", TEXT, "vendor/LICENSE"),

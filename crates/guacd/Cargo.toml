@@ -13,10 +13,11 @@ name = "guacd"
 path = "src/main.rs"
 
 [features]
-default = ["telnet", "ssh", "rdp"]
+default = ["telnet", "ssh", "rdp", "vnc"]
 telnet = ["dep:proto-telnet"]
 ssh = ["dep:proto-ssh"]
 rdp = ["dep:proto-rdp"]
+vnc = ["dep:proto-vnc"]
 
 [dependencies]
 guac-session = { path = "../guac-session" }
@@ -25,8 +26,10 @@ guac-terminal = { path = "../guac-terminal" }
 proto-telnet = { path = "../proto-telnet", optional = true }
 proto-ssh = { path = "../proto-ssh", optional = true }
 proto-rdp = { path = "../proto-rdp", optional = true }
+proto-vnc = { path = "../proto-vnc", optional = true }
 tokio.workspace = true
 tokio-util = "0.7"
+serde = { version = "1", features = ["derive"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt"] }
 

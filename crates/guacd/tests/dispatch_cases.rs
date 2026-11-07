@@ -112,7 +112,7 @@ async fn gd_dsp_02_telnet_args_are_exactly_the_c_list() {
     let args = c.expect("args").await.args;
     assert_eq!(args[0], "VERSION_1_5_0");
     assert_eq!(&args[1..], proto_telnet::ARGS);
-    assert_eq!(args.len(), 38);
+    assert_eq!(args.len(), 39);
 }
 
 #[tokio::test]
@@ -328,7 +328,9 @@ async fn gd_dsp_15_registry_lists_builtins() {
     assert!(r.get("telnet").is_some());
     #[cfg(feature = "rdp")]
     assert!(r.get("rdp").is_some());
-    assert!(r.get("vnc").is_none());
+    #[cfg(feature = "vnc")]
+    assert!(r.get("vnc").is_some());
+    assert!(r.get("kubernetes").is_none());
     assert_eq!(Registry::new().names().len(), 0);
 }
 
@@ -341,7 +343,7 @@ async fn gd_dsp_16_ssh_args_are_exactly_the_c_list() {
     let args = c.expect("args").await.args;
     assert_eq!(args[0], "VERSION_1_5_0");
     assert_eq!(&args[1..], proto_ssh::ARGS);
-    assert_eq!(args.len(), 46);
+    assert_eq!(args.len(), 47);
 }
 
 #[cfg(feature = "ssh")]
@@ -369,9 +371,9 @@ async fn gd_dsp_17_ssh_connect_failure_reaches_client_through_guacd() {
     assert_eq!(e.args, vec!["Aborted. See logs.", "520"]);
 }
 
-#[cfg(all(feature = "ssh", feature = "telnet", feature = "rdp"))]
+#[cfg(all(feature = "ssh", feature = "telnet", feature = "rdp", feature = "vnc"))]
 #[tokio::test]
 async fn gd_dsp_18_all_builtin_protocols_registered() {
     let r = Registry::builtin();
-    assert_eq!(r.names(), vec!["rdp", "ssh", "telnet"]);
+    assert_eq!(r.names(), vec!["rdp", "ssh", "telnet", "vnc"]);
 }

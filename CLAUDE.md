@@ -24,12 +24,15 @@ cargo bench -p guac-terminal --bench mvp --locked
 
 文件以繁體中文撰寫,請沿用。
 
+終端機編碼：SSH／Telnet 預設 UTF-8，`character-encoding` 可明確選擇 Big5、GBK、GB18030 與日韓等舊編碼；僅轉換遠端終端機文字。SSH 驗證與 Web／Guacamole 仍用 Unicode，RDP 剪貼簿維持 Unicode；不得正規化密碼。跨封包解碼、不可表示輸入的整批拒絕及真實瀏覽器字形比較見 README 與 `scripts/text_dev.sh`。C oracle 須明確傳入 `--allow-terminal-encoding-extension`，不能把前綴不符當作相容。
+
 ## C 版參考原始碼
 
 `reference/guacamole-server/` 是 Apache `guacamole-server` 的本機 clone(`.gitignore` 已忽略,**不屬於本 repo**,不可 commit、不可把其程式碼複製進 Rust crate)。版本為 `main` @ `bb1ba8ed`(2026-11-03,`configure.ac` 為 1.6.1,最新兩個修正即 GUACAMOLE-2323 / 2350,與筆記一致)。上游沒有 1.6.1 tag,所以筆記是依 `main`。用途:回填 `⟳C` 預期值、核對筆記與檔名。唯讀使用。
 
 ## 文件地圖(動工前先讀)
 
+- `docs/reference-gap-analysis.md` — **C 參考實作 vs 現有功能差距全盤掃描報告**（2026-11-08 最新落實現狀對照，涵蓋架構、協定、17 領域、安全與 UI/UX 比對）。
 - `docs/rust-migration/00-index-and-coverage.md` — C 版相容性參考入口，含已被證偽的前提與已知缺陷。僅在判讀歷史 C 行為時參考較新的 addendum；現行產品範圍以使用者決定與 `AGENTS.md` 為準，實際行為須核對程式碼及測試。
 - `docs/rust-migration/NN-*.md` — 對原 C 專案(guacamole-server 1.6.1)的逐檔閱讀筆記，作為 daemon 相容性參考。不能覆蓋使用者明確指定的無 Java 與單一管理員範圍。引用格式 `[11]` = `11-protocol-ssh.md`。覆蓋率約 93% 且為推論，與 C 版實測不符時應更正筆記。
 - `docs/java-free-mvp.md` — 現行完整系統架構、檔案、API、帳號範圍、資料保存與無 Java 驗收；優先於舊計畫中保留 Java webapp 的內容。
