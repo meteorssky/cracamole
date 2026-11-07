@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>cracamole</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/logo.svg">
   <link rel="stylesheet" href="/assets/css/tokens.css">
   <link rel="stylesheet" href="/assets/css/base.css">
   <link rel="stylesheet" href="/assets/css/layout.css">
@@ -28,7 +29,7 @@
 
   <section id="login-view" class="login" hidden>
     <div class="brand">
-      <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2 12a10 10 0 0 0 20 0z" fill="currentColor"/></svg>
+      <img class="brand__mark" src="/assets/logo.svg" alt="" width="36" height="36">
       <span>cracamole</span>
     </div>
     <form id="login-form" class="login__card" novalidate>
@@ -53,7 +54,7 @@
       <aside id="library" class="drawer" aria-label="連線庫">
         <div class="drawer__head">
           <div class="brand">
-            <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2 12a10 10 0 0 0 20 0z" fill="currentColor"/></svg>
+            <img class="brand__mark" src="/assets/logo.svg" alt="" width="28" height="28">
             <h2>連線庫</h2>
           </div>
           <div class="drawer__actions">
@@ -79,6 +80,7 @@
         </div>
         <div id="terminal" class="terminal" tabindex="0" role="group" aria-label="遠端終端機">
           <div id="terminal-placeholder" class="empty">
+            <img class="brand__hero" src="/assets/logo.svg" alt="" width="56" height="56">
             <div class="status-banner">
               <span class="dot" data-state="idle" aria-hidden="true"></span>
               <span>目前狀態：未連線</span>

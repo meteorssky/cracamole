@@ -20,9 +20,15 @@
 }
 
 .brand__mark {
-  inline-size: 1.5rem;
-  block-size: 1.5rem;
-  color: var(--accent-hover);
+  inline-size: 2rem;
+  block-size: 2rem;
+  border-radius: var(--radius-md);
+}
+
+.brand__hero {
+  inline-size: 3.5rem;
+  block-size: 3.5rem;
+  border-radius: var(--radius-lg);
 }
 
 .login__card {
