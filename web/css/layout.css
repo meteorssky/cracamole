@@ -23,12 +23,21 @@
   inline-size: 2rem;
   block-size: 2rem;
   border-radius: var(--radius-md);
+  object-fit: contain;
+}
+
+.brand__banner {
+  inline-size: 13rem;
+  block-size: auto;
+  border-radius: var(--radius-lg);
+  object-fit: contain;
 }
 
 .brand__hero {
-  inline-size: 3.5rem;
-  block-size: 3.5rem;
+  inline-size: 4rem;
+  block-size: 4rem;
   border-radius: var(--radius-lg);
+  object-fit: contain;
 }
 
 .login__card {

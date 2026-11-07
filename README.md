@@ -1,4 +1,4 @@
-# <img src="web/logo.svg" alt="cracamole logo" width="44" height="44" align="top"> cracamole
+# <img src="web/logo-emblem.png" alt="cracamole logo" width="44" height="44" align="top"> cracamole
 
 > **無 Java、單一執行檔、內嵌私有協定引擎的瀏覽器遠端連線工作台（SSH / Telnet / RDP）**
 
