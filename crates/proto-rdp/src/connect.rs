@@ -154,8 +154,11 @@ async fn probe_certificate_inner(
         .map_err(|e| SessionError::plugin(Status::UpstreamUnavailable, e.to_string()))?;
     let mut params = guac_session::Params::new();
     params.insert("hostname", host);
-    let settings = RdpSettings::from_params(&params)
+    let mut settings = RdpSettings::from_params(&params)
         .ok_or_else(|| SessionError::plugin(Status::ClientBadRequest, "No hostname provided."))?;
+    // The probe sends no credentials, so offering every protocol is safe and lets it read the
+    // certificate whichever one the server insists on.
+    settings.security = Security::Any;
     let mut connector = ClientConnector::new(build_config(&settings, 1024, 768), peer);
     let mut framed = TokioFramed::new(stream);
     ironrdp_tokio::connect_begin(&mut framed, &mut connector)

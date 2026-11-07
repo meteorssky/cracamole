@@ -243,6 +243,24 @@ async fn web_connection_crud_persists_across_restart_without_returning_credentia
         3
     );
     assert!(connection["params"].get("password").is_none());
+    // Same destination (only name/username change): omitted secrets are kept.
+    let rename = json!({"name":"Renamed","protocol":"ssh","params":{"hostname":"Configured.Example ","port":"22","username":"other"}});
+    let (status, _, kept) = call(
+        &service,
+        "PUT",
+        &path,
+        Some(rename),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kept["configured_secrets"].as_array().unwrap().len(), 3);
+    let raw: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("connections.json")).unwrap())
+            .unwrap();
+    assert_eq!(raw[id]["params"]["password"], "backend-password");
+    // Changed hostname or port: saved secrets must NOT follow to the new destination.
     let update = json!({"name":"Renamed","protocol":"ssh","params":{"hostname":"changed.example","port":"2222"}});
     assert_eq!(
         call(
@@ -260,7 +278,12 @@ async fn web_connection_crud_persists_across_restart_without_returning_credentia
     let raw: Value =
         serde_json::from_slice(&std::fs::read(dir.path().join("connections.json")).unwrap())
             .unwrap();
-    assert_eq!(raw[id]["params"]["password"], "backend-password");
+    for secret in ["password", "private-key", "passphrase"] {
+        assert!(
+            raw[id]["params"].get(secret).is_none(),
+            "{secret} leaked to a changed destination"
+        );
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

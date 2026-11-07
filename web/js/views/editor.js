@@ -119,10 +119,10 @@ function fillSecretHints(connection) {
     form().elements[secret].placeholder = configured.includes(secret) ? '已設定；留空保留' : '';
   }
   const passwordHint = $(hints.password);
-  passwordHint.textContent = configured.includes('password') ? '已設定密碼。留空會保留目前的密碼。' : '';
+  passwordHint.textContent = configured.includes('password') ? '已設定密碼。留空會保留目前的密碼；若變更主機、連接埠或憑證驗證設定，須重新輸入。' : '';
   passwordHint.hidden = !configured.includes('password');
   const keyHint = $(hints['private-key']);
-  keyHint.textContent = configured.includes('private-key') ? '已設定私鑰。留空會保留目前的私鑰。' : '';
+  keyHint.textContent = configured.includes('private-key') ? '已設定私鑰。留空會保留目前的私鑰；若變更主機或連接埠，須重新輸入。' : '';
   keyHint.hidden = !configured.includes('private-key');
   $('clear-secrets-row').hidden = configured.length === 0;
 }

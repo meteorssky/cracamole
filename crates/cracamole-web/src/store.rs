@@ -184,6 +184,25 @@ pub fn validate(draft: &Draft) -> Result<(), Invalid> {
     Ok(())
 }
 
+/// Parameters that decide where, and under what verification, saved secrets are sent.
+/// Pins (`host-key`, `server-cert-sha256`) are deliberately excluded: trusting a host
+/// updates them on an otherwise unchanged connection.
+const DESTINATION: &[&str] = &["hostname", "port", "ignore-cert", "security"];
+
+/// Saved secrets may only be carried over when the destination is unchanged;
+/// otherwise a stolen session could redirect them to an attacker's host.
+fn same_destination(old: &BTreeMap<String, String>, new: &BTreeMap<String, String>) -> bool {
+    let norm = |params: &BTreeMap<String, String>, key: &str| {
+        params
+            .get(key)
+            .map(|v| v.trim().to_ascii_lowercase())
+            .unwrap_or_default()
+    };
+    DESTINATION
+        .iter()
+        .all(|key| norm(old, key) == norm(new, key))
+}
+
 pub struct Store {
     path: PathBuf,
     entries: Mutex<BTreeMap<String, Connection>>,
@@ -256,7 +275,7 @@ impl Store {
         };
         let mut params = draft.params;
         if let Some(old) = next.get(&id) {
-            if old.protocol == draft.protocol {
+            if old.protocol == draft.protocol && same_destination(&old.params, &params) {
                 for key in SECRETS {
                     if !params.contains_key(*key) {
                         if let Some(value) = old.params.get(*key) {
