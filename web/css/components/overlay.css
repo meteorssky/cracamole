@@ -32,6 +32,19 @@
   color: var(--text-danger);
 }
 
+.overlay__cert {
+  inline-size: 100%;
+  padding: var(--space-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .overlay__actions {
   display: flex;
   flex-wrap: wrap;

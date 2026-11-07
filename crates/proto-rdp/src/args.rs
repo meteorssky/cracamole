@@ -9,6 +9,7 @@ pub const ARGS: &[&str] = &[
     "password",
     "security",
     "ignore-cert",
+    "server-cert-sha256",
     "color-depth",
     "read-only",
     "disable-copy",

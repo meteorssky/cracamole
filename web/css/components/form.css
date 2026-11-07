@@ -77,6 +77,31 @@ textarea.input {
   font-size: var(--text-sm);
 }
 
+.stack {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.group--details {
+  gap: var(--space-3);
+}
+
+.group--details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  padding-block: var(--space-1);
+}
+
+.group--details[open] > summary {
+  margin-block-end: var(--space-4);
+}
+
+.options {
+  display: grid;
+  gap: var(--space-3);
+}
+
 .form-error {
   padding: var(--space-3);
   background: var(--surface-sunken);

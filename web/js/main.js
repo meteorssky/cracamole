@@ -72,6 +72,10 @@ async function boot() {
   initStage({
     onEdit: connection => openEditor(connection),
     onActive: id => setActive(id),
+    onTrusted: async connection => {
+      await refreshConnections();
+      openSession(connection);
+    },
   });
   for (const button of document.querySelectorAll('[data-new-protocol]')) {
     button.addEventListener('click', () => openEditor(null, button.dataset.newProtocol));

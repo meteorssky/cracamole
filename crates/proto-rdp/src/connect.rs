@@ -1,6 +1,6 @@
 //! RDP connection sequence: X.224 negotiation, TLS upgrade, optional NLA, capability exchange.
 
-use crate::settings::{RdpSettings, Security};
+use crate::settings::{CertPin, RdpSettings, Security};
 use guac_session::{SessionError, Status};
 use ironrdp_connector::sspi::generator::NetworkRequest;
 use ironrdp_connector::{
@@ -14,8 +14,10 @@ use ironrdp_pdu::rdp::capability_sets::{MajorPlatformType, RailSupportLevel};
 use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp_tls::CertificateValidation;
 use ironrdp_tokio::{NetworkClient, TokioFramed};
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
+use x509_cert::der::Encode;
 
 pub type Framed = TokioFramed<ironrdp_tls::TlsStream<TcpStream>>;
 
@@ -105,6 +107,74 @@ pub fn build_config(s: &RdpSettings, width: u32, height: u32) -> Config {
     }
 }
 
+/// SHA-256 of the certificate's DER encoding, as 64 lowercase hex characters.
+pub fn fingerprint(cert: &x509_cert::Certificate) -> Option<String> {
+    let der = cert.to_der().ok()?;
+    Some(
+        Sha256::digest(&der)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
+/// What the user needs to decide whether to trust an RDP server's certificate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertInfo {
+    pub sha256: String,
+    pub subject: String,
+    pub issuer: String,
+}
+
+/// Perform only the X.224 negotiation and TLS handshake, accepting any certificate, and report it.
+/// Nothing is authenticated and no session is opened.
+pub async fn probe_certificate(
+    host: &str,
+    port: u16,
+    timeout_secs: u64,
+) -> Result<CertInfo, SessionError> {
+    let stream = guac_session::connect_tcp(host, port, timeout_secs).await?;
+    let peer: SocketAddr = stream
+        .peer_addr()
+        .map_err(|e| SessionError::plugin(Status::UpstreamUnavailable, e.to_string()))?;
+    let mut params = guac_session::Params::new();
+    params.insert("hostname", host);
+    let settings = RdpSettings::from_params(&params)
+        .ok_or_else(|| SessionError::plugin(Status::ClientBadRequest, "No hostname provided."))?;
+    let mut connector = ClientConnector::new(build_config(&settings, 1024, 768), peer);
+    let mut framed = TokioFramed::new(stream);
+    ironrdp_tokio::connect_begin(&mut framed, &mut connector)
+        .await
+        .map_err(upstream)?;
+    let (_tls, cert) = ironrdp_tls::upgrade_with_certificate_validation(
+        framed.into_inner_no_leftover(),
+        host,
+        CertificateValidation::DangerouslyAcceptInvalidCertificate,
+    )
+    .await
+    .map_err(|e| upstream(format!("TLS handshake failed: {e}")))?;
+    Ok(CertInfo {
+        sha256: fingerprint(&cert).ok_or_else(|| upstream("cannot encode the certificate"))?,
+        subject: cert.tbs_certificate().subject().to_string(),
+        issuer: cert.tbs_certificate().issuer().to_string(),
+    })
+}
+
+/// `outer: inner: innermost`, so the log says why (for example which CredSSP step failed).
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(inner) = source {
+        let part = inner.to_string();
+        if !text.ends_with(&part) {
+            text.push_str(": ");
+            text.push_str(&part);
+        }
+        source = inner.source();
+    }
+    text
+}
+
 fn upstream(e: impl std::fmt::Display) -> SessionError {
     SessionError::plugin(Status::UpstreamError, format!("RDP connection failed: {e}"))
 }
@@ -134,7 +204,19 @@ pub async fn establish(
         .await
         .map_err(upstream)?;
 
-    let validation = if s.ignore_cert {
+    // A pinned fingerprint is checked after the handshake (below). It is stricter than `ignore-cert`,
+    // so it wins when both are set.
+    let pinned = match &s.cert_pin {
+        CertPin::Invalid => {
+            return Err(SessionError::plugin(
+                Status::ClientBadRequest,
+                "The trusted certificate fingerprint is not a valid SHA-256 value.",
+            ))
+        }
+        CertPin::Fingerprint(pin) => Some(pin.clone()),
+        CertPin::None => None,
+    };
+    let validation = if s.ignore_cert || pinned.is_some() {
         CertificateValidation::DangerouslyAcceptInvalidCertificate
     } else {
         CertificateValidation::Strict
@@ -149,6 +231,17 @@ pub async fn establish(
                     format!("TLS handshake with the RDP server failed: {e}"),
                 )
             })?;
+    if let Some(pin) = &pinned {
+        let actual = fingerprint(&cert).unwrap_or_default();
+        if &actual != pin {
+            return Err(SessionError::plugin(
+                Status::UpstreamError,
+                format!(
+                    "The RDP server certificate does not match the trusted one (SHA-256 {actual})."
+                ),
+            ));
+        }
+    }
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
     let server_public_key = ironrdp_tls::extract_tls_server_public_key(&cert)
         .ok_or_else(|| upstream("the server certificate has no public key"))?
@@ -166,7 +259,7 @@ pub async fn establish(
     )
     .await
     .map_err(|e| {
-        let text = e.to_string();
+        let text = error_chain(&e);
         let lower = text.to_lowercase();
         if lower.contains("logon") || lower.contains("credssp") || lower.contains("access denied") {
             SessionError::plugin(

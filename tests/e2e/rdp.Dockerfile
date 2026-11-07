@@ -2,7 +2,7 @@
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends xrdp xorgxrdp xterm dbus-x11 x11-utils netcat-openbsd xclip ca-certificates \
+ && apt-get install -y --no-install-recommends xrdp xorgxrdp xterm dbus-x11 x11-utils netcat-openbsd xclip openssl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -m -s /bin/bash tester \
  && echo 'tester:tester-pw' | chpasswd \

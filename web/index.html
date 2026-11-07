@@ -97,7 +97,9 @@
             <div id="overlay-spinner" class="spinner" aria-hidden="true" hidden></div>
             <h2 id="overlay-title" class="overlay__title"></h2>
             <p id="overlay-detail" class="muted"></p>
+            <p id="overlay-cert" class="overlay__cert" hidden></p>
             <div class="overlay__actions">
+              <button id="overlay-trust" class="btn btn--primary" type="button" hidden>信任這張憑證並重新連線</button>
               <button id="overlay-retry" class="btn btn--primary" type="button">重新連線</button>
               <button id="overlay-edit" class="btn" type="button">編輯連線</button>
               <button id="overlay-close" class="btn" type="button">回到連線庫</button>
@@ -208,6 +210,7 @@
 
       <fieldset class="group" data-protocols="rdp" hidden>
         <legend>RDP 驗證與憑證</legend>
+        <p class="field__hint">Windows 預設啟用網路層級驗證（NLA）：連線前就必須在上方填寫帳號與密碼，否則會驗證失敗。</p>
         <div class="form-grid">
           <div class="field">
             <label class="field__label" for="f-domain">網域（可選）</label>
@@ -222,11 +225,19 @@
             </select>
           </div>
         </div>
+        <div class="field">
+          <label class="field__label" for="f-cert">已信任的伺服器憑證指紋（SHA-256）</label>
+          <input class="input" id="f-cert" name="server-cert-sha256" spellcheck="false" autocomplete="off" placeholder="首次連線時會顯示指紋，確認後可一鍵信任" aria-describedby="hint-cert error-server-cert-sha256">
+          <p class="field__hint" id="hint-cert">只接受指紋相符的憑證（自簽憑證也可以）；憑證改變時會擋下連線。清空會改回驗證憑證簽發者。</p>
+          <p class="field__error" id="error-server-cert-sha256" hidden></p>
+        </div>
         <label class="check">
           <input id="f-ignore-cert" name="ignore-cert" type="checkbox">
-          <span>接受自簽或無法驗證的伺服器憑證<br><span class="field__hint">只在你信任的內網使用；否則無法偵測中間人攻擊。</span></span>
+          <span>不驗證伺服器憑證（不建議）<br><span class="field__hint">任何憑證都會被接受，無法偵測中間人攻擊。建議改用上方的憑證指紋。</span></span>
         </label>
       </fieldset>
+
+      <div id="protocol-options" class="options"></div>
 
       <label id="clear-secrets-row" class="check" hidden>
         <input id="f-clear-secrets" name="clear-secrets" type="checkbox">

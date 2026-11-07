@@ -2767,8 +2767,10 @@ dependencies = [
  "ironrdp-session",
  "ironrdp-tls",
  "ironrdp-tokio",
+ "sha2",
  "tokio",
  "tracing",
+ "x509-cert",
 ]
 
 [[package]]

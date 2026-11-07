@@ -9,6 +9,26 @@ pub enum Security {
     Tls,
 }
 
+/// A server certificate the user explicitly trusted, by SHA-256 fingerprint of its DER encoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertPin {
+    /// Nothing pinned: validate against the system roots (or accept anything with `ignore-cert`).
+    None,
+    Fingerprint(String),
+    /// Set but unparsable. Never downgraded to "no pin": the connection is refused.
+    Invalid,
+}
+
+/// Accepts `AB:CD:..`, `ab cd ..` or plain hex; returns 64 lowercase hex characters.
+pub fn normalize_fingerprint(text: &str) -> Option<String> {
+    let hex: String = text
+        .chars()
+        .filter(|c| !matches!(c, ':' | ' ' | '-'))
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    (hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())).then_some(hex)
+}
+
 #[derive(Debug, Clone)]
 pub struct RdpSettings {
     pub hostname: String,
@@ -19,6 +39,7 @@ pub struct RdpSettings {
     pub password: String,
     pub security: Security,
     pub ignore_cert: bool,
+    pub cert_pin: CertPin,
     pub read_only: bool,
     pub disable_copy: bool,
     pub disable_paste: bool,
@@ -67,6 +88,14 @@ impl RdpSettings {
             password: p.get("password").unwrap_or("").to_string(),
             security,
             ignore_cert: p.get_bool("ignore-cert"),
+            cert_pin: match p
+                .get("server-cert-sha256")
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+            {
+                None => CertPin::None,
+                Some(v) => normalize_fingerprint(v).map_or(CertPin::Invalid, CertPin::Fingerprint),
+            },
             read_only: p.get_bool("read-only"),
             disable_copy: p.get_bool("disable-copy"),
             disable_paste: p.get_bool("disable-paste"),
@@ -84,5 +113,40 @@ impl RdpSettings {
             menu_animations: p.get_bool("enable-menu-animations"),
             warnings,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fingerprints_are_normalised() {
+        let hex = "ab".repeat(32);
+        assert_eq!(normalize_fingerprint(&hex), Some(hex.clone()));
+        let colons = vec!["AB"; 32].join(":");
+        assert_eq!(normalize_fingerprint(&colons), Some(hex));
+        assert_eq!(normalize_fingerprint("abcd"), None);
+        assert_eq!(normalize_fingerprint(&"zz".repeat(32)), None);
+    }
+
+    #[test]
+    fn an_unparsable_pin_is_never_treated_as_no_pin() {
+        let mut p = Params::new();
+        p.insert("hostname", "h");
+        assert_eq!(
+            RdpSettings::from_params(&p).unwrap().cert_pin,
+            CertPin::None
+        );
+        p.insert("server-cert-sha256", "not-a-fingerprint");
+        assert_eq!(
+            RdpSettings::from_params(&p).unwrap().cert_pin,
+            CertPin::Invalid
+        );
+        p.insert("server-cert-sha256", "CD".repeat(32));
+        assert_eq!(
+            RdpSettings::from_params(&p).unwrap().cert_pin,
+            CertPin::Fingerprint("cd".repeat(32))
+        );
     }
 }

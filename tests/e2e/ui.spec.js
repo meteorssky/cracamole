@@ -76,7 +76,7 @@ test('ui: the editor shows only the fields of the selected protocol and explains
   await expect(form.getByLabel('主機金鑰（建議填寫）')).toBeHidden();
   await protocol.selectOption('rdp');
   await expect(form.getByLabel('網域（可選）')).toBeVisible();
-  await expect(form.getByRole('checkbox', { name: /接受自簽/ })).toBeVisible();
+  await expect(form.getByRole('checkbox', { name: /不驗證伺服器憑證/ })).toBeVisible();
   await protocol.selectOption('ssh');
 
   // each mistake is reported next to its field, marks it invalid and moves focus there
@@ -166,6 +166,94 @@ test('ui: the theme can be switched and is remembered', async ({ page }) => {
   await expect(html).toHaveAttribute('data-theme', 'light');
   await page.locator('#theme-toggle').click();
   await expect(html).toHaveAttribute('data-theme', 'dark');
+});
+
+const section = (form, title) => form.locator('summary', { hasText: title });
+
+test('ui: advanced settings are different for SSH, Telnet and RDP', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: '新增連線', exact: true }).click();
+  const form = page.locator('#connection-form');
+  const protocol = form.getByLabel('協定', { exact: true });
+  const shows = async (visible, hidden) => {
+    for (const title of visible) await expect(section(form, title), title).toBeVisible();
+    for (const title of hidden) await expect(section(form, title), title).toBeHidden();
+  };
+
+  await shows(['終端機外觀與輸入', 'SSH 連線選項', '連線控制'], ['RDP 畫面與效能', 'RDP 工作階段']);
+  await protocol.selectOption('telnet');
+  await shows(['終端機外觀與輸入', '連線控制'], ['SSH 連線選項', 'RDP 畫面與效能', 'RDP 工作階段']);
+  await protocol.selectOption('rdp');
+  await shows(['RDP 畫面與效能', 'RDP 工作階段', '連線控制'], ['終端機外觀與輸入', 'SSH 連線選項']);
+
+  await section(form, 'RDP 畫面與效能').click();
+  await expect(form.getByRole('checkbox', { name: '顯示桌布' })).toBeVisible();
+  await expect(form.getByLabel('字型大小（pt）')).toBeHidden();
+  await protocol.selectOption('ssh');
+  await section(form, 'SSH 連線選項').click();
+  await expect(form.getByLabel('連線後執行的指令')).toBeVisible();
+  await expect(form.getByRole('checkbox', { name: '顯示桌布' })).toBeHidden();
+});
+
+test('ui: advanced settings are saved, restored, and dropped when the protocol changes', async ({ page }) => {
+  const name = `Options ${Date.now()}`;
+  await login(page);
+  await page.getByRole('button', { name: '新增連線', exact: true }).click();
+  const form = page.locator('#connection-form');
+  await form.getByLabel('連線名稱').fill(name);
+  await form.getByLabel('主機名稱或 IP').fill('example.invalid');
+  await section(form, '終端機外觀與輸入').click();
+  await form.getByLabel('字型大小（pt）').fill('16');
+  await form.getByLabel('配色').selectOption('green-black');
+  await form.getByLabel('捲動緩衝（行數）').fill('5000');
+  await section(form, '連線控制').click();
+  await form.getByRole('checkbox', { name: /唯讀/ }).check();
+  await form.getByRole('button', { name: '儲存連線' }).click();
+  await expect(page.locator('#connection-editor')).not.toBeVisible();
+
+  const stored = async () => (await (await page.request.get('api/connections')).json()).find(c => c.name === name);
+  let params = (await stored()).params;
+  expect(params).toMatchObject({ 'font-size': '16', 'color-scheme': 'green-black', scrollback: '5000', 'read-only': 'true' });
+  expect(params.command).toBeUndefined(); // unset options are not stored at all
+
+  // reopening restores them
+  await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click();
+  await expect(form.getByLabel('字型大小（pt）')).toHaveValue('16');
+  await expect(form.getByLabel('配色')).toHaveValue('green-black');
+  await expect(form.getByRole('checkbox', { name: /唯讀/ })).toBeChecked();
+
+  // switching to RDP removes the terminal-only settings and keeps the shared ones
+  await form.getByLabel('協定', { exact: true }).selectOption('rdp');
+  await section(form, 'RDP 畫面與效能').click();
+  await form.getByRole('checkbox', { name: '顯示桌布' }).check();
+  await form.getByRole('button', { name: '儲存連線' }).click();
+  await expect(page.locator('#connection-editor')).not.toBeVisible();
+  params = (await stored()).params;
+  expect(params['enable-wallpaper']).toBe('true');
+  expect(params['read-only']).toBe('true');
+  for (const gone of ['font-size', 'color-scheme', 'scrollback', 'terminal-type', 'host-key']) expect(params[gone]).toBeUndefined();
+});
+
+test('ui: an invalid advanced value is explained next to its field, even inside a collapsed section', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: '新增連線', exact: true }).click();
+  const form = page.locator('#connection-form');
+  await form.getByLabel('連線名稱').fill('bad option');
+  await form.getByLabel('主機名稱或 IP').fill('example.invalid');
+  await section(form, '連線控制').click();
+  await form.getByLabel('連線逾時（秒）').fill('999');
+  await section(form, '連線控制').click(); // collapse again
+  await form.getByRole('button', { name: '儲存連線' }).click();
+  await expect(form.getByText('連線逾時（秒）須為 1 到 120 的整數，或留空使用預設值。')).toBeVisible();
+  await expect(form.getByLabel('連線逾時（秒）')).toHaveAttribute('aria-invalid', 'true');
+
+  // the server enforces the same rule
+  const response = await page.request.post('api/connections', {
+    headers: { Origin: origin(page) },
+    data: { name: 'bad', protocol: 'ssh', params: { hostname: 'h', timeout: '999' } },
+  });
+  expect(response.status()).toBe(400);
+  expect((await response.json()).field).toBe('timeout');
 });
 
 for (const scheme of ['light', 'dark']) {

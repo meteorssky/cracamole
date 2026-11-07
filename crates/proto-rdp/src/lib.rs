@@ -10,7 +10,8 @@ mod session;
 pub mod settings;
 
 pub use args::ARGS;
-pub use settings::{RdpSettings, Security};
+pub use connect::{fingerprint, probe_certificate, CertInfo};
+pub use settings::{normalize_fingerprint, CertPin, RdpSettings, Security};
 
 use guac_session::{BoxFuture, Params, ProtocolPlugin, SessionCtx, SessionError, Status};
 

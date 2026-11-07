@@ -112,7 +112,8 @@ async function visibleInk(page, clip) {
   }, screenshot.toString('base64'));
 }
 
-async function addConnection(page, name, protocol, host = 'backend', port = '', password = 'tester-pw') {
+// options: { ignoreCert: false } leaves RDP certificate checking on; { certPin } pre-sets a trusted fingerprint.
+async function addConnection(page, name, protocol, host = 'backend', port = '', password = 'tester-pw', options = {}) {
   await page.getByRole('button', { name: '新增連線', exact: true }).click();
   const form = page.locator('#connection-form');
   await form.getByLabel('連線名稱').fill(name);
@@ -121,7 +122,10 @@ async function addConnection(page, name, protocol, host = 'backend', port = '', 
   if (port) await form.getByLabel('連接埠').fill(String(port));
   await form.getByLabel('帳號', { exact: true }).fill('tester');
   await form.getByLabel('密碼', { exact: true }).fill(password);
-  if (protocol === 'rdp') await form.getByRole('checkbox', { name: /接受自簽/ }).check();
+  if (protocol === 'rdp') {
+    if (options.ignoreCert !== false) await form.getByRole('checkbox', { name: /不驗證伺服器憑證/ }).check();
+    if (options.certPin) await form.getByLabel('已信任的伺服器憑證指紋（SHA-256）').fill(options.certPin);
+  }
   if (protocol === 'telnet') {
     await form.getByLabel('登入成功提示').fill(':~[$] ');
     await form.getByLabel('登入失敗提示').fill('Login incorrect');

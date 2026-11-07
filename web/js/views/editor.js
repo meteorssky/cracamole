@@ -2,14 +2,21 @@ import { api, ApiError } from '../api.js';
 import { $ } from '../util/dom.js';
 import { openDialog } from '../ui/dialog.js';
 import { DEFAULT_PORTS } from '../util/protocols.js';
+import { fillOptions, readOptions, renderOptions, validateOptions } from './options.js';
 
 const SECRET_FIELDS = ['password', 'private-key', 'passphrase'];
-const FIELD_ERROR_IDS = { name: 'error-name', protocol: 'error-protocol', port: 'error-port', hostname: 'error-hostname' };
+const FIELD_ERROR_IDS = {
+  name: 'error-name',
+  protocol: 'error-protocol',
+  port: 'error-port',
+  hostname: 'error-hostname',
+  'server-cert-sha256': 'error-server-cert-sha256',
+};
 
 // Parameters that only make sense for one protocol; removed when another protocol is saved.
 const SSH_ONLY = ['host-key', 'private-key', 'passphrase'];
 const TELNET_ONLY = ['login-success-regex', 'login-failure-regex'];
-const RDP_ONLY = ['domain', 'security', 'ignore-cert'];
+const RDP_ONLY = ['domain', 'security', 'ignore-cert', 'server-cert-sha256'];
 const TERMINAL_ONLY = ['terminal-type', 'func-keys-and-keypad'];
 
 let editing = null;
@@ -36,7 +43,7 @@ function clearErrors() {
 }
 
 function showError(field, message) {
-  const id = FIELD_ERROR_IDS[field];
+  const id = FIELD_ERROR_IDS[field] || (field && document.getElementById('error-' + field) ? 'error-' + field : null);
   if (!id) {
     $('editor-error').textContent = message;
     $('editor-error').hidden = false;
@@ -47,6 +54,7 @@ function showError(field, message) {
   node.hidden = false;
   const input = form().elements[field];
   input.setAttribute('aria-invalid', 'true');
+  input.closest('details')?.setAttribute('open', ''); // never leave an error inside a collapsed section
   input.focus();
 }
 
@@ -59,7 +67,7 @@ function validate(f) {
   if (port && !(/^[0-9]+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)) {
     return ['port', '連接埠須為 1 到 65535 的數字，或留空使用預設值。'];
   }
-  return null;
+  return validateOptions(f, f.elements.protocol.value);
 }
 
 function buildParams(f, protocol) {
@@ -77,6 +85,7 @@ function buildParams(f, protocol) {
     params.domain = f.elements.domain.value.trim();
     params.security = f.elements.security.value;
     params['ignore-cert'] = f.elements['ignore-cert'].checked ? 'true' : 'false';
+    params['server-cert-sha256'] = f.elements['server-cert-sha256'].value.trim();
     return params;
   }
   drop(RDP_ONLY);
@@ -121,9 +130,10 @@ export function openEditor(connection = null, protocol = null) {
     f.elements.protocol.value = protocol;
   }
   const params = connection?.params || {};
-  for (const name of ['hostname', 'port', 'username', 'host-key', 'login-success-regex', 'login-failure-regex', 'domain']) {
+  for (const name of ['hostname', 'port', 'username', 'host-key', 'login-success-regex', 'login-failure-regex', 'domain', 'server-cert-sha256']) {
     f.elements[name].value = params[name] || '';
   }
+  fillOptions(f, params);
   f.elements.security.value = params.security || 'any';
   f.elements['ignore-cert'].checked = params['ignore-cert'] === 'true';
   fillSecretHints(connection);
@@ -133,6 +143,7 @@ export function openEditor(connection = null, protocol = null) {
 
 export function initEditor({ saved }) {
   onSaved = saved;
+  renderOptions($('protocol-options'));
   const dialog = $('connection-editor');
   $('close-editor').addEventListener('click', () => dialog.close());
   $('cancel-editor').addEventListener('click', () => dialog.close());
@@ -155,7 +166,9 @@ export function initEditor({ saved }) {
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
     try {
-      const body = { name: f.elements.name.value.trim(), protocol, params: buildParams(f, protocol) };
+      const params = buildParams(f, protocol);
+      readOptions(f, protocol, params);
+      const body = { name: f.elements.name.value.trim(), protocol, params };
       const saved = await api('/connections' + (editing ? '/' + editing.id : ''), {
         method: editing ? 'PUT' : 'POST',
         body,

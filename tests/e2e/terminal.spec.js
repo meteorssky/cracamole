@@ -31,6 +31,43 @@ test('rdp: connect to xrdp, paint the desktop, keyboard reaches the remote sessi
   await expect(page.locator('#login-view')).toBeVisible();
 });
 
+const RDP_HOST = process.env.CRACAMOLE_RDP_HOST || 'rdp';
+const RDP_PORT = process.env.CRACAMOLE_RDP_PORT || '';
+const hex = text => text.split(':').join('').toLowerCase();
+
+test('rdp: an unverifiable certificate is shown for approval; trusting it connects and pins it', async ({ page }) => {
+  const name = `RDP cert ${Date.now()}`;
+  await login(page);
+  await addConnection(page, name, 'rdp', RDP_HOST, RDP_PORT, 'tester-pw', { ignoreCert: false });
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+
+  const overlay = page.locator('#overlay');
+  await expect(overlay).toContainText('無法驗證伺服器憑證', { timeout: 60000 });
+  const shown = (await page.locator('#overlay-cert').innerText()).match(/([0-9A-F][0-9A-F]:){31}[0-9A-F][0-9A-F]/)[0];
+  // the fingerprint must be the real one: ask the server's own openssl
+  const actual = rdpExec('openssl x509 -in /etc/xrdp/cert.pem -noout -fingerprint -sha256').split('=')[1].trim();
+  expect(shown).toBe(actual);
+
+  await overlay.getByRole('button', { name: '信任這張憑證並重新連線' }).click();
+  await expect(page.locator('#terminal-status')).toHaveText('已連線', { timeout: 60000 });
+  await expect.poll(() => visibleInk(page), { timeout: 60000 }).toBeGreaterThan(300);
+  const saved = (await (await page.request.get('api/connections')).json()).find(c => c.name === name);
+  expect(saved.params['server-cert-sha256']).toBe(hex(shown));
+  expect(saved.params['ignore-cert']).not.toBe('true');
+});
+
+test('rdp: a certificate that differs from the trusted one is refused with a warning', async ({ page }) => {
+  const name = `RDP changed ${Date.now()}`;
+  await login(page);
+  await addConnection(page, name, 'rdp', RDP_HOST, RDP_PORT, 'tester-pw', { ignoreCert: false, certPin: 'ab'.repeat(32) });
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
+  const overlay = page.locator('#overlay');
+  await expect(overlay).toContainText('憑證已變更', { timeout: 60000 });
+  await expect(overlay).toContainText('中途攔截');
+  await expect(overlay.getByRole('button', { name: '信任這張憑證並重新連線' })).toBeHidden();
+  await expect(page.locator('#terminal-status')).toHaveText('連線失敗');
+});
+
 test('rdp: mouse clicks reach the remote session', async ({ page }) => {
   const name = `RDP mouse ${Date.now()}`;
   await login(page);

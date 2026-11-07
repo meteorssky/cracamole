@@ -50,6 +50,34 @@ impl Connection {
     }
 }
 
+/// Numeric advanced settings: (parameter, minimum, maximum, message shown next to the field).
+const NUMERIC_OPTIONS: &[(&str, u32, u32, &str)] = &[
+    (
+        "timeout",
+        1,
+        120,
+        "連線逾時須為 1 到 120 的整數，或留空使用預設值。",
+    ),
+    (
+        "scrollback",
+        1,
+        100_000,
+        "捲動緩衝須為 1 到 100000 的整數，或留空使用預設值。",
+    ),
+    (
+        "server-alive-interval",
+        0,
+        3600,
+        "保持連線間隔須為 0 到 3600 的整數，或留空。",
+    ),
+    (
+        "font-size",
+        6,
+        72,
+        "字型大小須為 6 到 72 的整數，或留空使用預設值。",
+    ),
+];
+
 /// A rejected draft: which form field is wrong and what the user should do.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Invalid {
@@ -93,6 +121,33 @@ pub fn validate(draft: &Draft) -> Result<(), Invalid> {
             "hostname",
             "請填寫主機名稱或 IP（最長 255 字元）。",
         ));
+    }
+    for (name, min, max, message) in NUMERIC_OPTIONS {
+        if let Some(text) = draft
+            .params
+            .get(*name)
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+        {
+            if !text
+                .parse::<u32>()
+                .is_ok_and(|n| (*min..=*max).contains(&n))
+            {
+                return Err(invalid(name, message));
+            }
+        }
+    }
+    if let Some(pin) = draft
+        .params
+        .get("server-cert-sha256")
+        .filter(|s| !s.trim().is_empty())
+    {
+        if guacd::normalize_fingerprint(pin).is_none() {
+            return Err(invalid(
+                "server-cert-sha256",
+                "憑證指紋須為 64 個十六進位字元（SHA-256），可含冒號或空白；或留空。",
+            ));
+        }
     }
     if let Some(port) = draft.params.get("port").filter(|s| !s.is_empty()) {
         if port.parse::<u16>().ok().filter(|p| *p > 0).is_none() {
