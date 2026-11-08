@@ -7,6 +7,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
+use futures_util::SinkExt;
 use guac_protocol::{Instruction, Parser};
 use guac_session::InstructionReader;
 use serde::Deserialize;
@@ -178,9 +179,10 @@ async fn bridge(
 ) -> Result<(), String> {
     send(&mut socket, Instruction::new("", [id])).await?;
     let mut parser = Parser::new();
+    let mut peer_closed = false;
     let expiry = tokio::time::sleep_until(tokio::time::Instant::from_std(expires));
     tokio::pin!(expiry);
-    loop {
+    'bridge: loop {
         tokio::select! {
             _=cancel.cancelled()=>break,
             _=shutdown.cancelled()=>break,
@@ -202,10 +204,16 @@ async fn bridge(
                             } else if matches!(instruction.opcode.as_str(),"key"|"mouse"|"size"|"clipboard"|"blob"|"end"|"sync"|"ack"|"nop"|"disconnect") {
                                 tokio::time::timeout(Duration::from_secs(5),writer.write_all(&instruction.encode())).await
                                     .map_err(|_|"backend write timeout".to_string())?.map_err(|e|e.to_string())?;
+                                if instruction.opcode == "disconnect" { break 'bridge; }
                             } else {return Err("unsupported browser instruction".into())}
                         }
                     }
-                    Message::Close(_)=>break,
+                    Message::Close(_)=>{
+                        // Tungstenite 自動排入回覆，必須 flush 才能完成關閉交握。
+                        socket.flush().await.map_err(|e|e.to_string())?;
+                        peer_closed = true;
+                        break
+                    },
                     Message::Ping(bytes)=>{socket.send(Message::Pong(bytes)).await.map_err(|e|e.to_string())?;}
                     Message::Pong(_)=>{},
                     Message::Binary(_)=>return Err("binary messages are unsupported".into()),
@@ -214,11 +222,13 @@ async fn bridge(
         }
     }
     let _ = writer.shutdown().await;
-    let _ = socket
-        .send(Message::Close(Some(CloseFrame {
-            code: 1000,
-            reason: "".into(),
-        })))
-        .await;
+    if !peer_closed {
+        let _ = socket
+            .send(Message::Close(Some(CloseFrame {
+                code: 1000,
+                reason: "".into(),
+            })))
+            .await;
+    }
     Ok(())
 }

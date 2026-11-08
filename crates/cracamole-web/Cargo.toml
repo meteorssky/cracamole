@@ -6,13 +6,12 @@ license.workspace = true
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
-argon2 = { version = "0.6", features = ["getrandom"] }
 futures-util = { version = "0.3", features = ["sink"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1"
+cracamole-store = { path = "../cracamole-store" }
 guacd = { path = "../guacd" }
 guac-protocol = { path = "../guac-protocol" }
 guac-session = { path = "../guac-session" }
@@ -22,6 +21,7 @@ tokio-util = "0.7"
 tracing.workspace = true
 
 [dev-dependencies]
+tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.29"
 

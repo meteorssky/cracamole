@@ -11,7 +11,9 @@
 
 ## 架構與資料
 
-- Workspace 共十個 crate；維持依賴方向，底層不得依賴 Web 層，`guac-testkit` 僅作 dev-dependency。
+- Workspace 共十二個 crate；維持依賴方向，底層不得依賴 Web 層，`guac-testkit` 僅作 dev-dependency。Windows 原生介面開發中，須共用 Rust 協定與連線設定核心；完成前不得宣稱已可使用或驗收。
+- Windows 原生版的連線庫使用獨立私有目錄 `CRACAMOLE_DESKTOP_DATA_DIR`（預設 `%LOCALAPPDATA%\cracamole-desktop`）；不得與 Web 的資料目錄共用，因跨程序寫入尚未協調。既有資料不自動搬移，機密仍為明文。
+- `tests/rdp-fixture/` 是僅綁定 loopback、具獨立 Cargo lockfile 的 Rust 測試伺服器，不是正式部署入口；不可為配合它而變更產品 IronRDP 版本或弱化憑證驗證。
 - 管理員帳密由環境變數提供，沒有正式預設密碼。沿用 Argon2id、HttpOnly／SameSite cookie、同源檢查與登入限流；登出、session 到期與關機須關閉相關 tunnel。
 - SSH 未知金鑰必須先核對指紋並保存信任，不得自動略過驗證；撤銷優先於允許，不支援的安全標記與無效 known_hosts 必須拒絕載入。主機身分探測有總時限與共用併發額度，並隨 session／關機取消。
 - 代理來源只透過 `CRACAMOLE_TRUSTED_PROXIES` 明確列出的 peer IP 信任其覆寫的單一 `X-Real-IP`；不得直接信任任意轉送標頭。設定方式見 README。

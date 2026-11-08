@@ -115,7 +115,7 @@ fn dep_runs_serves_handshake_and_logs_in_guacd_format() {
             .unwrap();
         let a = c.expect("args").await;
         assert_eq!(a.args[0], "VERSION_1_5_0");
-        assert_eq!(a.args.len(), 38);
+        assert_eq!(&a.args[1..], proto_telnet::ARGS);
     });
 
     std::thread::sleep(Duration::from_millis(300));

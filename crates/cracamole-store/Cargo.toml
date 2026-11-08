@@ -1,0 +1,16 @@
+[package]
+name = "cracamole-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+argon2 = { version = "0.6", features = ["getrandom"] }
+guacd = { path = "../guacd" }
+guac-protocol = { path = "../guac-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio.workspace = true
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"

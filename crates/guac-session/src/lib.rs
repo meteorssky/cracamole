@@ -25,3 +25,4 @@ pub fn new_connection_id() -> String {
     format!("${}", uuid::Uuid::new_v4())
 }
 mod clipboard;
+pub use clipboard::Clipboards;

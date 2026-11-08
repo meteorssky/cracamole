@@ -154,8 +154,11 @@ async fn probe_certificate_inner(
         .map_err(|e| SessionError::plugin(Status::UpstreamUnavailable, e.to_string()))?;
     let mut params = guac_session::Params::new();
     params.insert("hostname", host);
-    let settings = RdpSettings::from_params(&params)
+    let mut settings = RdpSettings::from_params(&params)
         .ok_or_else(|| SessionError::plugin(Status::ClientBadRequest, "No hostname provided."))?;
+    // Discovery sends no credentials: permit either TLS or NLA to obtain the certificate.
+    // Actual connections still enforce the security mode chosen by the user.
+    settings.security = Security::Any;
     let mut connector = ClientConnector::new(build_config(&settings, 1024, 768), peer);
     let mut framed = TokioFramed::new(stream);
     ironrdp_tokio::connect_begin(&mut framed, &mut connector)
@@ -309,16 +312,19 @@ mod tests {
 
     #[tokio::test]
     async fn certificate_probe_deadline_covers_x224_and_tls_and_closes_socket() {
-        for respond in [false, true] {
+        for selected_protocol in [None, Some(1u8), Some(2u8)] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let peer = tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut data = [0; 2048];
                 assert!(stream.read(&mut data).await.unwrap() > 0);
-                if respond {
+                if let Some(protocol) = selected_protocol {
                     stream
-                        .write_all(&[3, 0, 0, 19, 14, 0xd0, 0, 0, 0, 0, 0, 2, 0, 8, 0, 1, 0, 0, 0])
+                        // Select TLS or HYBRID, then stall before the certificate is sent.
+                        .write_all(&[
+                            3, 0, 0, 19, 14, 0xd0, 0, 0, 0, 0, 0, 2, 0, 8, 0, protocol, 0, 0, 0,
+                        ])
                         .await
                         .unwrap();
                 }
@@ -336,7 +342,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap_err();
-            assert_eq!(error.status(), Status::UpstreamTimeout);
+            assert_eq!(
+                error.status(),
+                Status::UpstreamTimeout,
+                "selected_protocol={selected_protocol:?}: {error}"
+            );
             tokio::time::timeout(std::time::Duration::from_secs(1), peer)
                 .await
                 .unwrap()

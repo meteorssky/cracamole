@@ -3,7 +3,7 @@
 mod assets;
 mod auth;
 mod proxy;
-mod store;
+use cracamole_store as store;
 mod trust;
 mod tunnel;
 pub use proxy::parse_trusted_proxies;

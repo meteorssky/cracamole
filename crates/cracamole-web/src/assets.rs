@@ -25,7 +25,6 @@ pub const INDEX: &[u8] = include_bytes!("../../../web/index.html");
 const CSS: &str = "text/css; charset=utf-8";
 const JS: &str = "text/javascript; charset=utf-8";
 const PNG: &str = "image/png";
-const SVG: &str = "image/svg+xml; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
 
 pub static ASSETS: &[Asset] = &[

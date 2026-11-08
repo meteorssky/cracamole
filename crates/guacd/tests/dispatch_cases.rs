@@ -112,7 +112,7 @@ async fn gd_dsp_02_telnet_args_are_exactly_the_c_list() {
     let args = c.expect("args").await.args;
     assert_eq!(args[0], "VERSION_1_5_0");
     assert_eq!(&args[1..], proto_telnet::ARGS);
-    assert_eq!(args.len(), 38);
+    assert_eq!(args.len(), 39);
 }
 
 #[tokio::test]
@@ -341,7 +341,7 @@ async fn gd_dsp_16_ssh_args_are_exactly_the_c_list() {
     let args = c.expect("args").await.args;
     assert_eq!(args[0], "VERSION_1_5_0");
     assert_eq!(&args[1..], proto_ssh::ARGS);
-    assert_eq!(args.len(), 46);
+    assert_eq!(args.len(), 47);
 }
 
 #[cfg(feature = "ssh")]

@@ -23,6 +23,7 @@ async fn tel_legacy_encoding_covers_split_prompts_credentials_and_input() {
     let port = listener.local_addr().unwrap().port().to_string();
     let wire = vec![0xa4, 0xa4, 0xa4, 0xe5]; // Big5 中文
     let expected = wire.clone();
+    let (login_ready, login_ready_rx) = tokio::sync::oneshot::channel();
     let peer = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         stream.write_all(&[IAC, WILL, 1]).await.unwrap();
@@ -40,6 +41,7 @@ async fn tel_legacy_encoding_covers_split_prompts_credentials_and_input() {
         read_until(&mut stream, &mut acc, &credential).await;
         acc.clear();
         stream.write_all(b"OK\r\n").await.unwrap();
+        let _ = login_ready.send(());
         read_until(&mut stream, &mut acc, &expected).await;
     });
     let mut client = SimClient::new(TcpStream::connect(gaddr).await.unwrap());
@@ -61,7 +63,24 @@ async fn tel_legacy_encoding_covers_split_prompts_credentials_and_input() {
         )
         .await;
     let mut replay = DisplayReplay::new();
-    drain_frames(&mut client, &mut replay, 200).await;
+    tokio::time::timeout(Duration::from_secs(5), login_ready_rx)
+        .await
+        .expect("telnet 登入未完成")
+        .expect("測試服務提前結束");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !has_ink(&replay, 100) {
+            let instruction = client.recv().await.expect("連線在顯示登入結果前結束");
+            if instruction.opcode == "sync" {
+                client
+                    .send(Instruction::new("sync", [instruction.args[0].clone()]))
+                    .await
+                    .unwrap();
+            }
+            replay.apply(&instruction);
+        }
+    })
+    .await
+    .expect("登入結果未顯示");
     use base64::Engine;
     client
         .send(Instruction::new("clipboard", ["1", "text/plain"]))

@@ -53,12 +53,14 @@ flowchart LR
 - **零外部協定埠暴露**：`cracamole-web` 啟動時向作業系統申請 `127.0.0.1:0` 隨機埠啟動內嵌 `guacd` 任務，不提供任何對外 TCP 監聽。所有 WebSocket tunnel 升級皆必須先通過 Web 層的 Cookie Session 與同源（Same-Origin）檢查，並由伺服器端直接從本機設定庫注入機密參數，瀏覽器永遠拿不到連線密碼或私鑰。
 - **零執行期外部依賴**：前端採用原生 ES Modules 與 CSS Design Tokens（`web/`），由 `include_bytes!` 直接編入執行檔，並由單元測試（`every_web_file_is_served`）強制確保所有靜態檔皆有對應路由。正式環境不需要 Node.js（Node 僅用於開發期執行 Playwright E2E 與無障礙／對比度測試）。
 
-### 2. Workspace 模組分層（10 Crates）
+### 2. Workspace 模組分層（12 Crates）
 依賴方向嚴格由上往下，底層協定與顯示引擎絕不反向依賴 Web 層：
 
 | Crate | 職責與架構邊界 |
 |---|---|
 | `cracamole-web` | **系統正式部署入口**。提供 Axum HTTP/WebSocket 服務、Argon2id 管理員驗證、連線 CRUD、SSH/RDP 主機身分探測、內嵌靜態資產與私人 loopback `guacd` 生命週期管理。 |
+| `cracamole-store` | Web 與開發中的 Windows 原生介面共用的管理員帳密驗證、連線設定驗證與保存。 |
+| `cracamole-desktop` | 開發中的 Windows 原生介面；目前提供登入、基本連線新增／編輯／刪除、隨視窗調整的遠端畫面、輸入區、基本滑鼠及文字剪貼簿。原生系統剪貼簿、完整鍵鼠、真實 RDP 服務與可見畫面仍未完成驗收。登入使用 `CRACAMOLE_ADMIN_USERNAME`／`CRACAMOLE_ADMIN_PASSWORD`；桌面資料獨立保存於 `%LOCALAPPDATA%\cracamole-desktop`，可用 `CRACAMOLE_DESKTOP_DATA_DIR` 指定其他**專用目錄**。工作階段預設八小時；可用 `CRACAMOLE_DESKTOP_SESSION_MAX_SECS` 設定 1 至 28800 秒的較短期限。 |
 | `guacd` | Guacamole 線路協定路由與外掛註冊表（`Registry`）。可獨立執行以供相容性測試，但**非**完整 Web 系統入口。 |
 | `proto-ssh` | 純 Rust SSH 客戶端（基於 `russh`），支援密碼、OpenSSH/PEM 私鑰與密語、嚴格 `known_hosts` 驗證（含 `@revoked` 撤銷檢查）、PTY 動態縮放、雙向剪貼簿與安全貼上過濾。 |
 | `proto-telnet` | Telnet 狀態機與自動登入提示字元（正規表示式）比對，共用 `guac-terminal` 渲染管線。 |
@@ -68,6 +70,153 @@ flowchart LR
 | `guac-session` | 單一連線工作階段之讀寫迴圈、閒置心跳（`nop`/`sync`）與優雅關閉控制。 |
 | `guac-protocol` | Guacamole 線路指令（`len.content,len.content;`）零配置／串流解析器與編碼器，具備嚴格元素長度上限。 |
 | `guac-testkit` | 測試專用輔助庫（僅作為 `dev-dependency`）。 |
+
+Windows 原生版使用獨立資料目錄，不會自動讀取或遷移 Web 版連線；不得將桌面目錄與 Web 的 `CRACAMOLE_DATA_DIR` 設為同一目錄，因兩者尚未協調跨程序寫入。桌面版僅接受擁有者及 ACL 符合要求的私有目錄與檔案；機密仍以明文保存。「核對身分」可探測 SSH 金鑰或 RDP 憑證，供使用者經可信管道核對後保存；既有信任不符時不會自動取代。Windows 自動化以本機 SSH 伺服器及 TLS 模式 Rust RDP 測試伺服器驗證指紋、帳密、影格與輸入；已在 Windows x64 可見桌面比對 RDP 測試影格於縮放前後各九個像素。真實 Windows／xrdp 服務、NLA、其他畫面內容及更廣泛的可見畫面仍待端對端驗收。
+
+若有設定 `CRACAMOLE_DESKTOP_SESSION_MAX_SECS`，其值必須是 1 至 28800 的整數；無效值會使程式顯示錯誤並以非零狀態結束，避免誤用較長的預設期限。未設定時使用八小時。Windows x64 自動化已確認錯誤訊息、結束碼及不建立桌面資料目錄。
+
+SSH 自動化亦驗證中文及 UTF-16 代理對輸入可送達遠端；Windows x64 可見桌面已取樣測試終端機的文字及背景。Windows 輸入法的組字操作仍需實機驗收。
+
+Windows x64 的本機 Telnet fixture 另驗證原生視窗新增連線、接收影格、中英文輸入、登出或工作階段到期後伺服器在視窗關閉前收到 EOF，以及遠端主動結束時更新狀態並清除舊影格；預設使用隱藏視窗，未檢查螢幕合成畫面或實體輸入裝置。可在有互動桌面的工作階段使用下列命令取樣可見的測試文字與背景；測試短暫顯示自己的視窗而不切換焦點，並先確認取樣位置屬於測試程序。最近一次此可見測試及既有 SSH 可見測試在同一 RDP 工作階段均未偵測到預期像素；後續診斷顯示該工作階段的螢幕 `GetPixel` 在測試視窗及螢幕原點均回傳失敗，無法完成取樣，不能將失敗視為可見畫面通過或據此判定畫面渲染異常。
+
+```powershell
+$env:CRACAMOLE_TEST_VISIBLE_TELNET = '1'
+cargo test -p cracamole-desktop --test windows_telnet --locked native_telnet_connect_input_and_logout -- --exact --nocapture
+Remove-Item Env:CRACAMOLE_TEST_VISIBLE_TELNET
+```
+
+後續重測時螢幕原點的 `GetPixel` 可讀取，但 Telnet 可見測試仍失敗，最後回報測試影格的 `GetWindowRect` 失敗；SSH 可見測試確認取樣點屬於測試程序後，該點的 `GetPixel` 回傳失敗，故未能檢查文字。這些結果不足以確定畫面是否正確，仍需在可互動的桌面重新驗證。
+
+顯示環境的額外診斷回報主螢幕、虛擬桌面與螢幕裝置環境均為 2560×1440，但螢幕座標 (34, 161) 即使位於此範圍內，`GetPixel` 仍回傳失敗；可見測試不能僅憑原點讀取成功就視為環境可用。
+
+遠端輸入區會接收 Tab 等對話框導覽鍵，並支援 Ctrl 加字母、數字及鍵盤配置對應的符號鍵。Windows 自動化已驗證 Tab、Ctrl+2、Ctrl+3；Ctrl+[ 僅在該按鍵配置對應左方括號時驗證。
+
+遠端輸入區失去焦點時會立即釋放追蹤中的特殊鍵、控制組合鍵與修飾鍵，並保留定時檢查作為後備，降低切換視窗後遠端按鍵停留在按下狀態的機會。Windows x64 自動化以原生視窗訊息模擬 Ctrl+A、左方向鍵與失焦，確認本機 RDP 測試伺服器收到按下及放開事件；同步重入後的重試亦已測試，實體鍵盤操作仍待驗收。
+
+對使用 Ctrl 加右 Alt 表示 AltGr 的鍵盤，原生介面會暫時解除傳給遠端的 Ctrl，讓輸入文字不被誤當成控制字元；此路由已以鍵盤狀態及共用終端機測試，實體 AltGr 鍵盤配置仍待驗收。
+
+原生滑鼠座標依實際顯示的影格大小換算；影格置中或裁切時，留白不會當成遠端點擊，拖曳與放開會限制在可見範圍。Windows 收回滑鼠捕捉時會釋放遠端按鍵。自動化以隱藏的 Windows 控制項繪製到記憶體裝置環境，核對置中及裁切座標；完整實體滑鼠及可見合成畫面仍待驗收。
+
+在 Windows 安裝 Rust 與 MSVC 建置工具，並在啟動程式的環境中設定至少 12 字元的 `CRACAMOLE_ADMIN_PASSWORD`；`CRACAMOLE_ADMIN_USERNAME` 可省略，預設為 `admin`。在 repository 根目錄執行：
+
+```powershell
+cargo run -p cracamole-desktop --locked
+```
+
+也可建置 Windows x64 的最佳化執行檔：
+
+```powershell
+cargo build -p cracamole-desktop --release --locked
+& '.\target\release\cracamole-desktop.exe'
+```
+
+啟動執行檔前同樣須在該程序環境中設定管理員密碼。Windows x64 本機已以 release 執行檔測試錯誤設定、登入與連線管理、Telnet，以及 loopback fixture 的 RDP TLS／NLA；這不代表已完成真實遠端服務或實體輸入的驗收。
+
+目前的 MSVC release 執行檔動態依賴 Windows 系統程式庫、通用 C runtime 與 `VCRUNTIME140.dll`。目標電腦須具備版本不舊於建置工具的 [Microsoft Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)；不要單獨從非官方來源下載 DLL。尚未在全新安裝的 Windows 上驗證部署。
+
+若要另行建置靜態連結 CRT 的 Windows x64 版本，可使用獨立目錄，避免覆蓋上述執行檔：
+
+```powershell
+$previousRustFlags = $env:RUSTFLAGS
+try {
+    $env:RUSTFLAGS = '-C target-feature=+crt-static'
+    cargo build -p cracamole-desktop --release --locked --target-dir target/windows-static
+    if ($LASTEXITCODE -ne 0) { throw '建置失敗' }
+} finally {
+    if ($null -eq $previousRustFlags) { Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue }
+    else { $env:RUSTFLAGS = $previousRustFlags }
+}
+& '.\target\windows-static\release\cracamole-desktop.exe'
+```
+
+本機建置的靜態 CRT 版本，其 PE 直接匯入表沒有 `VCRUNTIME140.dll` 或通用 CRT DLL，仍需 Windows 系統程式庫；已在 Windows x64 測試啟動、登入／Telnet、本機 SSH 的密碼／私鑰及 Big5，與本機 RDP TLS／NLA fixture。尚未在乾淨安裝的 Windows 驗證，不能排除其他動態載入需求。
+
+可使用下列方式，讓原生 SSH 自動化改測指定的已建置執行檔：
+
+```powershell
+$env:CRACAMOLE_TEST_DESKTOP_BINARY = (Resolve-Path 'target/windows-static/release/cracamole-desktop.exe').Path
+cargo test -p cracamole-desktop --test windows_ssh --locked
+Remove-Item Env:CRACAMOLE_TEST_DESKTOP_BINARY
+```
+
+選取 SSH 或 RDP 連線後，可先按「核對身分」，透過其他可信管道比對指紋再確認保存。RDP 可設定網域及安全模式，預設使用 NLA；TLS 或自動協商須明確選擇。SSH 私鑰登入可在連線編輯畫面填入私鑰檔案路徑與密語；私鑰須是最多 8192 位元組的 UTF-8 文字。未填入的機密在編輯時保留，勾選清除才移除；檔案內容與密語保存於桌面連線庫，並非靜態加密。這是開發中版本，尚未完成下述原生介面驗收。
+
+SSH／Telnet 可選擇 UTF-8、Big5 等核心支援的終端機編碼。Telnet 可設定登入成功與失敗的正規表示式，兩者須同時填寫；留空則不等待登入結果。連線可設為唯讀，禁止送出遠端輸入；視窗會顯示唯讀狀態並停用輸入區。RDP 另可分別禁止從遠端複製及貼到遠端。這些限制由共用協定核心執行。
+
+原生貼上會在背景讀取系統剪貼簿，逾十秒未完成即放棄這次貼上；登出或中斷連線後不會將延遲返回的內容送到其他連線。連線設定禁止貼上或設為唯讀時，貼上按鈕會停用，且不啟動剪貼簿讀取。若 Windows 仍在等待剪貼簿提供者，需等該次系統讀取結束才能再試。
+
+遠端複製文字寫入 Windows Unicode 剪貼簿前會將換行轉為 CRLF，並檢查轉換後的大小上限；過大的內容會拒絕寫入。
+
+系統剪貼簿讀寫測試只在成功建立全新的隔離視窗站後執行，否則顯示 `SKIP`。驗收環境可設定 `CRACAMOLE_REQUIRE_ISOLATED_CLIPBOARD=1`，使無法建立隔離環境時測試失敗，而非把跳過誤認為通過：
+
+```powershell
+$env:CRACAMOLE_REQUIRE_ISOLATED_CLIPBOARD = '1'
+cargo test -p cracamole-desktop --bin cracamole-desktop windows_clipboard::tests::isolated_windows_clipboard_round_trip --locked -- --exact --nocapture
+Remove-Item Env:CRACAMOLE_REQUIRE_ISOLATED_CLIPBOARD
+```
+
+目前這個 Windows 工作階段的自動命名視窗站已存在；測試再嘗試建立唯一名稱的視窗站時，目前程序權限被拒絕，因此嚴格隔離測試會失敗。具備建立命名視窗站權限的驗收環境可重新執行；測試只接受新建的視窗站，不會使用已存在的站台。下列互動測試已在 Windows x64 執行一次並通過，確認本機 Unicode 文字讀寫；尚未驗證透過原生介面與真實遠端 RDP 的剪貼簿交換。
+
+若無法建立隔離環境，也可在**已確認目前剪貼簿內容可以丟棄**的互動工作階段手動執行下列測試。它會將剪貼簿原有全部格式覆蓋成固定的 `cracamole 剪貼簿測試🙂` 兩行文字，然後讀回；無法保證還原原內容。測試預設忽略，且必須明確設定環境變數才會執行：
+
+```powershell
+$env:CRACAMOLE_ALLOW_INTERACTIVE_CLIPBOARD_TEST = '1'
+cargo test -p cracamole-desktop --bin cracamole-desktop windows_clipboard::tests::interactive_windows_clipboard_round_trip --locked -- --ignored --exact --nocapture
+Remove-Item Env:CRACAMOLE_ALLOW_INTERACTIVE_CLIPBOARD_TEST
+```
+
+另有原生視窗與本機 RDP fixture 的系統剪貼簿往返測試。它會在連線時把互動工作階段的剪貼簿全部格式覆蓋為固定兩行文字 `遠端測試🙂`、`第二行`，然後按下原生介面的「貼上」傳回只監聽 loopback 的 fixture；不保證還原。fixture 只保存吻合或不吻合的標記，不保存剪貼簿內容，這項限制已用固定模擬資料經本機 NLA 連線驗證。測試會先確認剪貼簿擁有者屬於測試程序，但其他應用程式仍可能在確認後變更剪貼簿。Windows x64 已經使用靜態 CRT 執行檔及本機 NLA fixture 完成此系統剪貼簿往返；真實遠端服務的交換仍待驗收。僅在內容可以丟棄時執行，且須明確設定環境變數：
+
+```powershell
+cargo build --manifest-path tests/rdp-fixture/Cargo.toml --target-dir target/rdp-fixture --locked
+$env:CRACAMOLE_ALLOW_INTERACTIVE_RDP_CLIPBOARD_TEST = '1'
+try {
+    & 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/windows-static/release/cracamole-desktop.exe').Path -Fixture (Resolve-Path 'target/rdp-fixture/debug/cracamole-rdp-fixture.exe').Path -Nla -InteractiveClipboard
+} finally {
+    Remove-Item Env:CRACAMOLE_ALLOW_INTERACTIVE_RDP_CLIPBOARD_TEST -ErrorAction SilentlyContinue
+}
+```
+
+Windows x64 另以本機 Rust SSH fixture 和專用 loopback Web 服務，使用 Chromium 驗證瀏覽器合成的終端機畫面、按鍵傳送，以及使用者中斷時 WebSocket 正常關閉碼 1000。重跑前須在 `tests/e2e` 安裝 Playwright 相依套件和 Chromium，並啟動使用獨立資料目錄、測試帳號 `admin`／`fixture-admin-password-2026` 的本機 Web 服務；設定 `CRACAMOLE_URL` 指向該服務後執行：
+
+```powershell
+cargo test -p cracamole-desktop --test windows_ssh --locked browser_shared_ssh_composited_terminal -- --ignored --exact --nocapture
+```
+
+測試會在指定的 Web 服務新增測試連線，請勿指向正式服務。
+
+在 Windows 驗證本機 RDP 測試伺服器與原生介面，可依序執行下列命令。fixture 使用獨立鎖定檔及隨機測試憑證，不需修改系統 RDP 服務；測試包含拒絕不符的憑證指紋、拒絕錯誤密碼、影格、輸入、驅動層雙向 Unicode 剪貼簿，以及分別停用複製或貼上的設定。這組 RDP 測試使用固定測試文字，不讀寫 Windows 系統剪貼簿；實際遠端剪貼簿交換仍待驗收。`rdp_live` 預設標記為 ignored，必須明確指定執行：
+
+Windows x64 也已使用本機 fixture 的 NLA／CredSSP 模式驗證不符指紋與錯誤密碼遭拒、成功認證後的影格與按鍵，以及尺寸重新協商後驅動層的雙向 Unicode 剪貼簿、禁止複製／貼上及唯讀限制；原生視窗另驗證認證、畫面、縮放、輸入及關閉。這使用獨立 Rust 測試伺服器，未使用系統剪貼簿；真實 Windows／xrdp 的 NLA 互通性與遠端系統剪貼簿交換仍待驗收。
+
+驅動層及 Windows x64 原生視窗的「自動協商」亦分別對僅支援 TLS 和僅支援 NLA 的本機 fixture 測試，確認設定保存、憑證釘選後可收到畫面並關閉連線。
+
+原生視窗測試另以連續變化的影格觀察 GDI 物件數，確認多次更新後未出現明顯增長；這是短時間資源回歸檢查，不代表已完成長時間穩定性驗收。
+
+可另在有互動桌面的 Windows 工作階段，於最後一行加上 `-VisiblePixelCheck`；測試會短暫顯示視窗而不切換焦點，確認取樣位置屬於測試程序後，分別比對縮放前後各九個螢幕像素，不保存截圖。此檢查不涵蓋整張畫面或各種顯示環境。
+
+本機 RDP 測試也核對連續調整視窗後，伺服器收到與原生影格控制項一致的最終尺寸、視窗替換點陣圖且仍可送出按鍵；另在驅動層模擬放大再縮小時的重新協商、回傳不同顏色的新尺寸畫面及驗證後續雙向剪貼簿傳輸。遠端複製使用調整後才產生的新文字；停用複製、停用貼上及唯讀限制也在重新協商後檢查。這些測試不取代真實 Windows／xrdp 端點的驗收。
+
+```powershell
+cargo build --manifest-path tests/rdp-fixture/Cargo.toml --target-dir target/rdp-fixture --locked
+cargo build -p cracamole-desktop --locked
+$env:CRACAMOLE_RDP_FIXTURE = (Resolve-Path 'target/rdp-fixture/debug/cracamole-rdp-fixture.exe').Path
+cargo test -p cracamole-desktop --test rdp_live --locked -- --ignored
+& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE
+& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Nla
+& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Auto
+& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Nla -Auto
+```
+
+SSH 可見畫面另可在互動桌面執行以下測試：
+
+```powershell
+$env:CRACAMOLE_TEST_VISIBLE_SSH = '1'
+cargo test -p cracamole-desktop --test windows_ssh --locked native_ssh_trust_and_connection -- --exact --nocapture
+Remove-Item Env:CRACAMOLE_TEST_VISIBLE_SSH
+```
+
+測試短暫顯示自己的視窗，不切換焦點，並在確認取樣位置屬於測試程序後比對固定測試文字與背景；不保存截圖。此檢查不代表所有字型、輸入法或顯示環境均已驗收。
 
 ### 3. 介面與操作體驗設計（UI/UX Architecture）
 針對系統管理員長時間操作 SSH 與 RDP 的核心痛點，前端（`web/`）遵循以下工程設計（規範詳見 [`web/GUIDELINES.md`](web/GUIDELINES.md)）：

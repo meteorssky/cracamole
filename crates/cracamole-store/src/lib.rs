@@ -1,3 +1,8 @@
+//! 共用連線設定驗證與保存。
+#![forbid(unsafe_code)]
+
+pub mod credentials;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, path::PathBuf};
 use tokio::sync::Mutex;
@@ -190,6 +195,29 @@ pub struct Store {
 }
 
 impl Store {
+    /// 讀取單筆既有連線供本機協定引擎使用；不存在時不建立檔案。
+    pub async fn get_existing(directory: PathBuf, id: String) -> io::Result<Option<Connection>> {
+        tokio::task::spawn_blocking(move || {
+            let bytes = std::fs::read(directory.join("connections.json"))?;
+            let mut entries: BTreeMap<String, Connection> =
+                serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            Ok(entries.remove(&id))
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+    /// 載入既有連線的公開欄位；不建立資料目錄，亦不回傳機密。
+    pub async fn list_existing(directory: PathBuf) -> io::Result<Vec<PublicConnection>> {
+        tokio::task::spawn_blocking(move || {
+            let bytes = std::fs::read(directory.join("connections.json"))?;
+            let entries: BTreeMap<String, Connection> =
+                serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            Ok(entries.values().map(Connection::public).collect())
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+
     pub async fn open(directory: PathBuf) -> io::Result<Self> {
         let path = directory.join("connections.json");
         let entries = tokio::task::spawn_blocking({
@@ -337,14 +365,54 @@ mod tests {
         .is_ok());
     }
 
-    #[test]
-    fn destination_change_detection_ignores_pins_and_case() {
-        let a = BTreeMap::from([("hostname".to_string(), "Host".to_string())]);
-        let mut b = a.clone();
-        b.insert("host-key".into(), "pin".into());
-        b.insert("hostname".into(), " host ".into());
-        assert!(same_destination(&a, &b));
-        b.insert("ignore-cert".into(), "true".into());
-        assert!(!same_destination(&a, &b));
+    #[tokio::test]
+    async fn secrets_are_preserved_cleared_and_never_returned() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().into()).await.unwrap();
+        let mut draft = rdp(&[("password", "secret")]);
+        let saved = store.save(None, draft).await.unwrap().unwrap();
+        assert!(!saved.params.contains_key("password"));
+        assert_eq!(saved.configured_secrets, ["password"]);
+        draft = rdp(&[]);
+        let saved = store.save(Some(&saved.id), draft).await.unwrap().unwrap();
+        assert_eq!(saved.configured_secrets, ["password"]);
+        let draft = rdp(&[("password", "")]);
+        let saved = store.save(Some(&saved.id), draft).await.unwrap().unwrap();
+        assert!(saved.configured_secrets.is_empty());
+        assert_eq!(store.get(&saved.id).await.unwrap().params["password"], "");
+    }
+
+    #[tokio::test]
+    async fn list_existing_filters_secrets_without_creating_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        assert_eq!(
+            Store::list_existing(missing.clone())
+                .await
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(!missing.exists());
+        let store = Store::open(dir.path().into()).await.unwrap();
+        let saved = store
+            .save(None, rdp(&[("password", "test-secret")]))
+            .await
+            .unwrap()
+            .unwrap();
+        let entries = Store::list_existing(dir.path().into()).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].params.contains_key("password"));
+        assert_eq!(entries[0].configured_secrets, ["password"]);
+        let connection = Store::get_existing(dir.path().into(), saved.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(connection.params["password"], "test-secret");
+        assert!(Store::get_existing(dir.path().into(), "missing".into())
+            .await
+            .unwrap()
+            .is_none());
     }
 }

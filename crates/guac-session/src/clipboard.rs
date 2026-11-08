@@ -9,7 +9,7 @@ use tokio::time::Instant;
 const MAX_STREAMS: usize = 4;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub(crate) struct Clipboards {
+pub struct Clipboards {
     streams: HashMap<String, (Vec<u8>, Instant)>,
     bytes: usize,
     limit: usize,
@@ -20,6 +20,9 @@ fn invalid(message: &str) -> SessionError {
 }
 
 impl Clipboards {
+    pub fn contains(&self, id: &str) -> bool {
+        self.streams.contains_key(id)
+    }
     pub fn new(limit: usize) -> Self {
         Self {
             streams: HashMap::new(),

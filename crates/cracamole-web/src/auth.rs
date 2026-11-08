@@ -1,15 +1,11 @@
-use argon2::{
-    password_hash::{phc::PasswordHash, PasswordHasher, PasswordVerifier},
-    Argon2,
-};
 use axum::http::{header, HeaderMap, StatusCode};
+use cracamole_store::credentials::{Credentials, VerifyError};
 use std::{
     collections::HashMap,
     net::IpAddr,
-    sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroize;
@@ -22,44 +18,23 @@ pub struct Session {
     pub cancel: CancellationToken,
 }
 pub struct Auth {
-    username: String,
-    password_hash: Arc<String>,
+    credentials: Credentials,
     sessions: Mutex<HashMap<String, Session>>,
     attempts: Mutex<HashMap<IpAddr, (Instant, u32)>>,
-    hashing: Arc<Semaphore>,
     pub secure_cookie: bool,
 }
 
 impl Auth {
     pub async fn new(
         username: String,
-        mut password: String,
+        password: String,
         secure_cookie: bool,
     ) -> Result<Self, String> {
-        if username.is_empty()
-            || username.len() > 128
-            || password.chars().count() < 12
-            || password.len() > 256
-        {
-            password.zeroize();
-            return Err("管理員帳號不可空白；密碼至少 12 字元，且不超過 256 bytes".into());
-        }
-        let hash = tokio::task::spawn_blocking(move || {
-            let hash = Argon2::default()
-                .hash_password(password.as_bytes())
-                .map(|h| h.to_string())
-                .map_err(|e| e.to_string());
-            password.zeroize();
-            hash
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+        let credentials = Credentials::new(username, password).await?;
         Ok(Self {
-            username,
-            password_hash: Arc::new(hash),
+            credentials,
             sessions: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::new()),
-            hashing: Arc::new(Semaphore::new(2)),
             secure_cookie,
         })
     }
@@ -85,29 +60,15 @@ impl Auth {
                 return Err(StatusCode::TOO_MANY_REQUESTS);
             }
         }
-        if password.len() > 256 {
-            password.zeroize();
-            return Err(StatusCode::UNAUTHORIZED);
-        }
-        let Ok(permit) = self.hashing.clone().try_acquire_owned() else {
-            password.zeroize();
-            return Err(StatusCode::TOO_MANY_REQUESTS);
-        };
-        let hash = self.password_hash.clone();
-        let valid_user = username == self.username;
-        let valid = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let valid = PasswordHash::new(&hash).ok().is_some_and(|h| {
-                Argon2::default()
-                    .verify_password(password.as_bytes(), &h)
-                    .is_ok()
-            });
-            password.zeroize();
-            valid
-        })
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if !valid || !valid_user {
+        let valid =
+            self.credentials
+                .verify(&username, password)
+                .await
+                .map_err(|error| match error {
+                    VerifyError::Busy => StatusCode::TOO_MANY_REQUESTS,
+                    VerifyError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+                })?;
+        if !valid {
             return Err(StatusCode::UNAUTHORIZED);
         }
         let mut sessions = self.sessions.lock().await;
