@@ -20,7 +20,7 @@
 - RDP／VNC 解碼圖必須在配置前驗證遠端尺寸並取得共用記憶體額度；VNC 設定了帳密卻只收到「無驗證」時須拒絕連線，不得降級；剪貼簿須限制活動串流數、總 bytes 與閒置時間。終端機貼上不得讓文字內的 ESC／控制碼突破 bracketed paste 邊界。
 - 連線設定保存於私有 JSON／Docker volume。機密目前未做靜態加密，Unix 目錄／檔案權限為 0700／0600；不得宣稱已加密。API 不回傳密碼、私鑰或密語；不得寫入 URL、日誌或 Git。目的地及安全設定不變時，編輯未提供的機密保留，明確空值清除；變更協定、主機、連接埠或安全設定時不得沿用未提供的機密。
 - daemon 僅監聽私人 loopback，不發布 4822。正式 Compose 預設僅發布主機 loopback HTTP；遠端使用透過 HTTPS reverse proxy，保留 Host 與 WebSocket，啟用 Secure cookie。
-- 前端（`web/`）的任何變更必須遵守 `web/GUIDELINES.md`（無建置步驟、CSP、token、無障礙、測試與完成定義）；設計背景見本機 `docs/ux-redesign.md`。
+- 前端（`web/`）與 Windows 原生桌面介面（`crates/cracamole-desktop`）的 UI/UX 變更必須遵守 `web/GUIDELINES.md` 與 `design.md`（無建置步驟、CSP、token、無障礙、現代化極速連線與連線設定複製準則、§12 桌面版商業級雙欄工作台與自動化測試契約、測試與完成定義）；全平台診斷與設計背景見 `design.md` 與本機 `docs/ux-redesign.md`。
 - `web/vendor/` 的 Apache JavaScript 保留 LICENSE／NOTICE；更新時使用釘選來源與 checksum。
 - SSH／Telnet 預設 UTF-8，舊編碼只在遠端終端機文字邊界轉換；串流解碼須保留跨封包字元，無法表示的輸入必須在該次寫入前整批拒絕。不得將舊編碼套用到 SSH 驗證、Web API、Guacamole 或 RDP Unicode 剪貼簿，也不得自行正規化密碼。
 
