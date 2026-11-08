@@ -3,9 +3,10 @@ import { api, ApiError } from '../api.js';
 import { $ } from '../util/dom.js';
 import { formatFingerprint } from '../util/format.js';
 import { toast } from '../ui/toast.js';
+import { identityKind } from '../util/protocols.js';
 
 export function identityText(identity) {
-  const lines = identity.kind === 'ssh'
+  const lines = identity.kind === 'host-key'
     ? ['SSH 主機金鑰', identity.public_key, 'SHA-256 指紋：', identity.fingerprint]
     : ['主機：' + identity.subject, '簽發者：' + identity.issuer,
       'SHA-256 指紋：', formatFingerprint(identity.sha256)];
@@ -13,7 +14,7 @@ export function identityText(identity) {
 }
 
 export async function inspectIdentity(target, isCurrent, showOverlay) {
-  const ssh = target.connection.protocol === 'ssh';
+  const ssh = identityKind(target.connection.protocol) === 'host-key';
   const path = ssh ? '/host-key' : '/certificate';
   let identity;
   try {
@@ -29,7 +30,7 @@ export async function inspectIdentity(target, isCurrent, showOverlay) {
     return;
   }
   if (!isCurrent()) return;
-  identity.kind = ssh ? 'ssh' : 'rdp';
+  identity.kind = ssh ? 'host-key' : 'certificate';
   const trusted = ssh ? identity.trusted : Boolean(identity.pinned);
   const matches = ssh ? identity.matches : identity.matches_pin;
   if (trusted && matches) return;
@@ -58,7 +59,7 @@ export async function saveIdentity(target, isCurrent, onTrusted) {
       toast('主機設定已變更，請重新連線並核對新的指紋。');
       return;
     }
-    const parameter = identity.kind === 'ssh'
+    const parameter = identity.kind === 'host-key'
       ? { 'host-key': identity.public_key }
       : { 'server-cert-sha256': identity.sha256 };
     const saved = await api('/connections/' + connection.id, {

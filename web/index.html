@@ -86,11 +86,7 @@
             </div>
             <h2 id="empty-title">選擇一台主機</h2>
             <p id="empty-text" class="muted">從左側連線庫選擇主機，終端機會在這裡以全視窗開啟。</p>
-            <div id="empty-actions" class="empty__actions" hidden>
-              <button class="btn btn--primary" type="button" data-new-protocol="ssh">新增 SSH 主機</button>
-              <button class="btn" type="button" data-new-protocol="rdp">新增 RDP 主機</button>
-              <button class="btn" type="button" data-new-protocol="telnet">新增 Telnet 主機</button>
-            </div>
+            <div id="empty-actions" class="empty__actions" hidden></div>
           </div>
         </div>
         <div id="overlay" class="overlay" hidden>
@@ -148,6 +144,7 @@
         <button id="send-cad" class="btn btn--quiet btn--small" type="button" hidden>Ctrl+Alt+Del</button>
         <button id="collapse-chrome" class="btn btn--quiet btn--small" type="button" aria-expanded="true" disabled>最大畫面</button>
         <button id="toggle-fullscreen" class="btn btn--quiet btn--small" type="button" aria-pressed="false">全螢幕</button>
+        <button id="open-logs" class="btn btn--quiet btn--small" type="button">系統日誌</button>
         <button id="disconnect" class="btn btn--small" type="button" disabled>中斷連線</button>
         <button id="theme-toggle" class="btn btn--quiet btn--small" type="button">淺色主題</button>
         <button id="logout" class="btn btn--quiet btn--small" type="button">登出</button>
@@ -172,9 +169,6 @@
           <div class="field">
             <label class="field__label" for="f-protocol">協定</label>
             <select class="input" id="f-protocol" name="protocol">
-              <option value="ssh">SSH</option>
-              <option value="telnet">Telnet</option>
-              <option value="rdp">RDP（遠端桌面）</option>
             </select>
             <p class="field__error" id="error-protocol" hidden></p>
           </div>
@@ -232,6 +226,11 @@
             <label class="field__label" for="f-login-failure">登入失敗提示</label>
             <input class="input" id="f-login-failure" name="login-failure-regex" placeholder="例如：Login incorrect">
           </div>
+        </fieldset>
+
+        <fieldset class="group" data-protocols="vnc" hidden>
+          <legend>VNC 與 macOS 螢幕共享</legend>
+          <p class="field__hint">連線 Mac：在 Mac 的「系統設定 &gt; 一般 &gt; 共享」開啟「螢幕共享」，這裡填寫 Mac 的使用者帳號與密碼（連接埠 5900）。若 Mac 只開放「VNC 檢視程式可使用密碼控制螢幕」，帳號留空，只填 VNC 密碼（最多 8 個字元有效）。VNC 的畫面與輸入不加密，請只在受信任的網路或 VPN／SSH 通道內使用。</p>
         </fieldset>
 
         <fieldset class="group" data-protocols="rdp" hidden>
@@ -295,6 +294,50 @@
         <button id="confirm-ok" class="btn btn--danger" type="submit" value="ok"></button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="logs-dialog" class="dialog dialog--logs" aria-labelledby="logs-title">
+    <div class="dialog__form">
+      <div class="dialog__head">
+        <div class="logs__header-left">
+          <h2 id="logs-title">系統日誌</h2>
+          <span id="logs-count" class="badge">0 條</span>
+        </div>
+        <div class="logs__header-actions">
+          <label class="check small"><input id="logs-auto-refresh" type="checkbox" checked>自動更新</label>
+          <button id="refresh-logs" class="btn btn--quiet btn--small" type="button">重新整理</button>
+          <button id="copy-logs" class="btn btn--quiet btn--small" type="button">複製全部</button>
+          <button id="close-logs" class="btn btn--quiet btn--icon" type="button" aria-label="關閉">✕</button>
+        </div>
+      </div>
+
+      <div class="logs__controls">
+        <div class="field logs__search-field">
+          <label class="field__label visually-hidden" for="logs-search">搜尋日誌</label>
+          <input class="input" id="logs-search" type="search" placeholder="搜尋日誌關鍵字（訊息、模組）..." autocomplete="off">
+        </div>
+        <div class="field logs__filter-field">
+          <label class="field__label visually-hidden" for="logs-level-filter">等級篩選</label>
+          <select class="input" id="logs-level-filter">
+            <option value="">全部等級</option>
+            <option value="ERROR">僅 ERROR</option>
+            <option value="WARNING">WARNING 以上</option>
+            <option value="INFO">INFO 以上</option>
+            <option value="DEBUG">DEBUG 以上</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="logs-container" class="logs__body" tabindex="0" role="region" aria-label="日誌內容">
+        <div id="logs-list" class="logs__list"></div>
+        <p id="logs-empty" class="muted small" style="text-align: center; padding: 2rem 0;" hidden>目前沒有日誌資料。</p>
+      </div>
+
+      <div class="dialog__footer">
+        <span id="logs-status" class="muted small" style="margin-inline-end: auto;">載入中…</span>
+        <button id="close-logs-btn" class="btn" type="button">關閉</button>
+      </div>
+    </div>
   </dialog>
 
   <div id="toast" class="toast" role="status" hidden></div>

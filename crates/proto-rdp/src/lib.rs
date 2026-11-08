@@ -14,7 +14,9 @@ pub use args::ARGS;
 pub use connect::{fingerprint, probe_certificate, CertInfo};
 pub use settings::{normalize_fingerprint, CertPin, RdpSettings, Security};
 
-use guac_session::{BoxFuture, Params, ProtocolPlugin, SessionCtx, SessionError, Status};
+use guac_session::{
+    BoxFuture, IdentityKind, Params, ProtocolInfo, ProtocolPlugin, SessionCtx, SessionError, Status,
+};
 
 pub struct RdpPlugin;
 
@@ -25,6 +27,14 @@ impl ProtocolPlugin for RdpPlugin {
 
     fn arg_names(&self) -> &'static [&'static str] {
         ARGS
+    }
+
+    fn info(&self) -> ProtocolInfo {
+        ProtocolInfo {
+            label: "RDP",
+            default_port: 3389,
+            identity: IdentityKind::Certificate,
+        }
     }
 
     fn run(&self, ctx: SessionCtx, params: Params) -> BoxFuture<Result<(), SessionError>> {

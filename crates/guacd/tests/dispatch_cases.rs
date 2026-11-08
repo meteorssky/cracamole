@@ -328,7 +328,9 @@ async fn gd_dsp_15_registry_lists_builtins() {
     assert!(r.get("telnet").is_some());
     #[cfg(feature = "rdp")]
     assert!(r.get("rdp").is_some());
-    assert!(r.get("vnc").is_none());
+    #[cfg(feature = "vnc")]
+    assert!(r.get("vnc").is_some());
+    assert!(r.get("kubernetes").is_none());
     assert_eq!(Registry::new().names().len(), 0);
 }
 
@@ -369,9 +371,39 @@ async fn gd_dsp_17_ssh_connect_failure_reaches_client_through_guacd() {
     assert_eq!(e.args, vec!["Aborted. See logs.", "520"]);
 }
 
-#[cfg(all(feature = "ssh", feature = "telnet", feature = "rdp"))]
+#[cfg(all(feature = "ssh", feature = "telnet", feature = "rdp", feature = "vnc"))]
 #[tokio::test]
 async fn gd_dsp_18_all_builtin_protocols_registered() {
     let r = Registry::builtin();
-    assert_eq!(r.names(), vec!["rdp", "ssh", "telnet"]);
+    assert_eq!(r.names(), vec!["rdp", "ssh", "telnet", "vnc"]);
+}
+
+#[cfg(all(feature = "ssh", feature = "telnet", feature = "rdp", feature = "vnc"))]
+#[tokio::test]
+async fn gd_dsp_19_protocols_publish_metadata_in_declared_order() {
+    use guac_session::IdentityKind;
+    let r = Registry::builtin();
+    let rows: Vec<_> = r
+        .plugins()
+        .map(|p| {
+            let i = p.info();
+            (p.name(), i.label, i.default_port, i.identity)
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("ssh", "SSH", 22, IdentityKind::HostKey),
+            ("telnet", "Telnet", 23, IdentityKind::None),
+            ("rdp", "RDP", 3389, IdentityKind::Certificate),
+            ("vnc", "VNC", 5900, IdentityKind::None),
+        ]
+    );
+    // A plugin that publishes nothing still gets a usable label.
+    let echo = Registry::new().with(EchoPlugin {
+        started: Arc::new(AtomicUsize::new(0)),
+    });
+    let info = echo.get("echo").unwrap().info();
+    assert_eq!((info.label, info.default_port), ("echo", 0));
+    assert_eq!(info.identity, IdentityKind::None);
 }

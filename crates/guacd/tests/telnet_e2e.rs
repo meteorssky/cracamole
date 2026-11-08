@@ -97,6 +97,7 @@ async fn tel_legacy_encoding_covers_split_prompts_credentials_and_input() {
         .await
         .unwrap();
     client.send(Instruction::new("end", ["1"])).await.unwrap();
+    drain_frames(&mut client, &mut replay, 200).await;
     tokio::time::timeout(Duration::from_secs(5), peer)
         .await
         .unwrap()

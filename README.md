@@ -1,8 +1,8 @@
 # <img src="web/logo-emblem.png" alt="cracamole logo" width="44" height="44" align="top"> cracamole
 
-> **無 Java、單一執行檔、內嵌私有協定引擎的瀏覽器遠端連線工作台（SSH / Telnet / RDP）**
+> **無 Java、單一執行檔、內嵌私有協定引擎的瀏覽器遠端連線工作台（SSH / Telnet / RDP / VNC）**
 
-`cracamole`（**Crab** 🦀 + **Guacamole** 🥑）是以純 Rust 重新設計與實作的無客戶端遠端存取系統，致敬開源遠端桌面先驅 **[Apache Guacamole™](https://guacamole.apache.org/)**。第一版聚焦於**單一管理員**的高效日常運維：提供管理員驗證、連線設定本機保存（新增／編輯／刪除），以及直接在瀏覽器中操作 **SSH、Telnet 與 RDP（Windows 遠端桌面）**。
+`cracamole`（**Crab** 🦀 + **Guacamole** 🥑）是以純 Rust 重新設計與實作的無客戶端遠端存取系統，致敬開源遠端桌面先驅 **[Apache Guacamole™](https://guacamole.apache.org/)**。第一版聚焦於**單一管理員**的高效日常運維：提供管理員驗證、連線設定本機保存（新增／編輯／刪除），以及直接在瀏覽器中操作 **SSH、Telnet、RDP（Windows 遠端桌面）與 VNC（含 macOS 螢幕共享）**。
 
 整套系統延續了 Apache Guacamole 優雅的「串流指令協定（Guacamole Protocol）」與前端畫布渲染理念，同時**完全移除 Java、Tomcat、Maven、外部資料庫與前端打包工具鏈**：前端靜態資產（HTML / CSS / 原生 ES Modules）於編譯期直接封裝進 `cracamole-web` 單一執行檔，並在同行程內啟動僅綁定私人 loopback（`127.0.0.1:0`）的 Guacamole 協定 daemon。對外只暴露單一 HTTP / WebSocket 服務埠。
 
@@ -30,6 +30,7 @@ flowchart LR
     SSH["proto-ssh\n(russh + guac-terminal)"]
     Telnet["proto-telnet\n(guac-terminal)"]
     RDP["proto-rdp\n(IronRDP + 512 MiB 預算)"]
+    VNC["proto-vnc\n(自製 RFB 客戶端 + ARD 驗證)"]
 
     Axum --> Store
     Axum --> Probe
@@ -37,6 +38,7 @@ flowchart LR
     Daemon --> SSH
     Daemon --> Telnet
     Daemon --> RDP
+    Daemon --> VNC
   end
 
   GuacJS <-- "HTTP / WebSocket (:8080)" --> RP
@@ -44,6 +46,7 @@ flowchart LR
   SSH --> TargetSSH["目標 SSH 主機 (:22)"]
   Telnet --> TargetTelnet["目標 Telnet 設備 (:23)"]
   RDP --> TargetRDP["目標 Windows / xrdp (:3389)"]
+  VNC --> TargetVNC["目標 macOS 螢幕共享 / VNC 伺服器 (:5900)"]
 ```
 
 ### 1. 為什麼採用「單一執行檔＋內嵌私人 Loopback Daemon」？
@@ -53,7 +56,7 @@ flowchart LR
 - **零外部協定埠暴露**：`cracamole-web` 啟動時向作業系統申請 `127.0.0.1:0` 隨機埠啟動內嵌 `guacd` 任務，不提供任何對外 TCP 監聽。所有 WebSocket tunnel 升級皆必須先通過 Web 層的 Cookie Session 與同源（Same-Origin）檢查，並由伺服器端直接從本機設定庫注入機密參數，瀏覽器永遠拿不到連線密碼或私鑰。
 - **零執行期外部依賴**：前端採用原生 ES Modules 與 CSS Design Tokens（`web/`），由 `include_bytes!` 直接編入執行檔，並由單元測試（`every_web_file_is_served`）強制確保所有靜態檔皆有對應路由。正式環境不需要 Node.js（Node 僅用於開發期執行 Playwright E2E 與無障礙／對比度測試）。
 
-### 2. Workspace 模組分層（12 Crates）
+### 2. Workspace 模組分層（13 Crates）
 依賴方向嚴格由上往下，底層協定與顯示引擎絕不反向依賴 Web 層：
 
 | Crate | 職責與架構邊界 |
@@ -65,6 +68,7 @@ flowchart LR
 | `proto-ssh` | 純 Rust SSH 客戶端（基於 `russh`），支援密碼、OpenSSH/PEM 私鑰與密語、嚴格 `known_hosts` 驗證（含 `@revoked` 撤銷檢查）、PTY 動態縮放、雙向剪貼簿與安全貼上過濾。 |
 | `proto-telnet` | Telnet 狀態機與自動登入提示字元（正規表示式）比對，共用 `guac-terminal` 渲染管線。 |
 | `proto-rdp` | 純 Rust RDP 引擎（基於 `IronRDP`），提供遠端桌面畫面、鍵盤、滑鼠、雙向文字剪貼簿、瀏覽器視窗動態縮放（Display Control DVC）與伺服器憑證 SHA-256 指紋釘選。 |
+| `proto-vnc` | 純 Rust VNC（RFB 3.3／3.7／3.8）客戶端，**以連線 macOS 螢幕共享為優先**：支援 Apple Remote Desktop 驗證（安全類型 30，Diffie-Hellman＋AES-128＋MD5，帳號加密碼）與傳統 VNC 密碼（安全類型 2），編碼 Raw／CopyRect／Hextile／ZRLE，伺服器端桌面尺寸變更（DesktopSize／ExtendedDesktopSize）、鍵盤、滑鼠、雙向文字剪貼簿（ISO 8859-1 或 UTF-8），並對惡意伺服器設有尺寸、記憶體與解壓縮上限。 |
 | `guac-terminal` | 終端機模擬器（整合 `alacritty_terminal` 與 `fontdue`），內建共享字型快取、單一 CJK fallback、髒矩形（dirty-region）合成、最小格點與字型配置上限防護。 |
 | `guac-display` | 圖層與表面（Surface）髒矩形追蹤、PNG 編碼與畫格批次發送器。 |
 | `guac-session` | 單一連線工作階段之讀寫迴圈、閒置心跳（`nop`/`sync`）與優雅關閉控制。 |
@@ -139,7 +143,7 @@ cargo test -p cracamole-desktop --test windows_ssh --locked
 Remove-Item Env:CRACAMOLE_TEST_DESKTOP_BINARY
 ```
 
-選取 SSH 或 RDP 連線後，可先按「核對身分」，透過其他可信管道比對指紋再確認保存。RDP 可設定網域及安全模式，預設使用 NLA；TLS 或自動協商須明確選擇。SSH 私鑰登入可在連線編輯畫面填入私鑰檔案路徑與密語；私鑰須是最多 8192 位元組的 UTF-8 文字。未填入的機密在編輯時保留，勾選清除才移除；檔案內容與密語保存於桌面連線庫，並非靜態加密。這是開發中版本，尚未完成下述原生介面驗收。
+選取 SSH 或 RDP 連線後，可先按「核對身分」，透過其他可信管道比對指紋再確認保存。RDP 可設定網域及安全模式，預設使用 NLA；TLS 或自動協商須明確選擇。SSH 私鑰登入可在連線編輯畫面填入私鑰檔案路徑與密語；私鑰須是最多 8192 位元組的 UTF-8 文字。編輯時若協定、主機、連接埠及安全設定不變，未填入的機密會保留，勾選清除可移除；變更上述設定時須重新提供機密。檔案內容與密語保存於桌面連線庫，並非靜態加密。這是開發中版本，尚未完成下述原生介面驗收。
 
 SSH／Telnet 可選擇 UTF-8、Big5 等核心支援的終端機編碼。Telnet 可設定登入成功與失敗的正規表示式，兩者須同時填寫；留空則不等待登入結果。連線可設為唯讀，禁止送出遠端輸入；視窗會顯示唯讀狀態並停用輸入區。RDP 另可分別禁止從遠端複製及貼到遠端。這些限制由共用協定核心執行。
 
@@ -249,11 +253,12 @@ Remove-Item Env:CRACAMOLE_TEST_VISIBLE_SSH
    - **探測任務防護**：主機身分探測（`/host-key` 與 `/certificate`）全系統共用最多 **4 個併發額度**，整段 DNS、TCP 與協定握手強制 **10 秒逾時**，且探測過程絕不傳送遠端登入帳密。
 3. **記憶體、剪貼簿與貼上安全預算**
    - **RDP 記憶體預算**：遠端回報的桌面單邊像素不得超過 `4096px`；全程序共用 **512 MiB** 的 RDP 圖形記憶體額度（涵蓋解碼圖、輸出 framebuffer 與暫存緩衝區估算），超額時直接拒絕新配置。
+   - **VNC 防護**：桌面單邊同樣不得超過 `4096px`，全程序共用 **256 MiB** 的 VNC 圖形記憶體額度；所有矩形必須落在畫面內，ZRLE 解壓縮量設上限（防解壓縮炸彈），伺服器宣告的剪貼簿超過 1 MiB 時直接略過；若設定了帳密，伺服器卻只提供「無驗證」，會拒絕連線而不是降級。**VNC／ARD 只加密登入憑證，畫面與輸入不加密**，請只在受信任網路、VPN 或 SSH 通道內使用。
    - **剪貼簿與安全貼上**：每個連線最多同時 4 條剪貼簿串流、總量上限 **256 KiB**，串流閒置 15 秒即中止（超限不貼上殘缺內容）。SSH / Telnet 貼上時會過濾 `ESC` 與危險控制字元（僅保留 Tab 與換行），防止惡意剪貼簿文字突破 Bracketed Paste 邊界直接執行指令。
 4. **連線設定與機密保存現況（重要）**
    - 連線設定以原子替換（`NamedTempFile` + `sync_all` + `persist`）保存於 `/data/connections.json`，Unix 目錄權限為 `0700`、檔案權限為 `0600`。
    - **機密欄位（密碼、私鑰、密語）目前於磁碟上為明文保存，尚未實作靜態加密（Encryption at Rest）**。請務必保護宿主機的 Docker volume、備份檔案與 `.env`。
-   - HTTP API 永遠只回傳 `configured_secrets: ["password", ...]` 清單，**絕不回傳密碼、私鑰或密語原文**；編輯連線時密碼留空會保留原值，勾選「清除已保存的密碼與私鑰」才會移除。
+   - HTTP API 永遠只回傳 `configured_secrets: ["password", ...]` 清單，**絕不回傳密碼、私鑰或密語原文**；協定、主機、連接埠及安全設定不變時，編輯連線的空白密碼欄位會保留原值，亦可明確清除；變更上述設定時不沿用未提供的機密。
 
 ---
 
@@ -372,6 +377,24 @@ CRACAMOLE_ADMIN_PASSWORD='replace-with-your-own-long-password' cargo run --locke
 
 ## 測試、驗證與品質門檻（Verification & Testing）
 
+### 終端機文字編碼與 Unicode
+
+SSH／Telnet 預設使用 UTF-8。舊系統可在「終端機外觀與輸入 → 文字編碼」明確選擇 Big5、GBK、GB18030、Shift_JIS、EUC-JP 或 EUC-KR；另提供 Windows-1251／1252。設定需配合遠端程式實際輸出的編碼，不自動猜測。SSH 的 `LANG` 只請求遠端語系，不會代替編碼轉換。
+
+轉碼只發生在 SSH 已驗證後的 PTY 文字與 Telnet 應用資料；SSH 驗證、Web API、Guacamole 與瀏覽器剪貼簿仍使用 Unicode。RDP 使用 Unicode 鍵盤事件及 Unicode 文字剪貼簿，不套用終端機的舊編碼設定。文字與密碼不做 Unicode 正規化。
+
+解碼會保留跨封包的多位元組字元；無效遠端 bytes 以替代字元顯示，日誌只記錄編碼名稱。無法用所選編碼表示的鍵盤或貼上輸入會在該次送出前整批拒絕並結束連線，避免送出半截指令。Big5／CP950、Shift_JIS／CP932 等別名採 `encoding_rs` 的網頁相容映射，不保證所有設備私有擴充字集。
+
+字元正確傳輸仍需要伺服器字型具有對應字形；正式映像含 Noto CJK。終端機的複雜文字塑形、雙向文字、彩色 emoji／ZWJ 組合與實機 IME 尚未完整驗收，不能據此宣稱全部語言排版皆受支援。
+
+```sh
+node --test tests/e2e/text.test.js
+# 隔離的遠端 sshd/telnetd + 本機 Rust，三種瀏覽器比較實際合成字形與輸入 bytes
+scripts/text_dev.sh root@10.0.20.130
+```
+
+SSH／Telnet 的參數清單在 C 相容前綴後新增 `character-encoding`；執行下列 oracle 比對時使用明確的延伸許可旗標，原始線路差異仍保留在報告中。
+
 ### 1. Rust 靜態檢查、單元測試與基準測試
 
 ```sh
@@ -427,6 +450,19 @@ scripts/e2e_remote.sh user@docker-host
 scripts/rdp_dev.sh user@docker-host
 ```
 
+#### VNC／macOS 驗證
+
+```sh
+# Rust 端：以內建的模擬 RFB 伺服器（含伺服器端 ARD 實作）與解碼器隨機輸入測試，不需外部伺服器
+cargo test -p proto-vnc --locked
+
+# 真實第三方伺服器：於遠端 Docker 主機啟動 TigerVNC 測試容器（384 MiB／200 行程上限，結束自動移除），
+# 轉發連接埠後執行 Rust 互通測試與三瀏覽器測試
+scripts/vnc_dev.sh user@docker-host
+```
+
+> 目前**沒有在真實 macOS 上驗證**：ARD 驗證以獨立實作（Python／pycryptodome 向量，`scripts/vnc_vectors.py`）與模擬伺服器交叉核對；VNC 密碼驗證、ZRLE 與伺服器端縮放則已對真實 TigerVNC 驗證。連線 Mac 時請在「系統設定 > 一般 > 共享」開啟「螢幕共享」，填寫 Mac 的使用者帳號與密碼；中文剪貼簿請將「剪貼簿文字編碼」設為 UTF-8。
+
 ### 4. 相容性與模糊測試（Compatibility & Fuzzing）
 
 - **Apache Guacamole JS 客戶端**：位於 `web/vendor/`（唯讀，保留完整 Apache-2.0 `LICENSE` 與 `NOTICE`），可由 `python scripts/vendor_guacamole.py` 依釘選版本與 checksum 重建。
@@ -434,7 +470,7 @@ scripts/rdp_dev.sh user@docker-host
   ```sh
   python -m unittest discover -s tests/oracle -v
   docker compose -p cracamole-oracle -f docker/compose.oracle.yml up -d --build --wait
-  python tests/oracle/compare_args.py
+  python tests/oracle/compare_args.py --allow-terminal-encoding-extension
   docker compose -p cracamole-oracle -f docker/compose.oracle.yml down -v
   ```
 - **Fuzzing**：獨立工作區位於 [`fuzz/`](fuzz/README.md)，針對協定解析器、終端機 ANSI 序列與 RDP 訊息進行模糊測試。
@@ -445,7 +481,7 @@ scripts/rdp_dev.sh user@docker-host
 
 | 類別 | 已實作並納入驗收 | 尚未納入（延後或規劃中） |
 |---|---|---|
-| **支援協定** | **SSH**（密碼／私鑰／known_hosts 指紋核對與撤銷檢查）<br>**Telnet**（密碼／登入成功與失敗正規表示式）<br>**RDP**（IronRDP：NLA/TLS、憑證 SHA-256 指紋核對、鍵鼠、雙向文字剪貼簿、動態解析度縮放） | VNC、Kubernetes、Serial、SFTP 檔案傳輸、RDP 音訊／磁碟機重新導向／RemoteApp |
+| **支援協定** | **SSH**（密碼／私鑰／known_hosts 指紋核對與撤銷檢查）<br>**Telnet**（密碼／登入成功與失敗正規表示式）<br>**RDP**（IronRDP：NLA/TLS、憑證 SHA-256 指紋核對、鍵鼠、雙向文字剪貼簿、動態解析度縮放）<br>**VNC**（macOS 螢幕共享 ARD 帳密驗證、VNC 密碼、ZRLE／Hextile／CopyRect／Raw、雙向文字剪貼簿） | VNC Tight／遠端游標編碼與客戶端發起的解析度變更、VNC 檔案傳輸、Kubernetes、Serial、SFTP 檔案傳輸、RDP 音訊／磁碟機重新導向／RemoteApp |
 | **管理與驗證** | 單一管理員（環境變數帳密、Argon2id、登入限流、同源檢查、受信任代理 `X-Real-IP`） | 多使用者帳號、RBAC 角色權限、OIDC / LDAP 整合、連線設定靜態加密（Encryption at Rest） |
 | **操作介面** | 亮暗主題、最大化遠端畫面（收折頂底選單／全螢幕）、覆蓋式連線庫抽屜、進階設定折疊摘要、常駐連線狀態、手機觸控輔助鍵列 | 多分頁同時維持多條工作階段、工作階段錄影回放、共享連線（Screen Sharing） |
 

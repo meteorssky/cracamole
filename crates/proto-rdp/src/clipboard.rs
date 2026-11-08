@@ -5,7 +5,7 @@ use ironrdp_cliprdr::pdu::{
     ClipboardFormat, ClipboardFormatId, ClipboardGeneralCapabilityFlags, FileContentsRequest,
     FileContentsResponse, FormatDataRequest, FormatDataResponse, LockDataId,
 };
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 /// Largest clipboard text accepted from the server (characters).
 pub const MAX_TEXT: usize = 1 << 20;
@@ -25,17 +25,17 @@ pub enum ClipEvent {
 
 #[derive(Debug)]
 pub struct Backend {
-    tx: UnboundedSender<ClipEvent>,
+    tx: Sender<ClipEvent>,
 }
 
 impl Backend {
-    pub fn new(tx: UnboundedSender<ClipEvent>) -> Self {
+    pub fn new(tx: Sender<ClipEvent>) -> Self {
         Self { tx }
     }
 
     fn emit(&self, event: ClipEvent) {
-        // The receiver only disappears when the session ends.
-        let _ = self.tx.send(event);
+        // Full queue: drop the event. A closed receiver just means the session ended.
+        let _ = self.tx.try_send(event);
     }
 }
 
@@ -80,7 +80,8 @@ impl CliprdrBackend for Backend {
     }
 
     fn on_format_data_response(&mut self, response: FormatDataResponse<'_>) {
-        if response.is_error() {
+        // Check the size before decoding: UTF-16 takes at most 4 bytes per character.
+        if response.is_error() || response.data().len() > MAX_TEXT * 4 {
             return;
         }
         if let Ok(text) = response.to_unicode_string() {
@@ -110,7 +111,7 @@ mod tests {
 
     #[test]
     fn unicode_clipboard_preserves_surrogate_pairs_and_combining_characters() {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let mut backend = Backend::new(tx);
         let text = "中文 日本語 한국어 😀𠮷 e\u{301}\n";
         backend.on_format_data_response(FormatDataResponse::new_unicode_string(&to_remote(text)));
@@ -119,7 +120,7 @@ mod tests {
 
     #[test]
     fn remote_text_is_forwarded_and_errors_are_not() {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let mut backend = Backend::new(tx);
         backend.on_format_data_response(FormatDataResponse::new_unicode_string("hi\r\nthere"));
         match rx.try_recv() {
@@ -131,8 +132,23 @@ mod tests {
     }
 
     #[test]
+    fn queue_is_bounded_and_oversized_data_is_dropped_before_decoding() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        let mut backend = Backend::new(tx);
+        for _ in 0..10 {
+            backend.on_format_data_response(FormatDataResponse::new_unicode_string("x"));
+        }
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_err());
+        let huge = "a".repeat(MAX_TEXT + 1);
+        backend.on_format_data_response(FormatDataResponse::new_unicode_string(&huge));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn only_unicode_text_triggers_a_paste() {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let mut backend = Backend::new(tx);
         backend.on_remote_copy(&[ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]);
         backend.on_remote_copy(&[ClipboardFormat::new(ClipboardFormatId::CF_HDROP)]);

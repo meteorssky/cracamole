@@ -15,7 +15,9 @@ pub use connect::connect;
 pub use session::run_telnet;
 pub use settings::TelnetSettings;
 
-use guac_session::{BoxFuture, Params, ProtocolPlugin, SessionCtx, SessionError, Status};
+use guac_session::{
+    BoxFuture, IdentityKind, Params, ProtocolInfo, ProtocolPlugin, SessionCtx, SessionError, Status,
+};
 
 pub struct TelnetPlugin;
 
@@ -26,6 +28,14 @@ impl ProtocolPlugin for TelnetPlugin {
 
     fn arg_names(&self) -> &'static [&'static str] {
         ARGS
+    }
+
+    fn info(&self) -> ProtocolInfo {
+        ProtocolInfo {
+            label: "Telnet",
+            default_port: 23,
+            identity: IdentityKind::None,
+        }
     }
 
     fn run(&self, ctx: SessionCtx, params: Params) -> BoxFuture<Result<(), SessionError>> {

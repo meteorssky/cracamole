@@ -2,6 +2,7 @@
 
 mod assets;
 mod auth;
+mod protocols;
 mod proxy;
 use cracamole_store as store;
 mod trust;
@@ -22,20 +23,35 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+/// How the web layer reaches the Guacamole daemon.
+#[derive(Clone)]
+pub enum BackendLink {
+    /// In-memory pipes to a daemon in the same process: no socket exists for anything else to use.
+    Memory(tokio::sync::mpsc::Sender<(tokio::io::DuplexStream, String)>),
+    /// A TCP daemon. Only for tests: that socket carries no authentication.
+    Tcp(SocketAddr),
+}
+
+impl From<SocketAddr> for BackendLink {
+    fn from(address: SocketAddr) -> Self {
+        Self::Tcp(address)
+    }
+}
+
 pub struct WebConfig {
     pub username: String,
     pub password: String,
     pub data_dir: PathBuf,
     pub secure_cookie: bool,
     pub trusted_proxies: Vec<std::net::IpAddr>,
-    pub backend: SocketAddr,
+    pub backend: BackendLink,
     pub shutdown: CancellationToken,
 }
 
 struct App {
     auth: auth::Auth,
     store: store::Store,
-    backend: SocketAddr,
+    backend: BackendLink,
     tunnels: Arc<Semaphore>,
     probes: Arc<Semaphore>,
     trusted_proxies: Vec<std::net::IpAddr>,
@@ -111,6 +127,7 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/session", get(session))
+        .route("/api/protocols", get(protocols::list))
         .route("/api/connections", get(list).post(create))
         .route(
             "/api/connections/{id}",
@@ -122,6 +139,7 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
             post(trust::certificate),
         )
         .route("/api/connections/{id}/host-key", post(trust::host_key))
+        .route("/api/logs", get(get_logs))
         .layer(DefaultBodyLimit::max(128 * 1024))
         .layer(middleware::from_fn(security_headers))
         .with_state(app))
@@ -268,4 +286,20 @@ async fn remove(
     } else {
         Err(ApiError::new(StatusCode::NOT_FOUND, "找不到連線"))
     }
+}
+
+#[derive(Deserialize)]
+struct LogQuery {
+    limit: Option<usize>,
+    level: Option<String>,
+}
+
+async fn get_logs(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<LogQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    app.auth.authorize(&headers).await?;
+    let logs = guacd::logging::recent_logs(query.limit, query.level.as_deref());
+    Ok(Json(json!({ "logs": logs })))
 }

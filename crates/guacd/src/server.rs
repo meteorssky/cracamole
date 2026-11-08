@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 #[derive(Default)]
 pub struct Registry {
     plugins: HashMap<String, Arc<dyn ProtocolPlugin>>,
+    /// Registration order, so front ends can list protocols the way they were declared.
+    order: Vec<String>,
 }
 
 impl Registry {
@@ -26,25 +28,38 @@ impl Registry {
     }
 
     pub fn with(mut self, plugin: impl ProtocolPlugin) -> Self {
-        self.plugins
-            .insert(plugin.name().to_string(), Arc::new(plugin));
+        let name = plugin.name().to_string();
+        if self
+            .plugins
+            .insert(name.clone(), Arc::new(plugin))
+            .is_none()
+        {
+            self.order.push(name);
+        }
         self
     }
 
     /// All protocols compiled into this binary.
     pub fn builtin() -> Self {
         let r = Self::new();
-        #[cfg(feature = "telnet")]
-        let r = r.with(proto_telnet::TelnetPlugin);
         #[cfg(feature = "ssh")]
         let r = r.with(proto_ssh::SshPlugin);
+        #[cfg(feature = "telnet")]
+        let r = r.with(proto_telnet::TelnetPlugin);
         #[cfg(feature = "rdp")]
         let r = r.with(proto_rdp::RdpPlugin);
+        #[cfg(feature = "vnc")]
+        let r = r.with(proto_vnc::VncPlugin);
         r
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn ProtocolPlugin>> {
         self.plugins.get(name).cloned()
+    }
+
+    /// Plugins in registration order.
+    pub fn plugins(&self) -> impl Iterator<Item = &Arc<dyn ProtocolPlugin>> {
+        self.order.iter().filter_map(|name| self.plugins.get(name))
     }
 
     pub fn names(&self) -> Vec<&str> {
@@ -82,13 +97,54 @@ async fn send_error<W: AsyncWrite + Unpin>(w: &mut W, message: &str, status: Sta
     let _ = w.flush().await;
 }
 
-/// Serve until `shutdown` fires, then stop accepting and let sessions end gracefully.
+/// Serve TCP clients until `shutdown` fires, then stop accepting and let sessions end gracefully.
 pub async fn serve(
     listener: TcpListener,
     registry: Arc<Registry>,
     cfg: ServerConfig,
     shutdown: CancellationToken,
 ) -> std::io::Result<()> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let acceptor = tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            loop {
+                let accepted = tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    accepted = listener.accept() => accepted,
+                };
+                match accepted {
+                    Ok((stream, peer)) => {
+                        let _ = stream.set_nodelay(true);
+                        if tx.send((stream, peer.to_string())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("accept failed: {e}");
+                        // Avoid a hot loop on persistent errors such as fd exhaustion.
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
+            }
+        }
+    });
+    let result = serve_streams(rx, registry, cfg, shutdown).await;
+    acceptor.abort();
+    result
+}
+
+/// Serve already-accepted streams (for example in-memory pipes, so no socket is opened at all)
+/// until `shutdown` fires or the sender side is dropped. Each item carries a peer label for logs.
+pub async fn serve_streams<S>(
+    mut incoming: tokio::sync::mpsc::Receiver<(S, String)>,
+    registry: Arc<Registry>,
+    cfg: ServerConfig,
+    shutdown: CancellationToken,
+) -> std::io::Result<()>
+where
+    S: tokio::io::AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
     let limit = Arc::new(Semaphore::new(cfg.max_connections.max(1)));
     let mut tasks: JoinSet<()> = JoinSet::new();
     let mut session_cfg = cfg.session.clone();
@@ -109,16 +165,8 @@ pub async fn serve(
                     }
                 }
             }
-            accepted = listener.accept() => {
-                let (stream, peer) = match accepted {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!("accept failed: {e}");
-                        // Avoid a hot loop on persistent errors such as fd exhaustion.
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        continue;
-                    }
-                };
+            received = incoming.recv() => {
+                let Some((stream, peer)) = received else { break };
                 let Ok(permit) = limit.clone().try_acquire_owned() else {
                     tracing::warn!("connection limit reached; rejecting {peer}");
                     drop(stream);
@@ -144,12 +192,10 @@ pub async fn serve(
     Ok(())
 }
 
-async fn handle_connection(
-    stream: tokio::net::TcpStream,
-    registry: Arc<Registry>,
-    cfg: ServerConfig,
-) {
-    let _ = stream.set_nodelay(true);
+async fn handle_connection<S>(stream: S, registry: Arc<Registry>, cfg: ServerConfig)
+where
+    S: tokio::io::AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
     let (r, mut w) = tokio::io::split(stream);
     let mut reader = InstructionReader::new(r);
 

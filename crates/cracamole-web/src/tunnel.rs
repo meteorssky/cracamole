@@ -13,9 +13,36 @@ use guac_session::InstructionReader;
 use serde::Deserialize;
 use std::{sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncWriteExt, ReadHalf, WriteHalf},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
 };
+
+trait Pipe: AsyncRead + AsyncWrite + Send + Unpin {}
+impl<T: AsyncRead + AsyncWrite + Send + Unpin> Pipe for T {}
+type BackendStream = Box<dyn Pipe>;
+
+/// Memory bound of one in-process tunnel pipe in each direction.
+const PIPE_BYTES: usize = 64 * 1024;
+
+async fn open_stream(link: &crate::BackendLink) -> Result<BackendStream, String> {
+    match link {
+        crate::BackendLink::Tcp(address) => {
+            let stream = TcpStream::connect(address)
+                .await
+                .map_err(|e| e.to_string())?;
+            stream.set_nodelay(true).map_err(|e| e.to_string())?;
+            Ok(Box::new(stream))
+        }
+        crate::BackendLink::Memory(sender) => {
+            let (ours, theirs) = tokio::io::duplex(PIPE_BYTES);
+            sender
+                .send((theirs, "web".to_string()))
+                .await
+                .map_err(|_| "daemon is not running".to_string())?;
+            Ok(Box::new(ours))
+        }
+    }
+}
 
 #[derive(Deserialize, Clone, Copy)]
 pub struct Size {
@@ -57,7 +84,7 @@ pub async fn upgrade(
         .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "連線數已達上限"))?;
     let backend = tokio::time::timeout(
         Duration::from_secs(15),
-        connect(app.backend, &connection, size),
+        connect(&app.backend, &connection, size),
     )
     .await
     .map_err(|_| ApiError::new(StatusCode::GATEWAY_TIMEOUT, "終端機服務握手逾時"))?
@@ -95,19 +122,16 @@ pub async fn upgrade(
 }
 
 type Backend = (
-    InstructionReader<ReadHalf<TcpStream>>,
-    WriteHalf<TcpStream>,
+    InstructionReader<ReadHalf<BackendStream>>,
+    WriteHalf<BackendStream>,
     String,
 );
 async fn connect(
-    address: std::net::SocketAddr,
+    link: &crate::BackendLink,
     connection: &crate::store::Connection,
     size: Size,
 ) -> Result<Backend, String> {
-    let stream = TcpStream::connect(address)
-        .await
-        .map_err(|e| e.to_string())?;
-    stream.set_nodelay(true).map_err(|e| e.to_string())?;
+    let stream = open_stream(link).await?;
     let (read, mut write) = tokio::io::split(stream);
     let mut reader = InstructionReader::new(read);
     write

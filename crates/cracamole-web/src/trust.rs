@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use guac_session::{SessionError, Status};
+use guac_session::{IdentityKind, ProtocolInfo, SessionError, Status};
 use serde_json::{json, Value};
 use std::{
     future::Future,
@@ -73,6 +73,17 @@ impl Probe {
     }
 }
 
+/// The protocol's metadata, provided it publishes the kind of server identity being asked for.
+fn identity_info(
+    connection: &Connection,
+    kind: IdentityKind,
+    message: &'static str,
+) -> Result<ProtocolInfo, ApiError> {
+    crate::protocols::info(&connection.protocol)
+        .filter(|info| info.identity == kind)
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, message))
+}
+
 fn endpoint(connection: &Connection, default_port: u16) -> (&str, u16) {
     let host = connection
         .params
@@ -93,13 +104,12 @@ pub async fn certificate(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let (connection, probe) = authorize(&app, &headers, &id).await?;
-    if connection.protocol != "rdp" {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "只有 RDP 連線有伺服器憑證",
-        ));
-    }
-    let (host, port) = endpoint(&connection, 3389);
+    let protocol = identity_info(
+        &connection,
+        IdentityKind::Certificate,
+        "這個協定沒有可核對的伺服器憑證",
+    )?;
+    let (host, port) = endpoint(&connection, protocol.default_port);
     let info = probe
         .run(&app, guacd::probe_certificate(host, port, 10))
         .await?;
@@ -120,13 +130,12 @@ pub async fn host_key(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let (connection, probe) = authorize(&app, &headers, &id).await?;
-    if connection.protocol != "ssh" {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "只有 SSH 連線有主機金鑰",
-        ));
-    }
-    let (host, port) = endpoint(&connection, 22);
+    let protocol = identity_info(
+        &connection,
+        IdentityKind::HostKey,
+        "這個協定沒有可核對的主機金鑰",
+    )?;
+    let (host, port) = endpoint(&connection, protocol.default_port);
     let configured = connection
         .params
         .get("host-key")
@@ -153,7 +162,10 @@ mod tests {
                 .await
                 .unwrap(),
             store: crate::store::Store::open(dir.path().into()).await.unwrap(),
-            backend: "127.0.0.1:1".parse().unwrap(),
+            backend: "127.0.0.1:1"
+                .parse::<std::net::SocketAddr>()
+                .unwrap()
+                .into(),
             tunnels: Arc::new(tokio::sync::Semaphore::new(32)),
             probes: Arc::new(tokio::sync::Semaphore::new(4)),
             trusted_proxies: Vec::new(),

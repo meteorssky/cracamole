@@ -31,7 +31,7 @@ async fn app(
         data_dir: directory.into(),
         secure_cookie: false,
         trusted_proxies: Vec::new(),
-        backend,
+        backend: backend.into(),
         shutdown,
     })
     .await
@@ -243,6 +243,24 @@ async fn web_connection_crud_persists_across_restart_without_returning_credentia
         3
     );
     assert!(connection["params"].get("password").is_none());
+    // Same destination (only name/username change): omitted secrets are kept.
+    let rename = json!({"name":"Renamed","protocol":"ssh","params":{"hostname":"Configured.Example ","port":"22","username":"other"}});
+    let (status, _, kept) = call(
+        &service,
+        "PUT",
+        &path,
+        Some(rename),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kept["configured_secrets"].as_array().unwrap().len(), 3);
+    let raw: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("connections.json")).unwrap())
+            .unwrap();
+    assert_eq!(raw[id]["params"]["password"], "backend-password");
+    // Changed hostname or port: saved secrets must NOT follow to the new destination.
     let update = json!({"name":"Renamed","protocol":"ssh","params":{"hostname":"changed.example","port":"2222"}});
     assert_eq!(
         call(
@@ -260,7 +278,12 @@ async fn web_connection_crud_persists_across_restart_without_returning_credentia
     let raw: Value =
         serde_json::from_slice(&std::fs::read(dir.path().join("connections.json")).unwrap())
             .unwrap();
-    assert_eq!(raw[id]["params"]["password"], "backend-password");
+    for secret in ["password", "private-key", "passphrase"] {
+        assert!(
+            raw[id]["params"].get(secret).is_none(),
+            "{secret} leaked to a changed destination"
+        );
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -352,7 +375,7 @@ async fn web_connection_validation_rejects_unsupported_protocols_and_oversized_v
     .await;
     let cookie = login(&app).await;
     let invalids = [
-        json!({"name":"VNC","protocol":"vnc","params":{"hostname":"host"}}),
+        json!({"name":"K8s","protocol":"kubernetes","params":{"hostname":"host"}}),
         json!({"name":"Blank","protocol":"ssh","params":{"hostname":""}}),
         json!({"name":"Port","protocol":"ssh","params":{"hostname":"host","port":"65536"}}),
         json!({"name":"Long","protocol":"ssh","params":{"hostname":"host","password":"x".repeat(8193)}}),
@@ -371,6 +394,63 @@ async fn web_connection_validation_rejects_unsupported_protocols_and_oversized_v
             .await
             .0,
             StatusCode::BAD_REQUEST
+        );
+    }
+}
+
+#[tokio::test]
+async fn web_vnc_connections_keep_their_password_private_and_reject_foreign_parameters() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = app(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        CancellationToken::new(),
+    )
+    .await;
+    let cookie = login(&service).await;
+    let mac = json!({
+        "name": "Mac mini",
+        "protocol": "vnc",
+        "params": {
+            "hostname": "mac.local", "port": "5900", "username": "admin",
+            "password": "s3cret", "color-depth": "16", "clipboard-encoding": "UTF-8"
+        }
+    });
+    let (status, _, saved) = call(
+        &service,
+        "POST",
+        "/api/connections",
+        Some(mac),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert!(status.is_success(), "{saved}");
+    assert_eq!(saved["protocol"], "vnc");
+    assert_eq!(saved["configured_secrets"], json!(["password"]));
+    assert!(saved["params"].get("password").is_none());
+    assert!(!saved.to_string().contains("s3cret"));
+
+    for foreign in [
+        "server-cert-sha256",
+        "ignore-cert",
+        "host-key",
+        "terminal-type",
+    ] {
+        let bad = json!({"name":"Mac","protocol":"vnc","params":{"hostname":"h", foreign: "x"}});
+        assert_eq!(
+            call(
+                &service,
+                "POST",
+                "/api/connections",
+                Some(bad),
+                Some(&cookie),
+                "http://localhost"
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST,
+            "{foreign} must not be accepted for VNC"
         );
     }
 }
@@ -423,7 +503,7 @@ async fn web_login_rate_limit_and_corrupt_storage_fail_explicitly() {
         data_dir: dir.path().into(),
         secure_cookie: false,
         trusted_proxies: Vec::new(),
-        backend: "127.0.0.1:1".parse().unwrap(),
+        backend: "127.0.0.1:1".parse::<SocketAddr>().unwrap().into(),
         shutdown: CancellationToken::new(),
     })
     .await;
@@ -447,7 +527,7 @@ async fn web_trusted_proxy_preserves_independent_login_limits() {
         data_dir: dir.path().into(),
         secure_cookie: false,
         trusted_proxies: vec!["127.0.0.1".parse().unwrap()],
-        backend: "127.0.0.1:1".parse().unwrap(),
+        backend: "127.0.0.1:1".parse::<SocketAddr>().unwrap().into(),
         shutdown: CancellationToken::new(),
     })
     .await
@@ -782,4 +862,96 @@ async fn web_tunnel_auth_origin_server_owned_parameters_ping_and_logout() {
     };
     assert_eq!(u16::from(frame.code), 1000);
     shutdown.cancel();
+}
+
+#[tokio::test]
+async fn logs_endpoint_requires_auth_and_returns_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    let shutdown = CancellationToken::new();
+    let service = app(dir.path(), "127.0.0.1:9".parse().unwrap(), shutdown.clone()).await;
+
+    let (status, _, _) = call(&service, "GET", "/api/logs", None, None, "http://localhost").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let cookie = login(&service).await;
+    let (status, _, body) = call(
+        &service,
+        "GET",
+        "/api/logs",
+        None,
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("logs").and_then(|v| v.as_array()).is_some());
+    shutdown.cancel();
+}
+
+#[tokio::test]
+async fn web_protocol_catalogue_requires_login_and_describes_every_protocol() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        CancellationToken::new(),
+    )
+    .await;
+    let (status, _, _) = call(
+        &app,
+        "GET",
+        "/api/protocols",
+        None,
+        None,
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let cookie = login(&app).await;
+    let (status, _, body) = call(
+        &app,
+        "GET",
+        "/api/protocols",
+        None,
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().unwrap();
+    let names: Vec<_> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["ssh", "telnet", "rdp", "vnc"]);
+    assert_eq!(rows[0]["label"], "SSH");
+    assert_eq!(rows[0]["default_port"], 22);
+    assert_eq!(rows[0]["identity"], "host-key");
+    assert_eq!(rows[2]["identity"], "certificate");
+    assert!(rows[1]["identity"].is_null());
+    for row in rows {
+        let args: Vec<_> = row["args"].as_array().unwrap().iter().collect();
+        assert!(args.contains(&&json!("hostname")), "{row}");
+    }
+    // Probing an identity the protocol does not publish is refused.
+    let (status, _, created) = call(
+        &app,
+        "POST",
+        "/api/connections",
+        Some(json!({"name":"T","protocol":"telnet","params":{"hostname":"h"}})),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    for path in ["host-key", "certificate"] {
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            &format!("/api/connections/{id}/{path}"),
+            None,
+            Some(&cookie),
+            "http://localhost",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+    }
 }

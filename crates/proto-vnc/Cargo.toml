@@ -1,0 +1,25 @@
+[package]
+name = "proto-vnc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+guac-session = { path = "../guac-session" }
+guac-display = { path = "../guac-display" }
+guac-protocol = { path = "../guac-protocol" }
+tokio.workspace = true
+tracing.workspace = true
+base64 = "0.23"
+# VNC authentication (DES), Apple Remote Desktop authentication (Diffie-Hellman + AES-128-ECB + MD5).
+des = "0.9"
+aes = "0.9"
+md-5 = "0.11"
+num-bigint = "0.4"
+getrandom = "0.4"
+# ZRLE encoding.
+flate2 = "1"
+
+[dev-dependencies]
+guac-testkit = { path = "../guac-testkit" }
+tokio = { workspace = true, features = ["test-util"] }

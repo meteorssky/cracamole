@@ -98,11 +98,14 @@ pub fn validate(draft: &Draft) -> Result<(), Invalid> {
     if draft.name.trim().is_empty() || draft.name.chars().count() > 120 {
         return Err(invalid("name", "請輸入 1 到 120 個字元的連線名稱。"));
     }
-    let registry = guacd::Registry::builtin();
-    let Some(plugin) = registry.get(&draft.protocol) else {
+    static REGISTRY: std::sync::OnceLock<guacd::Registry> = std::sync::OnceLock::new();
+    let Some(plugin) = REGISTRY
+        .get_or_init(guacd::Registry::builtin)
+        .get(&draft.protocol)
+    else {
         return Err(invalid(
             "protocol",
-            "不支援這個協定，請改選 SSH、Telnet 或 RDP。",
+            "不支援這個協定，請改選 SSH、Telnet、RDP 或 VNC。",
         ));
     };
     if draft.params.len() > 64
@@ -187,6 +190,25 @@ pub fn validate(draft: &Draft) -> Result<(), Invalid> {
         }
     }
     Ok(())
+}
+
+/// Parameters that decide where, and under what verification, saved secrets are sent.
+/// Pins (`host-key`, `server-cert-sha256`) are deliberately excluded: trusting a host
+/// updates them on an otherwise unchanged connection.
+const DESTINATION: &[&str] = &["hostname", "port", "ignore-cert", "security"];
+
+/// Saved secrets may only be carried over when the destination is unchanged;
+/// otherwise a stolen session could redirect them to an attacker's host.
+fn same_destination(old: &BTreeMap<String, String>, new: &BTreeMap<String, String>) -> bool {
+    let norm = |params: &BTreeMap<String, String>, key: &str| {
+        params
+            .get(key)
+            .map(|v| v.trim().to_ascii_lowercase())
+            .unwrap_or_default()
+    };
+    DESTINATION
+        .iter()
+        .all(|key| norm(old, key) == norm(new, key))
 }
 
 pub struct Store {
@@ -284,7 +306,7 @@ impl Store {
         };
         let mut params = draft.params;
         if let Some(old) = next.get(&id) {
-            if old.protocol == draft.protocol {
+            if old.protocol == draft.protocol && same_destination(&old.params, &params) {
                 for key in SECRETS {
                     if !params.contains_key(*key) {
                         if let Some(value) = old.params.get(*key) {
@@ -346,6 +368,40 @@ mod tests {
             protocol: "rdp".into(),
             params: map,
         }
+    }
+
+    #[test]
+    fn destination_change_detection_ignores_pins_and_case() {
+        let a = BTreeMap::from([("hostname".to_string(), "Host".to_string())]);
+        let mut b = a.clone();
+        b.insert("host-key".into(), "pin".into());
+        b.insert("hostname".into(), " host ".into());
+        assert!(same_destination(&a, &b));
+        b.insert("ignore-cert".into(), "true".into());
+        assert!(!same_destination(&a, &b));
+    }
+
+    #[tokio::test]
+    async fn changed_destination_does_not_retain_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().into()).await.unwrap();
+        let saved = store
+            .save(None, rdp(&[("password", "secret")]))
+            .await
+            .unwrap()
+            .unwrap();
+        let changed = store
+            .save(Some(&saved.id), rdp(&[("security", "tls")]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(changed.configured_secrets.is_empty());
+        assert!(!store
+            .get(&saved.id)
+            .await
+            .unwrap()
+            .params
+            .contains_key("password"));
     }
 
     #[test]

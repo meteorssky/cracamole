@@ -171,7 +171,7 @@ try {
     [void][RdpGui]::SendMessageInt($security, 0x014E, [IntPtr]2, [IntPtr]::Zero)
     Click (Button '儲存')
     $saved = (Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value
-    if ($saved.params.security -ne 'any' -or $saved.params.password -ne 'secret' -or $saved.params.'server-cert-sha256' -ne $fingerprint) { throw 'RDP edit did not preserve secret or certificate' }
+    if ($saved.params.security -ne 'any' -or $saved.params.password -or $saved.params.'server-cert-sha256' -ne $fingerprint) { throw 'RDP security change did not clear the secret and preserve the certificate' }
     [void][RdpGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
     Click $verify
     Wait-For { @($children | Where-Object { [RdpGui]::Text($_) -eq 'RDP 憑證與現有指紋相符。' }).Count -eq 1 } 'saved certificate did not match'

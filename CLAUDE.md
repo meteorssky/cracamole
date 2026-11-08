@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案現況
 
-cracamole 是不使用 Java 的遠端連線系統，採 Rust Web 服務與純 JavaScript 前端，Windows 原生介面開發中。第一版採單一管理員，提供登入、連線新增／編輯／刪除、本機保存及 SSH／Telnet／RDP。現有 12 個 crate，`cracamole-store` 共用帳密驗證與連線設定；`cracamole-desktop` 提供基本連線編輯、指紋核對與預覽，使用獨立私有資料目錄。TLS 與 NLA 模式已與獨立 loopback RDP 測試伺服器驗證工作階段、影格與輸入；Windows x64 可見桌面已比對縮放前後各九個 RDP 測試影格像素及 SSH 測試文字與背景。Windows x64 互動測試已驗證系統剪貼簿 Unicode 文字讀寫；真實 Windows／xrdp 服務及其 NLA 互通性、遠端剪貼簿交換、完整鍵鼠相容性及更廣泛的可見畫面尚未驗收。`cracamole-web` 是完整 Web 系統入口，內嵌私人 loopback daemon。舊版「保留官方 Java webapp」範圍已被使用者取消，不能恢復為部署依賴。完整 MVP 仍待長時間 fuzz、資源／安全及 arm64 等驗收；不要把本機測試全綠當成全部完成。見 `docs/java-free-mvp.md` 與 `docs/MVP-STATUS.md`。
+cracamole 是不使用 Java 的遠端連線系統，採 Rust Web 服務與純 JavaScript 前端，Windows 原生介面開發中。第一版採單一管理員，提供登入、連線新增／編輯／刪除、本機保存及 SSH／Telnet／RDP。現有 13 個 crate（含 `proto-vnc`），`cracamole-store` 共用帳密驗證與連線設定；`cracamole-desktop` 提供基本連線編輯、指紋核對與預覽，使用獨立私有資料目錄。TLS 與 NLA 模式已與獨立 loopback RDP 測試伺服器驗證工作階段、影格與輸入；Windows x64 可見桌面已比對縮放前後各九個 RDP 測試影格像素及 SSH 測試文字與背景。Windows x64 互動測試已驗證系統剪貼簿 Unicode 文字讀寫；真實 Windows／xrdp 服務及其 NLA 互通性、遠端剪貼簿交換、完整鍵鼠相容性及更廣泛的可見畫面尚未驗收。`cracamole-web` 是完整 Web 系統入口，內嵌私人 loopback daemon。舊版「保留官方 Java webapp」範圍已被使用者取消，不能恢復為部署依賴。完整 MVP 仍待長時間 fuzz、資源／安全及 arm64 等驗收；不要把本機測試全綠當成全部完成。見 `docs/java-free-mvp.md` 與 `docs/MVP-STATUS.md`。
 
 常用指令：
 
@@ -24,12 +24,15 @@ cargo bench -p guac-terminal --bench mvp --locked
 
 文件以繁體中文撰寫,請沿用。
 
+終端機編碼：SSH／Telnet 預設 UTF-8，`character-encoding` 可明確選擇 Big5、GBK、GB18030 與日韓等舊編碼；僅轉換遠端終端機文字。SSH 驗證與 Web／Guacamole 仍用 Unicode，RDP 剪貼簿維持 Unicode；不得正規化密碼。跨封包解碼、不可表示輸入的整批拒絕及真實瀏覽器字形比較見 README 與 `scripts/text_dev.sh`。C oracle 須明確傳入 `--allow-terminal-encoding-extension`，不能把前綴不符當作相容。
+
 ## C 版參考原始碼
 
 `reference/guacamole-server/` 是 Apache `guacamole-server` 的本機 clone(`.gitignore` 已忽略,**不屬於本 repo**,不可 commit、不可把其程式碼複製進 Rust crate)。版本為 `main` @ `bb1ba8ed`(2026-11-03,`configure.ac` 為 1.6.1,最新兩個修正即 GUACAMOLE-2323 / 2350,與筆記一致)。上游沒有 1.6.1 tag,所以筆記是依 `main`。用途:回填 `⟳C` 預期值、核對筆記與檔名。唯讀使用。
 
 ## 文件地圖(動工前先讀)
 
+- `docs/reference-gap-analysis.md` — **C 參考實作 vs 現有功能差距全盤掃描報告**（2026-11-08 最新落實現狀對照，涵蓋架構、協定、17 領域、安全與 UI/UX 比對）。
 - `docs/rust-migration/00-index-and-coverage.md` — C 版相容性參考入口，含已被證偽的前提與已知缺陷。僅在判讀歷史 C 行為時參考較新的 addendum；現行產品範圍以使用者決定與 `AGENTS.md` 為準，實際行為須核對程式碼及測試。
 - `docs/rust-migration/NN-*.md` — 對原 C 專案(guacamole-server 1.6.1)的逐檔閱讀筆記，作為 daemon 相容性參考。不能覆蓋使用者明確指定的無 Java 與單一管理員範圍。引用格式 `[11]` = `11-protocol-ssh.md`。覆蓋率約 93% 且為推論，與 C 版實測不符時應更正筆記。
 - `docs/java-free-mvp.md` — 現行完整系統架構、檔案、API、帳號範圍、資料保存與無 Java 驗收；優先於舊計畫中保留 Java webapp 的內容。
@@ -42,11 +45,12 @@ cargo bench -p guac-terminal --bench mvp --locked
 
 ## 架構要點(跨文件才看得出來)
 
-- **MVP 範圍**：單一管理員登入、連線 CRUD、本機 JSON 保存及瀏覽器 SSH／Telnet。Rust 服務直接提供頁面與 WebSocket，不需要 Java、Tomcat、PostgreSQL 或 Node.js runtime。RDP 為使用者後續明確要求加入（`crates/proto-rdp`，以 IronRDP 為引擎；已支援畫面、鍵盤、滑鼠、文字剪貼簿與動態縮放，音訊、磁碟機／檔案重新導向與 RemoteApp 尚未完成；`scripts/rdp_dev.sh` 為遠端 xrdp＋本機編譯的快速測試迴圈）；VNC、K8s、Serial、錄影、共享連線、SFTP、多使用者及內建 TLS 不在第一版。
+- **MVP 範圍**：單一管理員登入、連線 CRUD、本機 JSON 保存及瀏覽器 SSH／Telnet。Rust 服務直接提供頁面與 WebSocket，不需要 Java、Tomcat、PostgreSQL 或 Node.js runtime。RDP 為使用者後續明確要求加入（`crates/proto-rdp`，以 IronRDP 為引擎；已支援畫面、鍵盤、滑鼠、文字剪貼簿與動態縮放，音訊、磁碟機／檔案重新導向與 RemoteApp 尚未完成；`scripts/rdp_dev.sh` 為遠端 xrdp＋本機編譯的快速測試迴圈）；VNC 為使用者後續明確要求加入（`crates/proto-vnc`，自製 RFB 客戶端，無第三方 VNC crate；以連線 macOS 螢幕共享為優先：ARD 驗證類型 30、VNC 密碼類型 2；編碼 Raw／CopyRect／Hextile／ZRLE；`scripts/vnc_dev.sh` 於遠端 Docker 主機跑 TigerVNC 容器互通測試，`scripts/vnc_vectors.py` 為 ARD／DES 的獨立已知答案向量；尚未在真實 macOS 上驗證，Tight／Cursor 偽編碼／客戶端發起的縮放不支援）；K8s、Serial、錄影、共享連線、SFTP、多使用者及內建 TLS 不在第一版。
 - **Web 安全與保存**：Argon2id 驗證、HttpOnly/SameSite session、同源檢查、登入限流；登出與到期會關閉該 session 的 tunnel。管理員密碼由環境變數提供，至少 12 字元。連線機密保存在私有 volume 的 0600 JSON，尚未加密，API 只回傳是否已設定；不可將這些值放進日誌、URL 或 Git。
 - **Greenfield**,只保證 Guacamole 線路協定(1.5.0)與連線參數名稱相容;不做 C/Rust 混編、不做 C ABI、不支援動態 `.so` 外掛(協定以 Cargo feature 靜態編入)。
+- **協定描述自己**：`ProtocolPlugin::info()` 提供顯示名稱、預設連接埠與可核對的伺服器身分（`IdentityKind`：host-key／certificate），`arg_names()` 即該協定接受的參數。Web 經 `GET /api/protocols` 取得，前端的協定選單、預設埠、參數過濾與信任流程都由它驅動；新增協定不需修改 web 層的協定名單。仍屬協定專屬的只有各協定的表單群組（`web/index.html` 的 `data-protocols`）、`option-sections.js` 的進階設定、RDP 的 NLA 說明與 Ctrl+Alt+Del 鈕，以及 `store.rs` 的 RDP `ignore-cert` 規則。
 - **單進程 tokio、每連線一個 task**(D2);外掛只能經 `SessionCtx` 與外界互動,不可碰 socket,以便日後改為 worker 進程隔離。
-- **Crate 依賴單向**:`guac-protocol ← guac-session ← guac-display ← guac-terminal ← proto-* ← guacd ← cracamole-web`。`guac-protocol` 必須無 I/O、無 async、不得 panic。`guac-testkit` 只能是 dev-dependency。`web/` 資產內嵌於 Web binary，`web/vendor/` 的 JavaScript 保留 Apache LICENSE／NOTICE。
+- **Crate 依賴單向**:`guac-protocol ← guac-session ← guac-display ← guac-terminal ← proto-*（含 proto-vnc，僅依賴 guac-session／guac-display／guac-protocol）← guacd ← cracamole-web`。`guac-protocol` 必須無 I/O、無 async、不得 panic。`guac-testkit` 只能是 dev-dependency。`web/` 資產內嵌於 Web binary，`web/vendor/` 的 JavaScript 保留 Apache LICENSE／NOTICE。
 - **終端機實作**：`terminal.rs` 使用 `alacritty_terminal`／`vte` 與 `guac-display`，`font.rs` 使用內建字型與系統 fallback，不用 Pango。舊計畫的 `Grid`／`Renderer` 分層為規劃，不能當作現有 API。
 - **Docker 完整系統**：`docker/compose.yml` 與 `docker/cracamole-web.Dockerfile` 為主要入口，只發布 HTTP。獨立 `guacd` 映像與 CLI 相容性測試仍保留，不能把它們誤當完整 Web 部署。`docker/compose.e2e.yml` 僅含 Rust 應用與 sshd／telnetd 測試主機。
 

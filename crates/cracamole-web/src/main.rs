@@ -28,10 +28,9 @@ async fn run() -> Result<(), String> {
         .parse()
         .map_err(|_| "CRACAMOLE_HTTP_BIND 無效".to_string())?;
     let shutdown = CancellationToken::new();
-    let daemon = TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| e.to_string())?;
-    let backend = daemon.local_addr().map_err(|e| e.to_string())?;
+    // The daemon lives in this process and is reached over in-memory pipes: it has no
+    // authentication, so it must not be reachable through any socket.
+    let (daemon, incoming) = tokio::sync::mpsc::channel(8);
     let app = cracamole_web::router(WebConfig {
         username: std::env::var("CRACAMOLE_ADMIN_USERNAME").unwrap_or_else(|_| "admin".into()),
         password,
@@ -42,7 +41,7 @@ async fn run() -> Result<(), String> {
         trusted_proxies: cracamole_web::parse_trusted_proxies(
             &std::env::var("CRACAMOLE_TRUSTED_PROXIES").unwrap_or_default(),
         )?,
-        backend,
+        backend: cracamole_web::BackendLink::Memory(daemon),
         shutdown: shutdown.clone(),
     })
     .await?;
@@ -54,8 +53,8 @@ async fn run() -> Result<(), String> {
         listener.local_addr().map_err(|e| e.to_string())?
     );
     tokio::task::spawn_blocking(guac_terminal::FontSet::warm_up);
-    let mut backend_task = tokio::spawn(guacd::serve(
-        daemon,
+    let mut backend_task = tokio::spawn(guacd::serve_streams(
+        incoming,
         Arc::new(guacd::Registry::builtin()),
         guacd::ServerConfig::default(),
         shutdown.clone(),
