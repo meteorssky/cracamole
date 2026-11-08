@@ -1,7 +1,7 @@
 // The stage: the remote display plus everything about its state (overlay, status bar, helper keys, clipboard).
 import { $, el } from '../util/dom.js';
 import { identityText, inspectIdentity, saveIdentity } from './trust.js';
-import { endpoint, protocolLabel } from '../util/protocols.js';
+import { endpoint, identityKind, protocolLabel } from '../util/protocols.js';
 import { createSession } from '../session/guac.js';
 import { CTRL_ALT_DEL, KEYS } from '../session/keys.js';
 import { toast } from '../ui/toast.js';
@@ -42,7 +42,7 @@ function showOverlay({
   cert.hidden = !identity;
   cert.textContent = identity ? identityText(identity) : '';
   $('overlay-trust').textContent =
-    identity?.kind === 'ssh' ? '信任這把主機金鑰並重新連線' : '信任這張憑證並重新連線';
+    identity?.kind === 'host-key' ? '信任這把主機金鑰並重新連線' : '信任這張憑證並重新連線';
   $('overlay-trust').hidden = !canTrust;
   $('overlay-retry').hidden = !canRetry;
   $('overlay-edit').hidden = !canEdit;
@@ -107,8 +107,8 @@ function onSessionState(connection, state, info) {
   showOverlay(explainMissingCredentials(connection, info));
   if (
     info.reason === 'upstream' &&
-    (connection.protocol === 'ssh' ||
-      (connection.protocol === 'rdp' &&
+    (identityKind(connection.protocol) === 'host-key' ||
+      (identityKind(connection.protocol) === 'certificate' &&
         (connection.params['ignore-cert'] !== 'true' || connection.params['server-cert-sha256'])))
   ) {
     const target = current;

@@ -19,7 +19,9 @@ pub mod settings;
 pub use args::ARGS;
 pub use settings::{ClipboardEncoding, VncSettings};
 
-use guac_session::{BoxFuture, Params, ProtocolPlugin, SessionCtx, SessionError, Status};
+use guac_session::{
+    BoxFuture, IdentityKind, Params, ProtocolInfo, ProtocolPlugin, SessionCtx, SessionError, Status,
+};
 
 pub struct VncPlugin;
 
@@ -30,6 +32,14 @@ impl ProtocolPlugin for VncPlugin {
 
     fn arg_names(&self) -> &'static [&'static str] {
         ARGS
+    }
+
+    fn info(&self) -> ProtocolInfo {
+        ProtocolInfo {
+            label: "VNC",
+            default_port: 5900,
+            identity: IdentityKind::None,
+        }
     }
 
     fn run(&self, ctx: SessionCtx, params: Params) -> BoxFuture<Result<(), SessionError>> {

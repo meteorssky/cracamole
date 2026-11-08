@@ -1,7 +1,7 @@
 import { api, ApiError } from '../api.js';
 import { $ } from '../util/dom.js';
 import { openDialog } from '../ui/dialog.js';
-import { DEFAULT_PORTS } from '../util/protocols.js';
+import { defaultPort, protocolArgs } from '../util/protocols.js';
 import {
   collapseAllOptions,
   fillOptions,
@@ -20,11 +20,19 @@ const FIELD_ERROR_IDS = {
   'server-cert-sha256': 'error-server-cert-sha256',
 };
 
-// Parameters that only make sense for one protocol; removed when another protocol is saved.
-const SSH_ONLY = ['host-key', 'private-key', 'passphrase'];
-const TELNET_ONLY = ['login-success-regex', 'login-failure-regex'];
-const RDP_ONLY = ['domain', 'security', 'ignore-cert', 'server-cert-sha256'];
-const TERMINAL_ONLY = ['terminal-type', 'func-keys-and-keypad'];
+// Parameters owned by the protocol-specific form groups (or fixed values). A value is written
+// only when the chosen protocol declares that parameter.
+const FORM_PARAMS = [
+  ['domain', f => f.elements.domain.value.trim()],
+  ['security', f => f.elements.security.value],
+  ['ignore-cert', f => (f.elements['ignore-cert'].checked ? 'true' : 'false')],
+  ['server-cert-sha256', f => f.elements['server-cert-sha256'].value.trim()],
+  ['host-key', f => f.elements['host-key'].value.trim()],
+  ['login-success-regex', f => f.elements['login-success-regex'].value],
+  ['login-failure-regex', f => f.elements['login-failure-regex'].value],
+  ['terminal-type', () => 'xterm'],
+  ['func-keys-and-keypad', () => 'vt100'],
+];
 
 let editing = null;
 let connectAfterSave = false;
@@ -38,7 +46,7 @@ function applyProtocol() {
   for (const group of f.querySelectorAll('[data-protocols]')) {
     group.hidden = !group.dataset.protocols.split(' ').includes(protocol);
   }
-  $('f-port').placeholder = DEFAULT_PORTS[protocol] || '';
+  $('f-port').placeholder = defaultPort(protocol);
   updateOptionSummaries(f, protocol);
 }
 
@@ -87,31 +95,14 @@ function buildParams(f, protocol) {
     const value = f.elements[key].value;
     if (value || f.elements['clear-secrets'].checked) params[key] = value;
   }
-  const drop = keys => {
-    for (const key of keys) delete params[key];
-  };
-  if (protocol === 'vnc') {
-    drop([...TERMINAL_ONLY, ...SSH_ONLY, ...TELNET_ONLY, ...RDP_ONLY]);
-    return params;
+  const accepted = protocolArgs(protocol);
+  for (const [name, read] of FORM_PARAMS) {
+    if (accepted.has(name)) params[name] = read(f);
   }
-  if (protocol === 'rdp') {
-    drop([...TERMINAL_ONLY, ...SSH_ONLY, ...TELNET_ONLY]);
-    params.domain = f.elements.domain.value.trim();
-    params.security = f.elements.security.value;
-    params['ignore-cert'] = f.elements['ignore-cert'].checked ? 'true' : 'false';
-    params['server-cert-sha256'] = f.elements['server-cert-sha256'].value.trim();
-    return params;
-  }
-  drop(RDP_ONLY);
-  params['terminal-type'] = 'xterm';
-  params['func-keys-and-keypad'] = 'vt100';
-  if (protocol === 'ssh') {
-    drop(TELNET_ONLY);
-    params['host-key'] = f.elements['host-key'].value.trim();
-  } else {
-    drop(SSH_ONLY);
-    params['login-success-regex'] = f.elements['login-success-regex'].value;
-    params['login-failure-regex'] = f.elements['login-failure-regex'].value;
+  // The server rejects parameters a protocol does not declare, so never carry over leftovers
+  // from another protocol the connection used before.
+  for (const key of Object.keys(params)) {
+    if (!accepted.has(key)) delete params[key];
   }
   return params;
 }

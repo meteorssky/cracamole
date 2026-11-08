@@ -6,6 +6,9 @@ import { preserveSavedEncoding } from '../util/encodings.js';
 import { OPTION_SECTIONS } from './option-sections.js';
 export { OPTION_SECTIONS };
 
+// A section lists the protocols it applies to, or 'all' for every protocol the server offers.
+const appliesTo = (section, protocol) => section.protocols === 'all' || section.protocols.includes(protocol);
+
 const inputId = name => 'opt-' + name;
 
 function fieldNode(field) {
@@ -39,7 +42,7 @@ export function renderOptions(container) {
     ...OPTION_SECTIONS.map(section =>
       el(
         'details',
-        { class: 'group group--details', 'data-protocols': section.protocols.join(' '), 'data-section': section.id },
+        { class: 'group group--details', 'data-protocols': section.protocols === 'all' ? null : section.protocols.join(' '), 'data-section': section.id },
         el(
           'summary',
           {},
@@ -75,7 +78,7 @@ export function updateOptionSummaries(form, protocol) {
       if (count > 0) badge.dataset.configured = 'true';
       else delete badge.dataset.configured;
     }
-    if (section.protocols.includes(protocol)) {
+    if (appliesTo(section, protocol)) {
       total += count;
       const details = form.querySelector('[data-section="' + section.id + '"]');
       if (details?.open) anyOpen = true;
@@ -112,7 +115,7 @@ export function fillOptions(form, params, isEditing = false) {
 // Returns [field, message] for the first invalid number among the options that apply, else null.
 export function validateOptions(form, protocol) {
   for (const section of OPTION_SECTIONS) {
-    if (!section.protocols.includes(protocol)) continue;
+    if (!appliesTo(section, protocol)) continue;
     for (const field of fieldsOf(section)) {
       if (field.type !== 'number') continue;
       const text = form.elements[field.name].value.trim();
@@ -130,7 +133,7 @@ export function validateOptions(form, protocol) {
 // and removes every option that belongs only to other protocols.
 export function readOptions(form, protocol, params) {
   for (const section of OPTION_SECTIONS) {
-    const applies = section.protocols.includes(protocol);
+    const applies = appliesTo(section, protocol);
     for (const field of fieldsOf(section)) {
       const control = form.elements[field.name];
       const value = applies ? (field.type === 'checkbox' ? (control.checked ? 'true' : '') : control.value.trim()) : '';

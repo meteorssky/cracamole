@@ -2,6 +2,7 @@
 
 mod assets;
 mod auth;
+mod protocols;
 mod proxy;
 mod store;
 mod trust;
@@ -126,6 +127,7 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/session", get(session))
+        .route("/api/protocols", get(protocols::list))
         .route("/api/connections", get(list).post(create))
         .route(
             "/api/connections/{id}",

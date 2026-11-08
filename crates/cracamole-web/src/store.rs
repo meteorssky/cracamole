@@ -93,8 +93,7 @@ pub fn validate(draft: &Draft) -> Result<(), Invalid> {
     if draft.name.trim().is_empty() || draft.name.chars().count() > 120 {
         return Err(invalid("name", "請輸入 1 到 120 個字元的連線名稱。"));
     }
-    let registry = guacd::Registry::builtin();
-    let Some(plugin) = registry.get(&draft.protocol) else {
+    let Some(plugin) = crate::protocols::registry().get(&draft.protocol) else {
         return Err(invalid(
             "protocol",
             "不支援這個協定，請改選 SSH、Telnet、RDP 或 VNC。",

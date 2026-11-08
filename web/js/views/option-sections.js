@@ -1,8 +1,6 @@
 // Supported protocol settings: data only.
 import { TEXT_ENCODINGS } from '../util/encodings.js';
 
-const ALL = ['ssh', 'telnet', 'rdp', 'vnc'];
-
 export const OPTION_SECTIONS = [
   {
     id: 'terminal',
@@ -121,7 +119,7 @@ export const OPTION_SECTIONS = [
   {
     id: 'access',
     title: '連線控制',
-    protocols: ALL,
+    protocols: 'all',
     fields: [
       { name: 'timeout', label: '連線逾時（秒）', type: 'number', min: 1, max: 120, placeholder: '15' },
       { name: 'read-only', label: '唯讀：不傳送鍵盤與滑鼠輸入', type: 'checkbox' },

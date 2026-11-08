@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 #[derive(Default)]
 pub struct Registry {
     plugins: HashMap<String, Arc<dyn ProtocolPlugin>>,
+    /// Registration order, so front ends can list protocols the way they were declared.
+    order: Vec<String>,
 }
 
 impl Registry {
@@ -26,18 +28,24 @@ impl Registry {
     }
 
     pub fn with(mut self, plugin: impl ProtocolPlugin) -> Self {
-        self.plugins
-            .insert(plugin.name().to_string(), Arc::new(plugin));
+        let name = plugin.name().to_string();
+        if self
+            .plugins
+            .insert(name.clone(), Arc::new(plugin))
+            .is_none()
+        {
+            self.order.push(name);
+        }
         self
     }
 
     /// All protocols compiled into this binary.
     pub fn builtin() -> Self {
         let r = Self::new();
-        #[cfg(feature = "telnet")]
-        let r = r.with(proto_telnet::TelnetPlugin);
         #[cfg(feature = "ssh")]
         let r = r.with(proto_ssh::SshPlugin);
+        #[cfg(feature = "telnet")]
+        let r = r.with(proto_telnet::TelnetPlugin);
         #[cfg(feature = "rdp")]
         let r = r.with(proto_rdp::RdpPlugin);
         #[cfg(feature = "vnc")]
@@ -47,6 +55,11 @@ impl Registry {
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn ProtocolPlugin>> {
         self.plugins.get(name).cloned()
+    }
+
+    /// Plugins in registration order.
+    pub fn plugins(&self) -> impl Iterator<Item = &Arc<dyn ProtocolPlugin>> {
+        self.order.iter().filter_map(|name| self.plugins.get(name))
     }
 
     pub fn names(&self) -> Vec<&str> {

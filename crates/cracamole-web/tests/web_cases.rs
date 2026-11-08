@@ -887,3 +887,71 @@ async fn logs_endpoint_requires_auth_and_returns_logs() {
     assert!(body.get("logs").and_then(|v| v.as_array()).is_some());
     shutdown.cancel();
 }
+
+#[tokio::test]
+async fn web_protocol_catalogue_requires_login_and_describes_every_protocol() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        CancellationToken::new(),
+    )
+    .await;
+    let (status, _, _) = call(
+        &app,
+        "GET",
+        "/api/protocols",
+        None,
+        None,
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let cookie = login(&app).await;
+    let (status, _, body) = call(
+        &app,
+        "GET",
+        "/api/protocols",
+        None,
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().unwrap();
+    let names: Vec<_> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["ssh", "telnet", "rdp", "vnc"]);
+    assert_eq!(rows[0]["label"], "SSH");
+    assert_eq!(rows[0]["default_port"], 22);
+    assert_eq!(rows[0]["identity"], "host-key");
+    assert_eq!(rows[2]["identity"], "certificate");
+    assert!(rows[1]["identity"].is_null());
+    for row in rows {
+        let args: Vec<_> = row["args"].as_array().unwrap().iter().collect();
+        assert!(args.contains(&&json!("hostname")), "{row}");
+    }
+    // Probing an identity the protocol does not publish is refused.
+    let (status, _, created) = call(
+        &app,
+        "POST",
+        "/api/connections",
+        Some(json!({"name":"T","protocol":"telnet","params":{"hostname":"h"}})),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    for path in ["host-key", "certificate"] {
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            &format!("/api/connections/{id}/{path}"),
+            None,
+            Some(&cookie),
+            "http://localhost",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+    }
+}

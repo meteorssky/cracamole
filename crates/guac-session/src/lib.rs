@@ -14,7 +14,7 @@ pub use error::SessionError;
 pub use handshake::{handshake, ClientCaps, Handshake, HANDSHAKE_TIMEOUT};
 pub use net::connect_tcp;
 pub use params::Params;
-pub use plugin::{BoxFuture, ProtocolPlugin};
+pub use plugin::{BoxFuture, IdentityKind, ProtocolInfo, ProtocolPlugin};
 pub use reader::InstructionReader;
 pub use session::{run_session, InputEvent, SessionConfig, SessionCtx, SessionTx};
 

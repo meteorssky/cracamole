@@ -1,6 +1,7 @@
 import { api, ApiError, setUnauthorizedHandler } from './api.js';
 import { state } from './state.js';
-import { $ } from './util/dom.js';
+import { $, el } from './util/dom.js';
+import { allProtocols, loadProtocols } from './util/protocols.js';
 import { initTheme } from './util/theme.js';
 import { confirmAction } from './ui/dialog.js';
 import { toast } from './ui/toast.js';
@@ -18,11 +19,36 @@ async function refreshConnections() {
   showEmptyGuidance(list.length > 0);
 }
 
+// Protocol choices come from the server, so a new protocol needs no front-end change here.
+function renderProtocolChoices() {
+  const protocols = allProtocols();
+  $('f-protocol').replaceChildren(...protocols.map(p => el('option', { value: p.name }, p.label)));
+  $('empty-actions').replaceChildren(
+    ...protocols.map((p, index) =>
+      el(
+        'button',
+        {
+          class: index === 0 ? 'btn btn--primary' : 'btn',
+          type: 'button',
+          onClick: () => openEditor(null, p.name),
+        },
+        '新增 ' + p.label + ' 主機',
+      ),
+    ),
+  );
+}
+
 async function enterWorkspace() {
   state.set('loggedIn', true);
   hideLogin();
   $('workspace').hidden = false;
   setDrawerOpen(true);
+  try {
+    await loadProtocols();
+    renderProtocolChoices();
+  } catch (error) {
+    toast(error instanceof ApiError ? error.message : '無法載入協定清單，請重新整理頁面。');
+  }
   await refreshConnections();
 }
 
@@ -83,9 +109,6 @@ async function boot() {
       openSession(connection);
     },
   });
-  for (const button of document.querySelectorAll('[data-new-protocol]')) {
-    button.addEventListener('click', () => openEditor(null, button.dataset.newProtocol));
-  }
   initLogs();
   $('open-logs')?.addEventListener('click', openLogs);
   $('logout').addEventListener('click', async () => {

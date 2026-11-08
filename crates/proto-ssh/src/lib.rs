@@ -15,7 +15,9 @@ pub use probe::{probe_host_key, HostKeyInfo};
 pub use session::run_ssh;
 pub use settings::SshSettings;
 
-use guac_session::{BoxFuture, Params, ProtocolPlugin, SessionCtx, SessionError, Status};
+use guac_session::{
+    BoxFuture, IdentityKind, Params, ProtocolInfo, ProtocolPlugin, SessionCtx, SessionError, Status,
+};
 
 pub struct SshPlugin;
 
@@ -26,6 +28,14 @@ impl ProtocolPlugin for SshPlugin {
 
     fn arg_names(&self) -> &'static [&'static str] {
         ARGS
+    }
+
+    fn info(&self) -> ProtocolInfo {
+        ProtocolInfo {
+            label: "SSH",
+            default_port: 22,
+            identity: IdentityKind::HostKey,
+        }
     }
 
     fn run(&self, ctx: SessionCtx, params: Params) -> BoxFuture<Result<(), SessionError>> {

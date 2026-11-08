@@ -86,11 +86,7 @@
             </div>
             <h2 id="empty-title">選擇一台主機</h2>
             <p id="empty-text" class="muted">從左側連線庫選擇主機，終端機會在這裡以全視窗開啟。</p>
-            <div id="empty-actions" class="empty__actions" hidden>
-              <button class="btn btn--primary" type="button" data-new-protocol="ssh">新增 SSH 主機</button>
-              <button class="btn" type="button" data-new-protocol="rdp">新增 RDP 主機</button>
-              <button class="btn" type="button" data-new-protocol="telnet">新增 Telnet 主機</button>
-            </div>
+            <div id="empty-actions" class="empty__actions" hidden></div>
           </div>
         </div>
         <div id="overlay" class="overlay" hidden>
@@ -173,10 +169,6 @@
           <div class="field">
             <label class="field__label" for="f-protocol">協定</label>
             <select class="input" id="f-protocol" name="protocol">
-              <option value="ssh">SSH</option>
-              <option value="telnet">Telnet</option>
-              <option value="rdp">RDP（遠端桌面）</option>
-              <option value="vnc">VNC（含 macOS 螢幕共享）</option>
             </select>
             <p class="field__error" id="error-protocol" hidden></p>
           </div>
