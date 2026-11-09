@@ -115,11 +115,18 @@ async function visibleInk(page, clip) {
 }
 
 // options: { ignoreCert: false } leaves RDP certificate checking on; { certPin } pre-sets a trusted fingerprint.
+const protocolLabel = protocol => ({ ssh: 'SSH', telnet: 'Telnet', rdp: 'RDP', vnc: 'VNC' })[protocol];
+async function selectProtocol(form, protocol) {
+  const radio = form.getByRole('radio', { name: protocolLabel(protocol), exact: true });
+  await radio.focus();
+  await radio.press('Space');
+}
+
 async function addConnection(page, name, protocol, host = 'backend', port = '', password = 'tester-pw', options = {}) {
   await page.getByRole('button', { name: '新增連線', exact: true }).click();
   const form = page.locator('#connection-form');
   await form.getByLabel('連線名稱').fill(name);
-  await form.getByLabel('協定', { exact: true }).selectOption(protocol);
+  await selectProtocol(form, protocol);
   await form.getByLabel('主機名稱或 IP').fill(host);
   if (port) await form.getByLabel('連接埠').fill(String(port));
   await form.getByLabel('帳號', { exact: true }).fill('tester');
@@ -140,4 +147,4 @@ async function addConnection(page, name, protocol, host = 'backend', port = '', 
   await expect(page.getByRole('button', { name: `連線 ${name}`, exact: true })).toBeVisible();
 }
 
-module.exports = { PASSWORD, compose, remoteFile, rdpExec, ready, login, visibleInk, addConnection, shellQuote };
+module.exports = { PASSWORD, compose, remoteFile, rdpExec, ready, login, visibleInk, addConnection, shellQuote, selectProtocol, protocolLabel };

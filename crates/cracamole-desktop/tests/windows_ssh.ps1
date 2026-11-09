@@ -104,6 +104,16 @@ try {
     Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
     Click (Button '登入')
     Click (Button '新增')
+    if ($env:CRACAMOLE_TEST_FILE_DIALOG -eq '1') {
+        Set-Text $inputs[8] 'C:\fixture\unchanged-key'
+        [void][SshGui]::PostMessage((Button '瀏覽…'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } 'file dialog not found'
+        $fileDialog = [SshGui]::Find([uint32]$process.Id, '#32770')
+        [void][SshGui]::PostMessage($fileDialog, 0x0111, [IntPtr]2, [IntPtr]::Zero)
+        Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -eq [IntPtr]::Zero } 'file dialog did not close'
+        if ([SshGui]::EditText($inputs[8]) -ne 'C:\fixture\unchanged-key') { throw 'cancel changed private key path' }
+        Set-Text $inputs[8] ''
+    }
     Set-Text $inputs[3] 'SSH fixture'
     if ($EncodingName -eq 'Big5') { [void][SshGui]::SendMessageInt($combos[2], 0x014E, [IntPtr]1, [IntPtr]::Zero) }
     Set-Text $inputs[4] '127.0.0.1'

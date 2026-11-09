@@ -1,7 +1,10 @@
 //! 原生連線編輯表單；既有機密不會載入控制項。
 use cracamole_store::{Draft, PublicConnection};
 use native_windows_gui as nwg;
-use std::{cell::RefCell, io::Read};
+use std::{
+    cell::{Cell, RefCell},
+    io::Read,
+};
 use zeroize::Zeroizing;
 
 const ENCODINGS: &[&str] = &[
@@ -25,6 +28,7 @@ pub struct Editor {
     username: nwg::TextInput,
     password: nwg::TextInput,
     key_path: nwg::TextInput,
+    pub browse_key: nwg::Button,
     passphrase: nwg::TextInput,
     domain: nwg::TextInput,
     security: nwg::ComboBox<String>,
@@ -43,6 +47,8 @@ pub struct Editor {
     pub save: nwg::Button,
     pub cancel: nwg::Button,
     base: RefCell<Option<PublicConnection>>,
+    visible: Cell<bool>,
+    duplicate: Cell<bool>,
 }
 
 impl Editor {
@@ -74,6 +80,7 @@ impl Editor {
         let mut username = nwg::TextInput::default();
         let mut password = nwg::TextInput::default();
         let mut key_path = nwg::TextInput::default();
+        let mut browse_key = nwg::Button::default();
         let mut passphrase = nwg::TextInput::default();
         let mut domain = nwg::TextInput::default();
         let mut security = nwg::ComboBox::default();
@@ -97,7 +104,12 @@ impl Editor {
             .parent(window)
             .build(&mut name)?;
         nwg::ComboBox::builder()
-            .collection(vec!["ssh".into(), "telnet".into(), "rdp".into()])
+            .collection(vec![
+                "ssh".into(),
+                "telnet".into(),
+                "rdp".into(),
+                "vnc".into(),
+            ])
             .selected_index(Some(0))
             .position((390, 126))
             .size((200, 150))
@@ -126,9 +138,15 @@ impl Editor {
             .build(&mut password)?;
         nwg::TextInput::builder()
             .position((95, 276))
-            .size((495, 28))
+            .size((395, 28))
             .parent(window)
             .build(&mut key_path)?;
+        nwg::Button::builder()
+            .text("瀏覽…")
+            .position((500, 274))
+            .size((90, 32))
+            .parent(window)
+            .build(&mut browse_key)?;
         nwg::TextInput::builder()
             .password(Some('●'))
             .position((95, 316))
@@ -234,6 +252,7 @@ impl Editor {
             username,
             password,
             key_path,
+            browse_key,
             passphrase,
             domain,
             security,
@@ -252,12 +271,15 @@ impl Editor {
             save,
             cancel,
             base: RefCell::new(None),
+            visible: Cell::new(false),
+            duplicate: Cell::new(false),
         };
         editor.show(false);
         Ok(editor)
     }
 
     pub fn show(&self, visible: bool) {
+        self.visible.set(visible);
         for label in self.labels.iter().take(6) {
             label.set_visible(visible);
         }
@@ -277,7 +299,12 @@ impl Editor {
             self.key_path.set_text("");
             self.passphrase.set_text("");
             self.base.borrow_mut().take();
+            self.duplicate.set(false);
         }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.visible.get()
     }
 
     fn show_protocol_fields(&self, visible: bool) {
@@ -285,16 +312,26 @@ impl Editor {
         let ssh = visible && protocol == "ssh";
         let rdp = visible && protocol == "rdp";
         let telnet = visible && protocol == "telnet";
+        let vnc = visible && protocol == "vnc";
+        self.port
+            .set_placeholder_text(Some(match protocol.as_str() {
+                "ssh" => "22",
+                "telnet" => "23",
+                "rdp" => "3389",
+                "vnc" => "5900",
+                _ => "",
+            }));
         self.labels[6].set_visible(ssh);
         self.labels[7].set_visible(ssh);
         self.key_path.set_visible(ssh);
+        self.browse_key.set_visible(ssh);
         self.passphrase.set_visible(ssh);
         self.domain_label.set_visible(rdp);
         self.domain.set_visible(rdp);
         self.security_label.set_visible(rdp);
         self.security.set_visible(rdp);
-        self.disable_copy.set_visible(rdp);
-        self.disable_paste.set_visible(rdp);
+        self.disable_copy.set_visible(rdp || vnc);
+        self.disable_paste.set_visible(rdp || vnc);
         self.success_label.set_visible(telnet);
         self.failure_label.set_visible(telnet);
         self.success.set_visible(telnet);
@@ -313,7 +350,31 @@ impl Editor {
         }
     }
 
+    pub fn is_text_field(&self, handle: nwg::ControlHandle) -> bool {
+        self.text_fields().contains(&handle)
+    }
+
+    pub fn set_key_path(&self, path: &str) {
+        self.key_path.set_text(path);
+    }
+
+    pub fn text_fields(&self) -> [nwg::ControlHandle; 10] {
+        [
+            self.name.handle,
+            self.hostname.handle,
+            self.port.handle,
+            self.username.handle,
+            self.password.handle,
+            self.key_path.handle,
+            self.passphrase.handle,
+            self.domain.handle,
+            self.success.handle,
+            self.failure.handle,
+        ]
+    }
+
     pub fn begin(&self, base: Option<PublicConnection>) {
+        self.duplicate.set(false);
         let value = |key: &str| {
             base.as_ref()
                 .and_then(|c| c.params.get(key))
@@ -369,6 +430,15 @@ impl Editor {
         self.name.set_focus();
     }
 
+    pub fn begin_duplicate(&self, base: PublicConnection) {
+        let name = duplicate_name(&base.name);
+        self.begin(Some(base));
+        self.duplicate.set(true);
+        self.name.set_text(&name);
+        self.hostname.set_focus();
+        self.hostname.set_selection(0..u32::MAX);
+    }
+
     pub fn draft(&self) -> Result<(Option<String>, Draft), &'static str> {
         let protocol = self.protocol.selection_string().unwrap_or_default();
         let hostname = self.hostname.text();
@@ -379,6 +449,11 @@ impl Editor {
             .filter(|old| old.protocol == protocol)
             .map(|old| old.params.clone())
             .unwrap_or_default();
+        if self.duplicate.get() {
+            for key in ["password", "private-key", "passphrase"] {
+                params.remove(key);
+            }
+        }
         if base.as_ref().is_some_and(|old| {
             old.protocol != protocol
                 || old.params.get("hostname").map(String::as_str).unwrap_or("") != hostname
@@ -431,6 +506,8 @@ impl Editor {
                 _ => return Err("請選擇 RDP 安全模式。"),
             };
             params.insert("security".into(), security.into());
+        }
+        if protocol == "rdp" || protocol == "vnc" {
             for (checkbox, key) in [
                 (&self.disable_copy, "disable-copy"),
                 (&self.disable_paste, "disable-paste"),
@@ -483,12 +560,47 @@ impl Editor {
             }
         }
         Ok((
-            base.as_ref().map(|old| old.id.clone()),
+            if self.duplicate.get() {
+                None
+            } else {
+                base.as_ref().map(|old| old.id.clone())
+            },
             Draft {
                 name: self.name.text(),
                 protocol,
                 params,
             },
         ))
+    }
+}
+
+fn duplicate_name(name: &str) -> String {
+    let start = name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    let (prefix, digits) = name.split_at(start);
+    let copy = if !digits.is_empty() {
+        digits
+            .parse::<u128>()
+            .ok()
+            .and_then(|number| number.checked_add(1))
+            .map(|number| format!("{prefix}{number:0width$}", width = digits.len()))
+    } else {
+        None
+    };
+    copy.unwrap_or_else(|| format!("{name} - 複製"))
+        .chars()
+        .take(120)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::duplicate_name;
+
+    #[test]
+    fn duplicate_names_keep_numeric_padding() {
+        assert_eq!(duplicate_name("prod-web-01"), "prod-web-02");
+        assert_eq!(duplicate_name("主機-9"), "主機-10");
+        assert_eq!(duplicate_name("主機"), "主機 - 複製");
+        assert!(duplicate_name(&"主".repeat(120)).chars().count() <= 120);
     }
 }

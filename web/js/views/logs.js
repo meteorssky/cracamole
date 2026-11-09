@@ -2,6 +2,7 @@
 import { api, ApiError } from '../api.js';
 import { toast } from '../ui/toast.js';
 import { $, el } from '../util/dom.js';
+import { openDialog } from '../ui/dialog.js';
 
 let timer = null;
 let rawLogs = [];
@@ -118,7 +119,7 @@ export function openLogs() {
   const dialog = $('logs-dialog');
   if (!dialog) return;
   autoScroll = true;
-  dialog.showModal();
+  openDialog(dialog, $('close-logs'));
   fetchLogs();
   startPolling();
 }
@@ -182,5 +183,5 @@ export function initLogs() {
     }
   });
 
-  dialog.addEventListener('cancel', () => stopPolling());
+  dialog.addEventListener('close', stopPolling);
 }

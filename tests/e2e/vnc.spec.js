@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { ready, login, visibleInk, addConnection } = require('./helpers');
+const { ready, login, visibleInk, addConnection, selectProtocol } = require('./helpers');
 
 // The VNC fixture is tests/vnc (TigerVNC with VNC password authentication). Forward its port first:
 //   ssh -N -L 15901:127.0.0.1:15901 user@docker-host
@@ -23,7 +23,7 @@ test('vnc: the editor shows macOS guidance and VNC settings, and saves only VNC 
   await login(page);
   await page.getByRole('button', { name: '新增連線', exact: true }).click();
   const form = page.locator('#connection-form');
-  await form.getByLabel('協定', { exact: true }).selectOption('vnc');
+  await selectProtocol(form, 'vnc');
   await expect(form.getByLabel('連接埠')).toHaveAttribute('placeholder', '5900');
   await expect(form.getByText('VNC 與 macOS 螢幕共享', { exact: true })).toBeVisible();
   await expect(form.getByText('系統設定', { exact: false })).toBeVisible();

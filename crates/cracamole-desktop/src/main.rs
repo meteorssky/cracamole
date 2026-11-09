@@ -231,6 +231,24 @@ mod windows_ui {
         last.get().map(|(x, y)| Input::Mouse { x, y, mask: 0 })
     }
 
+    fn layout_library(
+        window: &nwg::Window,
+        list: &nwg::ListBox<String>,
+        buttons: [&nwg::Button; 8],
+    ) {
+        let (width, height) = window.size();
+        let list_width = width.saturating_sub(48).max(96);
+        let list_height = height.saturating_sub(360).max(120);
+        list.set_size(list_width, list_height);
+        let row = 128 + list_height as i32 + 16;
+        buttons[0].set_position(24, row); // refresh
+        buttons[1].set_position((width as i32 - 124).max(266), row); // logout
+        buttons[2].set_position(145, row); // connect
+        for (index, button) in buttons[3..].iter().enumerate() {
+            button.set_position(24 + index as i32 * 121, row + 85);
+        }
+    }
+
     fn layout_session(
         window: &nwg::Window,
         image: &nwg::ImageFrame,
@@ -241,14 +259,15 @@ mod windows_ui {
     ) -> (u32, u32) {
         let (width, height) = window.size();
         let width = width.saturating_sub(48).clamp(96, 4096);
-        let height = height.saturating_sub(238).clamp(64, 4096);
+        let height = height.saturating_sub(193).clamp(64, 4096);
         image.set_size(width, height);
-        let buttons_y = 128 + height as i32 + 16;
-        logout.set_position(24, buttons_y);
-        disconnect.set_position(145, buttons_y);
-        paste.set_position(266, buttons_y);
-        input.set_position(24, buttons_y + 45);
-        input.set_size(width, 28);
+        let buttons_y = 128 + height as i32 + 8;
+        disconnect.set_position(24, buttons_y);
+        paste.set_position(145, buttons_y);
+        logout.set_position((width as i32 - 76).max(266), buttons_y);
+        // Keep the edit control focusable for keyboard and IME input without displaying typed text.
+        input.set_position(24, buttons_y + 33);
+        input.set_size(1, 1);
         (width, height)
     }
 
@@ -266,6 +285,53 @@ mod windows_ui {
         Ok(data)
     }
 
+    fn connection_label(connection: &cracamole_store::PublicConnection) -> String {
+        let registry = guacd::Registry::builtin();
+        let info = registry
+            .get(&connection.protocol)
+            .map(|plugin| plugin.info());
+        let label = info.map_or(connection.protocol.as_str(), |item| item.label);
+        let host = connection.params.get("hostname").map_or("", String::as_str);
+        let host = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_string()
+        };
+        let user = connection.params.get("username").filter(|s| !s.is_empty());
+        let port = connection
+            .params
+            .get("port")
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .or_else(|| {
+                info.and_then(|item| {
+                    (item.default_port != 0).then(|| item.default_port.to_string())
+                })
+            });
+        let endpoint = format!(
+            "{}{}{}",
+            user.map_or(String::new(), |s| format!("{s}@")),
+            host,
+            port.map_or(String::new(), |s| format!(":{s}"))
+        );
+        let trusted = ["host-key", "server-cert-sha256"].iter().any(|key| {
+            connection
+                .params
+                .get(*key)
+                .is_some_and(|value| !value.is_empty())
+        });
+        let readonly = connection
+            .params
+            .get("read-only")
+            .is_some_and(|value| value == "true");
+        format!(
+            "[{label}] {} — {endpoint}{}{}",
+            connection.name,
+            if trusted { " · 已信任" } else { "" },
+            if readonly { " · 唯讀" } else { "" }
+        )
+    }
+
     fn refresh_connections(
         runtime: &tokio::runtime::Runtime,
         store: &WindowsStore,
@@ -280,9 +346,12 @@ mod windows_ui {
                 list.set_collection(
                     connections
                         .into_iter()
-                        .map(|c| format!("[{}] {}", c.protocol, c.name))
+                        .map(|c| connection_label(&c))
                         .collect(),
                 );
+                if count > 0 {
+                    list.set_selection(Some(0));
+                }
                 status.set_text(&format!("已載入 {count} 筆桌面連線。"));
             }
             Err(error) => {
@@ -383,6 +452,7 @@ mod windows_ui {
             .size((100, 32))
             .parent(&window)
             .build(&mut close)?;
+        password_input.set_focus();
         let mut connections = nwg::ListBox::<String>::default();
         let mut refresh = nwg::Button::default();
         let mut logout = nwg::Button::default();
@@ -393,6 +463,7 @@ mod windows_ui {
         let mut edit = nwg::Button::default();
         let mut delete = nwg::Button::default();
         let mut verify = nwg::Button::default();
+        let mut duplicate = nwg::Button::default();
         let mut image = nwg::ImageFrame::default();
         let mut remote_input = nwg::TextInput::default();
         nwg::ListBox::builder()
@@ -454,6 +525,7 @@ mod windows_ui {
             (&mut edit, "編輯", 145),
             (&mut delete, "刪除", 266),
             (&mut verify, "核對身分", 387),
+            (&mut duplicate, "複製", 508),
         ] {
             nwg::Button::builder()
                 .text(title)
@@ -464,6 +536,8 @@ mod windows_ui {
             button.set_visible(false);
         }
         let editor = Editor::new(&window)?;
+        let editor_text_handles = editor.text_fields();
+        let editor_cancel_handle = editor.cancel.handle;
         let mut timer = nwg::Timer::default();
         nwg::Timer::builder()
             .parent(&window)
@@ -513,7 +587,11 @@ mod windows_ui {
                 control_keys.borrow_mut().clear();
                 image.set_bitmap(None);
                 nwg::stop_thread_dispatch();
-            } else if event == nwg::Event::OnButtonClick && handle == login.handle {
+            } else if (event == nwg::Event::OnButtonClick && handle == login.handle)
+                || (event == nwg::Event::OnKeyPress
+                    && (handle == password_input.handle || handle == username_input.handle)
+                    && matches!(data, nwg::EventData::OnKey(0x0d)))
+            {
                 let now = Instant::now();
                 let mut attempts = attempts.borrow_mut();
                 attempts.retain(|at| now.duration_since(*at) < Duration::from_secs(60));
@@ -564,8 +642,18 @@ mod windows_ui {
                         edit.set_visible(true);
                         delete.set_visible(true);
                         verify.set_visible(true);
+                        duplicate.set_visible(true);
+                        layout_library(
+                            &event_window,
+                            &connections,
+                            [
+                                &refresh, &logout, &connect, &add, &edit, &delete, &verify,
+                                &duplicate,
+                            ],
+                        );
                         refresh_connections(&runtime, &opened, &connections, &explanation, &ids);
                         *store.borrow_mut() = Some(opened);
+                        connections.set_focus();
                     }
                     Ok(false) => explanation.set_text("帳號或密碼不正確。"),
                     Err(_) => explanation.set_text("無法驗證帳密，請稍後再試。"),
@@ -594,6 +682,7 @@ mod windows_ui {
                     edit.set_visible(false);
                     delete.set_visible(false);
                     verify.set_visible(false);
+                    duplicate.set_visible(false);
                     release_mouse(&mouse_mask);
                     modifiers.set(0);
                     altgr.set(false);
@@ -687,8 +776,11 @@ mod windows_ui {
                     task,
                 });
                 explanation.set_text("正在取得主機身分；此探測不傳送帳密。");
-            } else if event == nwg::Event::OnButtonClick
-                && handle == connect.handle
+            } else if ((event == nwg::Event::OnButtonClick && handle == connect.handle)
+                || (event == nwg::Event::OnListBoxDoubleClick && handle == connections.handle)
+                || (event == nwg::Event::OnKeyPress
+                    && handle == connections.handle
+                    && matches!(data, nwg::EventData::OnKey(0x0d))))
                 && expires.get().is_some_and(|end| Instant::now() < end)
             {
                 let Some(id) = connections
@@ -761,13 +853,14 @@ mod windows_ui {
                 edit.set_visible(false);
                 delete.set_visible(false);
                 verify.set_visible(false);
+                duplicate.set_visible(false);
                 image.set_visible(true);
                 remote_input.set_visible(true);
                 remote_input.set_enabled(false);
                 disconnect.set_visible(true);
                 paste.set_visible(true);
                 paste.set_enabled(false);
-                explanation.set_text("正在連線；請使用畫面下方輸入區。");
+                explanation.set_text("正在連線；點選遠端畫面後可輸入。");
             } else if event == nwg::Event::OnButtonClick && handle == disconnect.handle {
                 active.borrow_mut().take();
                 paste_job.borrow_mut().take();
@@ -790,16 +883,24 @@ mod windows_ui {
                 edit.set_visible(true);
                 delete.set_visible(true);
                 verify.set_visible(true);
+                duplicate.set_visible(true);
+                layout_library(
+                    &event_window,
+                    &connections,
+                    [
+                        &refresh, &logout, &connect, &add, &edit, &delete, &verify, &duplicate,
+                    ],
+                );
                 explanation.set_text("連線已結束。");
             } else if event == nwg::Event::OnButtonClick
-                && (handle == add.handle || handle == edit.handle)
+                && (handle == add.handle || handle == edit.handle || handle == duplicate.handle)
                 && expires.get().is_some_and(|end| Instant::now() < end)
                 && active.borrow().is_none()
             {
                 let Some(opened) = store.borrow().as_ref().cloned() else {
                     return;
                 };
-                let base = if handle == edit.handle {
+                let base = if handle == edit.handle || handle == duplicate.handle {
                     let Some(id) = connections
                         .selection()
                         .and_then(|index| ids.borrow().get(index).cloned())
@@ -817,7 +918,7 @@ mod windows_ui {
                 } else {
                     None
                 };
-                if handle == edit.handle && base.is_none() {
+                if (handle == edit.handle || handle == duplicate.handle) && base.is_none() {
                     explanation.set_text("找不到連線。");
                     return;
                 }
@@ -830,18 +931,55 @@ mod windows_ui {
                 edit.set_visible(false);
                 delete.set_visible(false);
                 verify.set_visible(false);
-                editor.begin(base);
-                explanation.set_text("留空機密會保留原值；SSH 私鑰請填入檔案路徑。");
+                duplicate.set_visible(false);
+                if handle == duplicate.handle {
+                    editor.begin_duplicate(base.expect("已檢查來源連線"));
+                    explanation.set_text("複製公開設定；密碼與私鑰須重新輸入。");
+                } else {
+                    editor.begin(base);
+                    explanation.set_text("留空機密會保留原值；SSH 私鑰請填入檔案路徑。");
+                }
+            } else if event == nwg::Event::OnButtonClick
+                && handle == editor.browse_key.handle
+                && editor.is_visible()
+                && expires.get().is_some_and(|end| Instant::now() < end)
+            {
+                let mut dialog = nwg::FileDialog::default();
+                if nwg::FileDialog::builder()
+                    .title("選擇 SSH 私鑰檔案")
+                    .action(nwg::FileDialogAction::Open)
+                    .build(&mut dialog)
+                    .is_err()
+                {
+                    explanation.set_text("無法開啟檔案選擇器，請手動輸入私鑰路徑。");
+                    return;
+                }
+                if dialog.run(Some(&event_window.handle))
+                    && editor.is_visible()
+                    && expires.get().is_some_and(|end| Instant::now() < end)
+                {
+                    match dialog
+                        .get_selected_item()
+                        .ok()
+                        .and_then(|path| path.into_string().ok())
+                    {
+                        Some(path) => editor.set_key_path(&path),
+                        None => explanation.set_text("無法讀取所選路徑，請手動輸入私鑰路徑。"),
+                    }
+                }
             } else if event == nwg::Event::OnComboxBoxSelection {
                 editor.protocol_changed(handle);
-            } else if event == nwg::Event::OnButtonClick
-                && (handle == editor.save.handle || handle == editor.cancel.handle)
+            } else if ((event == nwg::Event::OnButtonClick
+                && (handle == editor.save.handle || handle == editor.cancel.handle))
+                || (event == nwg::Event::OnKeyPress
+                    && editor.is_text_field(handle)
+                    && matches!(data, nwg::EventData::OnKey(0x0d | 0x1b))))
                 && expires.get().is_some_and(|end| Instant::now() < end)
             {
                 let Some(opened) = store.borrow().as_ref().cloned() else {
                     return;
                 };
-                if handle == editor.save.handle {
+                if handle == editor.save.handle || matches!(data, nwg::EventData::OnKey(0x0d)) {
                     let (id, draft) = match editor.draft() {
                         Ok(draft) => draft,
                         Err(message) => {
@@ -880,6 +1018,14 @@ mod windows_ui {
                 edit.set_visible(true);
                 delete.set_visible(true);
                 verify.set_visible(true);
+                duplicate.set_visible(true);
+                layout_library(
+                    &event_window,
+                    &connections,
+                    [
+                        &refresh, &logout, &connect, &add, &edit, &delete, &verify, &duplicate,
+                    ],
+                );
                 refresh_connections(&runtime, &opened, &connections, &explanation, &ids);
             } else if event == nwg::Event::OnButtonClick
                 && handle == delete.handle
@@ -942,6 +1088,19 @@ mod windows_ui {
                         Err(error) => explanation.set_text(error),
                     }
                 }
+            } else if event == nwg::Event::OnResize
+                && handle == event_window.handle
+                && active.borrow().is_none()
+                && store.borrow().is_some()
+                && !editor.is_visible()
+            {
+                layout_library(
+                    &event_window,
+                    &connections,
+                    [
+                        &refresh, &logout, &connect, &add, &edit, &delete, &verify, &duplicate,
+                    ],
+                );
             } else if event == nwg::Event::OnResize
                 && handle == event_window.handle
                 && active.borrow().is_some()
@@ -1157,7 +1316,7 @@ mod windows_ui {
                                     if policy.is_some_and(|(read_only, _)| read_only) {
                                         explanation.set_text("已連線（唯讀）；遠端輸入已停用。");
                                     } else {
-                                        explanation.set_text("已連線；請使用畫面下方輸入區。");
+                                        explanation.set_text("已連線；點選遠端畫面後可輸入。");
                                         remote_input.set_focus();
                                     }
                                 }
@@ -1196,6 +1355,15 @@ mod windows_ui {
                         edit.set_visible(true);
                         delete.set_visible(true);
                         verify.set_visible(true);
+                        duplicate.set_visible(true);
+                        layout_library(
+                            &event_window,
+                            &connections,
+                            [
+                                &refresh, &logout, &connect, &add, &edit, &delete, &verify,
+                                &duplicate,
+                            ],
+                        );
                         explanation.set_text("連線已結束或失敗。");
                     }
                 }
@@ -1424,6 +1592,28 @@ mod windows_ui {
                 }
                 Some(0)
             })?;
+        // NWG consumes Escape in text controls before emitting OnKeyPress.
+        // Post the existing cancel action so it runs after the current window message.
+        let mut editor_key_handlers = Vec::new();
+        for (index, handle) in editor_text_handles.iter().enumerate() {
+            let cancel = editor_cancel_handle.hwnd().ok_or("找不到取消按鈕")? as isize;
+            let handler =
+                nwg::bind_raw_event_handler(handle, 0x11000 + index, move |_, message, key, _| {
+                    if message == 0x0100 && key == 0x1b {
+                        unsafe {
+                            windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
+                                cancel as _,
+                                0x00f5,
+                                0,
+                                0,
+                            );
+                        }
+                        return Some(0);
+                    }
+                    None
+                })?;
+            editor_key_handlers.push(handler);
+        }
         let capture_handler =
             nwg::bind_raw_event_handler(&image_handle, 0x10001, move |_, message, _, _| {
                 if message == 0x0215 {
@@ -1439,6 +1629,9 @@ mod windows_ui {
                 None
             })?;
         nwg::dispatch_thread_events();
+        for handler in editor_key_handlers {
+            nwg::unbind_raw_event_handler(&handler)?;
+        }
         nwg::unbind_raw_event_handler(&capture_handler)?;
         nwg::unbind_raw_event_handler(&raw_handler)?;
         nwg::unbind_event_handler(&handler);
@@ -1448,6 +1641,26 @@ mod windows_ui {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn connection_label_shows_endpoint_trust_and_read_only() {
+            let connection = cracamole_store::PublicConnection {
+                id: "id".into(),
+                name: "機房 / 伺服器".into(),
+                protocol: "ssh".into(),
+                params: std::collections::BTreeMap::from([
+                    ("hostname".into(), "2001:db8::1".into()),
+                    ("username".into(), "alice".into()),
+                    ("host-key".into(), "key".into()),
+                    ("read-only".into(), "true".into()),
+                ]),
+                configured_secrets: vec!["password".into()],
+            };
+            assert_eq!(
+                connection_label(&connection),
+                "[SSH] 機房 / 伺服器 — alice@[2001:db8::1]:22 · 已信任 · 唯讀"
+            );
+        }
 
         #[test]
         fn session_lifetime_rejects_invalid_explicit_configuration() {

@@ -65,6 +65,8 @@
   /* layout */
   --statusbar-h: 2.25rem;
   --drawer-w: 20rem;
+  --card-actions-width: 8rem;
+  --recent-connection-width: 9rem;
   --tap: 2.75rem; /* 44px touch target */
 
   /* motion */

@@ -154,6 +154,24 @@ try {
     [void][DesktopLoginTest]::SendMessage($inputs[12], 0x000C, [IntPtr]::Zero, 'incorrect')
     [void][DesktopLoginTest]::SendMessage($save[0], 0x00F5, [IntPtr]::Zero, $null)
     if ([DesktopLoginTest]::SendMessageInt($list[0], 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -ne 1) { throw '新增連線失敗' }
+    if ($env:CRACAMOLE_TEST_DUPLICATE -eq '1') {
+        $duplicate = @($children | Where-Object { [DesktopLoginTest]::Text($_) -eq '複製' })[0]
+        [void][DesktopLoginTest]::SendMessageInt($list[0], 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
+        [void][DesktopLoginTest]::SendMessage($duplicate, 0x00F5, [IntPtr]::Zero, $null)
+        if ([DesktopLoginTest]::EditText($inputs[3]) -ne 'test-server - 複製' -or [DesktopLoginTest]::EditText($inputs[7]) -ne '') { throw '複製表單名稱或機密錯誤' }
+        [void][DesktopLoginTest]::SendMessage($inputs[4], 0x000C, [IntPtr]::Zero, '127.0.0.2')
+        [void][DesktopLoginTest]::SendMessage($save[0], 0x00F5, [IntPtr]::Zero, $null)
+        $entries = @((Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value)
+        $source = @($entries | Where-Object { $_.name -eq 'test-server' })[0]
+        $copy = @($entries | Where-Object { $_.name -eq 'test-server - 複製' })[0]
+        if ($entries.Count -ne 2 -or $source.params.password -ne 'fixture-secret' -or $copy.params.password -or $copy.params.hostname -ne '127.0.0.2' -or $copy.params.'character-encoding' -ne 'Big5') { throw '複製未保留公開設定或意外複製機密' }
+        [void][DesktopLoginTest]::PostMessage($window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+        if (-not $testProcess.WaitForExit(10000)) { throw '關閉逾時' }
+        $testProcess.Refresh()
+        if ($testProcess.ExitCode -ne 0) { throw '關閉失敗' }
+        Write-Output '原生連線複製保留公開設定且不複製密碼。'
+        return
+    }
     $edit = @($children | Where-Object { [DesktopLoginTest]::Text($_) -eq '編輯' })
     if ($edit.Count -ne 1) { throw '找不到編輯按鈕' }
     [void][DesktopLoginTest]::SendMessageInt($list[0], 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
@@ -251,11 +269,25 @@ try {
     $deleteDeadline = [DateTime]::UtcNow.AddSeconds(5)
     while ([DesktopLoginTest]::SendMessageInt($list[0], 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -ne 0 -and [DateTime]::UtcNow -lt $deleteDeadline) { Start-Sleep -Milliseconds 50 }
     if ([DesktopLoginTest]::SendMessageInt($list[0], 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -ne 0) { throw '刪除連線失敗' }
+    [void][DesktopLoginTest]::SendMessage($add[0], 0x00F5, [IntPtr]::Zero, $null)
+    [void][DesktopLoginTest]::SendMessageInt($protocol[0], 0x014E, [IntPtr]3, [IntPtr]::Zero)
+    [void][DesktopLoginTest]::SendMessageInt($window, 0x0111, [IntPtr](0x10000 -bor [DesktopLoginTest]::GetDlgCtrlID($protocol[0])), $protocol[0])
+    $disableCopy = @($children | Where-Object { [DesktopLoginTest]::Text($_) -eq '禁止從遠端複製' })[0]
+    if (-not [DesktopLoginTest]::OwnVisible($disableCopy) -or [DesktopLoginTest]::OwnVisible($inputs[8])) { throw 'VNC 專用欄位顯示錯誤' }
+    [void][DesktopLoginTest]::SendMessage($inputs[3], 0x000C, [IntPtr]::Zero, 'VNC fixture')
+    [void][DesktopLoginTest]::SendMessage($inputs[4], 0x000C, [IntPtr]::Zero, '127.0.0.1')
+    [void][DesktopLoginTest]::SendMessageInt($disableCopy, 0x00F1, [IntPtr]1, [IntPtr]::Zero)
+    [void][DesktopLoginTest]::SendMessage($save[0], 0x00F5, [IntPtr]::Zero, $null)
+    $vnc = (Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value
+    if ($vnc.protocol -ne 'vnc' -or $vnc.params.'disable-copy' -ne 'true') { throw 'VNC 設定未保存' }
+    $row = [Text.StringBuilder]::new(4096)
+    [void][DesktopLoginTest]::SendMessageText($list[0], 0x0189, [IntPtr]::Zero, $row)
+    if (-not $row.ToString().Contains('[VNC] VNC fixture') -or -not $row.ToString().Contains('127.0.0.1:5900')) { throw '連線清單未顯示 VNC 協定與預設目的地' }
     [void][DesktopLoginTest]::PostMessage($window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
     if (-not $testProcess.WaitForExit(10000)) { throw '關閉逾時' }
     $testProcess.Refresh()
     if ($testProcess.ExitCode -ne 0) { throw '關閉失敗' }
-    Write-Output '原生登入、連線管理、機密保留、工作階段到期、Telnet 表示式與 Big5 輸入及登出關閉均通過。'
+    Write-Output '原生登入、連線管理、機密保留、工作階段到期、Telnet 表示式與 Big5 輸入、VNC 設定保存及登出關閉均通過。'
 } finally {
     if ($testProcess -and -not $testProcess.HasExited) {
         Stop-Process -Id $testProcess.Id -Force

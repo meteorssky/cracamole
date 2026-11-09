@@ -247,12 +247,26 @@ async fn bridge(
     }
     let _ = writer.shutdown().await;
     if !peer_closed {
-        let _ = socket
+        if socket
             .send(Message::Close(Some(CloseFrame {
                 code: 1000,
                 reason: "".into(),
             })))
+            .await
+            .is_ok()
+        {
+            // Wait for the peer's close reply before dropping the TCP stream. The client
+            // may have sent its close frame immediately after the disconnect instruction.
+            let _ = tokio::time::timeout(Duration::from_secs(1), async {
+                while let Some(message) = socket.recv().await {
+                    match message {
+                        Ok(Message::Close(_)) | Err(_) => break,
+                        _ => {}
+                    }
+                }
+            })
             .await;
+        }
     }
     Ok(())
 }

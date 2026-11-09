@@ -5,10 +5,12 @@ import { endpoint, identityKind, protocolLabel } from '../util/protocols.js';
 import { createSession } from '../session/guac.js';
 import { CTRL_ALT_DEL, KEYS } from '../session/keys.js';
 import { toast } from '../ui/toast.js';
+import { confirmAction } from '../ui/dialog.js';
 import { setChromeCollapsed, setDrawerOpen, setDrawerOverlay } from './drawer.js';
 
 let current = null; // { connection, session, attempt, identity }
 let attempts = 0;
+let confirmationPending = false;
 let hooks = { onEdit: () => {}, onActive: () => {}, onTrusted: () => {} };
 
 function setStatus(text, dotState) {
@@ -21,10 +23,26 @@ function setStatus(text, dotState) {
 
 function setControls(connected) {
   for (const id of ['toggle-clipboard', 'toggle-keybar', 'collapse-chrome']) $(id).disabled = !connected;
+  const params = current?.connection.params || {};
+  const canPaste = connected && params['read-only'] !== 'true' && params['disable-paste'] !== 'true';
+  $('quick-paste').disabled = !canPaste;
+  $('paste-clipboard').disabled = !canPaste;
   $('disconnect').disabled = !current;
   if (!connected) {
     $('clipboard-panel').hidden = true;
     $('toggle-clipboard').setAttribute('aria-expanded', 'false');
+  }
+}
+
+function hideClipboard() {
+  $('clipboard-panel').hidden = true;
+  $('toggle-clipboard').setAttribute('aria-expanded', 'false');
+}
+
+function pasteFromPanel() {
+  if (current?.session.paste($('clipboard-text').value)) {
+    hideClipboard();
+    current.session.focus();
   }
 }
 
@@ -84,6 +102,7 @@ function setKeybarVisible(visible) {
 
 function onSessionState(connection, state, info) {
   if (!current || current.connection.id !== connection.id) return;
+  current.state = state;
   if (state === 'connecting') {
     setStatus('正在連線…', 'connecting');
     showOverlay({ connecting: true, title: '正在連線到 ' + connection.name + '…' });
@@ -140,9 +159,30 @@ function explainMissingCredentials(connection, info) {
   };
 }
 
-export function openSession(connection) {
+export async function openSession(connection) {
+  if (current?.state === 'connected') {
+    if (current.connection.id === connection.id) {
+      setDrawerOpen(false);
+      current.session.focus();
+      return;
+    }
+    const target = current;
+    if (confirmationPending) return;
+    confirmationPending = true;
+    let confirmed;
+    try {
+      confirmed = await confirmAction({
+        title: '切換連線？',
+        message: '切換至「' + connection.name + '」會中斷「' + target.connection.name + '」。',
+        confirmLabel: '中斷並切換',
+      });
+    } finally {
+      confirmationPending = false;
+    }
+    if (!confirmed || current !== target) return;
+  }
   closeSession({ keepHistory: true });
-  current = { connection, session: null, attempt: ++attempts, identity: null };
+  current = { connection, session: null, attempt: ++attempts, identity: null, state: 'connecting' };
   if (history.state?.cracamole !== 'session') {
     history.replaceState({ cracamole: 'menu' }, '');
     history.pushState({ cracamole: 'session', id: connection.id }, '', '#session');
@@ -214,9 +254,30 @@ export function initStage(callbacks) {
   hooks = callbacks;
   setStatus('未連線', 'idle');
   if (!history.state?.cracamole) history.replaceState({ cracamole: 'menu' }, '');
-  window.addEventListener('popstate', () => {
-    if (current) closeSession({ fromHistory: true });
-    else setDrawerOpen(true);
+  window.addEventListener('popstate', async () => {
+    if (!current) {
+      setDrawerOpen(true);
+      return;
+    }
+    if (current.state !== 'connected') {
+      closeSession({ fromHistory: true });
+      return;
+    }
+    const target = current;
+    history.pushState({ cracamole: 'session', id: target.connection.id }, '', '#session');
+    if (confirmationPending) return;
+    confirmationPending = true;
+    let confirmed;
+    try {
+      confirmed = await confirmAction({
+        title: '返回連線庫？',
+        message: '返回連線庫會中斷「' + target.connection.name + '」。',
+        confirmLabel: '中斷並返回',
+      });
+    } finally {
+      confirmationPending = false;
+    }
+    if (confirmed && current === target) closeSession();
   });
   $('overlay-trust').addEventListener('click', () => {
     const target = current;
@@ -236,9 +297,29 @@ export function initStage(callbacks) {
     $('toggle-clipboard').setAttribute('aria-expanded', String(!panel.hidden));
     if (!panel.hidden) $('clipboard-text').focus();
   });
-  $('paste-clipboard').addEventListener('click', () => {
-    current?.session.paste($('clipboard-text').value);
-    current?.session.focus();
+  $('paste-clipboard').addEventListener('click', pasteFromPanel);
+  $('clipboard-panel').addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      hideClipboard();
+      current?.session.focus();
+    } else if (event.key === 'Enter' && event.ctrlKey && !$('paste-clipboard').disabled) {
+      event.preventDefault();
+      pasteFromPanel();
+    }
+  });
+  $('quick-paste').addEventListener('click', async () => {
+    const target = current;
+    if (!target || target.state !== 'connected') return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (current === target && target.state === 'connected' && target.session.paste(text)) {
+        hideClipboard();
+        target.session.focus();
+      }
+    } catch {
+      toast('無法讀取本機剪貼簿，請開啟剪貼簿面板後手動貼入。');
+    }
   });
   $('copy-clipboard').addEventListener('click', async () => {
     try {
@@ -249,5 +330,10 @@ export function initStage(callbacks) {
       toast('瀏覽器不允許自動複製，請手動複製所選內容。');
     }
   });
-  window.addEventListener('beforeunload', () => current?.session.dispose());
+  window.addEventListener('beforeunload', event => {
+    if (current?.state !== 'connected') return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+  window.addEventListener('pagehide', () => current?.session.dispose());
 }

@@ -1,7 +1,7 @@
 const { test, expect } = require('@playwright/test');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
-const { compose, ready, login, remoteFile, visibleInk, shellQuote } = require('./helpers');
+const { compose, ready, login, remoteFile, visibleInk, shellQuote, selectProtocol } = require('./helpers');
 
 // Fixed wire vectors, independent of the product's encoding library.
 const cases = [
@@ -51,6 +51,7 @@ test('encoding: editing a saved API alias keeps its encoding', async ({ page }) 
     expect(response.ok()).toBe(true);
     const saved = await response.json();
     await page.reload();
+    await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
     await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click();
     const form = page.locator('#connection-form');
     await expect(form.getByLabel('文字編碼', { exact: true })).toHaveValue(label);
@@ -66,16 +67,16 @@ test('encoding: editor offers terminal encodings and removes them for RDP', asyn
   await login(page);
   await page.getByRole('button', { name: '新增連線', exact: true }).click();
   const form = page.locator('#connection-form');
-  await form.getByLabel('協定', { exact: true }).selectOption('ssh');
+  await selectProtocol(form, 'ssh');
   await form.getByText('進階設定', { exact: true }).click();
   await form.getByText('終端機外觀與輸入', { exact: true }).click();
   const encoding = form.getByLabel('文字編碼', { exact: true });
   await expect(encoding).toHaveValue('');
   for (const [value] of cases.slice(1)) await encoding.selectOption(value);
   await encoding.selectOption('Big5');
-  await form.getByLabel('協定', { exact: true }).selectOption('telnet');
+  await selectProtocol(form, 'telnet');
   await expect(encoding).toHaveValue('Big5');
-  await form.getByLabel('協定', { exact: true }).selectOption('rdp');
+  await selectProtocol(form, 'rdp');
   await expect(encoding).toBeHidden();
   await form.getByLabel('連線名稱').fill('Unicode 中文 日本語 한국어 😀');
   await form.getByLabel('主機名稱或 IP').fill('example.invalid');

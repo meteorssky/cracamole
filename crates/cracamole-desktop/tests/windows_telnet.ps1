@@ -22,6 +22,7 @@ public static class TelnetGui {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out Rect r);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
+    [DllImport("user32.dll", EntryPoint="GetWindowLongW")] public static extern int GetWindowLong(IntPtr h, int index);
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(Point p);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr h);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr h, IntPtr dc);
@@ -80,17 +81,46 @@ try {
     if ($inputs.Count -ne 13 -or $combos.Count -ne 3) { throw '找不到預期的編輯控制項' }
     function Button([string]$label) { $found = @($children | Where-Object { [TelnetGui]::Text($_) -eq $label }); if ($found.Count -ne 1) { throw "找不到按鈕：$label" }; return $found[0] }
     Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
-    Click (Button '登入')
+    if ($env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
+        [void][TelnetGui]::SendMessageInt($inputs[1], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+    } else { Click (Button '登入') }
+    if ($env:CRACAMOLE_TEST_LIBRARY_RESIZE -eq '1') {
+        $before = New-Object TelnetGui+Rect
+        $after = New-Object TelnetGui+Rect
+        if (-not [TelnetGui]::GetWindowRect($list, [ref]$before)) { throw '無法讀取清單尺寸' }
+        if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 900, 700, 0x0006)) { throw '無法調整視窗' }
+        Wait-For {
+            [TelnetGui]::GetWindowRect($list, [ref]$after) -and
+            ($after.Right - $after.Left) -gt ($before.Right - $before.Left) -and
+            ($after.Bottom - $after.Top) -gt ($before.Bottom - $before.Top)
+        } '連線清單未隨視窗放大'
+    }
     Click (Button '新增')
+    if ($env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
+        Set-Text $inputs[3] '應取消的連線'
+        [void][TelnetGui]::SendMessageInt($inputs[3], 0x0100, [IntPtr]27, [IntPtr]::Zero)
+        Wait-For { ([TelnetGui]::GetWindowLong($inputs[3], -16) -band 0x10000000) -eq 0 } 'Escape 未關閉編輯器'
+        Click (Button '新增')
+    }
     Set-Text $inputs[3] 'Telnet fixture'
     [void][TelnetGui]::SendMessageInt($combos[0], 0x014E, [IntPtr]1, [IntPtr]::Zero)
     $selectionChanged = [IntPtr]([TelnetGui]::GetDlgCtrlID($combos[0]) -bor (1 -shl 16))
     [void][TelnetGui]::SendMessageInt($window, 0x0111, $selectionChanged, $combos[0])
     Set-Text $inputs[4] '127.0.0.1'
     Set-Text $inputs[5] ([string]$Port)
-    Click (Button '儲存')
-    [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
-    Click (Button '連線')
+    if ($env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
+        [void][TelnetGui]::SendMessageInt($inputs[4], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+    } else { Click (Button '儲存') }
+    if ($env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
+        if ([TelnetGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero) { throw '連線清單未預設選取首筆' }
+        if ($env:CRACAMOLE_TEST_DESKTOP_KEYBOARD -eq 'double') {
+            $doubleClick = [IntPtr]([TelnetGui]::GetDlgCtrlID($list) -bor (2 -shl 16))
+            [void][TelnetGui]::SendMessageInt($window, 0x0111, $doubleClick, $list)
+        } else { [void][TelnetGui]::SendMessageInt($list, 0x0100, [IntPtr]13, [IntPtr]::Zero) }
+    } else {
+        [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
+        Click (Button '連線')
+    }
     Wait-For { @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Static' -and [TelnetGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero }).Count -gt 0 } 'Telnet 畫面未顯示'
     if ($env:CRACAMOLE_TEST_VISIBLE_TELNET -eq '1') {
         $frame = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Static' -and [TelnetGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero })[0]

@@ -29,6 +29,7 @@ async fn browser_shared_ssh_composited_terminal() {
             "test",
             "local-ssh.spec.js",
             "--project=chromium",
+            "--timeout=30000",
         ])
         .env("CRACAMOLE_URL", url)
         .env("CRACAMOLE_LOCAL_SSH_PORT", server.addr.port().to_string())
@@ -51,6 +52,22 @@ async fn browser_shared_ssh_composited_terminal() {
             .any(|bytes| bytes == b"browser-test"),
         "瀏覽器輸入未送達 SSH fixture"
     );
+    let mobile = "行動輸入🙂".as_bytes();
+    for text in [
+        b"fixture-quick-paste".as_slice(),
+        b"fixture-panel-paste".as_slice(),
+    ] {
+        assert!(received.windows(text.len()).any(|window| window == text));
+    }
+    assert_eq!(
+        received
+            .windows(mobile.len())
+            .filter(|bytes| *bytes == mobile)
+            .count(),
+        1,
+        "合成輸入法文字未送達或重複送達 SSH fixture"
+    );
+    assert_eq!(received.iter().filter(|&&byte| byte == 0x7f).count(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

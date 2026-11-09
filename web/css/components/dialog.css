@@ -90,9 +90,9 @@
   overflow-y: auto;
   overflow-x: auto;
   background: var(--surface-sunken);
-  color: var(--on-terminal);
+  color: var(--text);
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   line-height: 1.5;
   padding: var(--space-3) var(--space-4);
 }
@@ -100,7 +100,7 @@
 .logs__list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .log-entry {
@@ -111,23 +111,23 @@
   padding: 1px 0;
   white-space: pre-wrap;
   word-break: break-all;
-  border-block-end: 1px solid rgb(255 255 255 / 4%);
+  border-block-end: 1px solid var(--border);
 }
 
 .log-entry:hover {
-  background: rgb(255 255 255 / 3%);
+  background: var(--surface);
 }
 
 .log-entry__time {
   color: var(--text-muted);
   flex-shrink: 0;
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
 }
 
 .log-entry__badge {
-  font-size: 0.6875rem;
+  font-size: var(--text-sm);
   font-weight: 700;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border-radius: var(--radius-sm);
   text-align: center;
   display: inline-block;
@@ -140,13 +140,11 @@
 }
 
 .log-entry[data-level="WARNING"] .log-entry__badge {
-  background: var(--text-warning);
-  color: #000;
+  color: var(--text-warning);
 }
 
 .log-entry[data-level="INFO"] .log-entry__badge {
-  background: var(--border-strong);
-  color: #fff;
+  color: var(--text);
 }
 
 .log-entry[data-level="DEBUG"] .log-entry__badge {
@@ -160,7 +158,16 @@
 }
 
 .log-entry__message {
-  color: var(--on-terminal);
+  color: var(--text);
+}
+
+.logs__empty {
+  text-align: center;
+  padding-block: var(--space-6);
+}
+
+.logs__status {
+  margin-inline-end: auto;
 }
 
 .log-entry[data-level="ERROR"] .log-entry__message {

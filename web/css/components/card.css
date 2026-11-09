@@ -3,11 +3,24 @@
   gap: var(--space-2);
 }
 
+.conn-group__title {
+  padding-block: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.conn-group__items {
+  display: grid;
+  gap: var(--space-1);
+}
+
 .card {
   position: relative;
   display: grid;
-  gap: var(--space-1);
-  padding: var(--space-3);
+  gap: 0;
+  padding: var(--space-1) var(--space-2);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -27,6 +40,7 @@
   align-items: center;
   gap: var(--space-2);
   min-inline-size: 0;
+  line-height: 1.2;
 }
 
 .card__status {
@@ -74,13 +88,62 @@
 .card__meta {
   font-size: var(--text-sm);
   color: var(--text-muted);
-  overflow-wrap: anywhere;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card__actions {
-  position: relative; /* above the stretched button so edit/delete stay clickable */
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
   z-index: 1;
   display: flex;
   gap: var(--space-1);
+  align-items: center;
   justify-content: flex-end;
+  padding-inline: var(--space-1);
+  background: var(--surface-raised);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.card:hover .card__actions,
+.card:focus-within .card__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .card:hover .card__title,
+  .card:focus-within .card__title {
+    padding-inline-end: var(--card-actions-width);
+  }
+
+  .card:hover .card__status,
+  .card:focus-within .card__status {
+    display: none;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .card__actions {
+    position: relative;
+    opacity: 1;
+    pointer-events: auto;
+    background: transparent;
+  }
+}
+
+.badge[data-protocol="ssh"] {
+  color: var(--text-success);
+}
+
+.badge[data-protocol="rdp"] {
+  color: var(--focus);
+}
+
+.badge[data-protocol="vnc"] {
+  color: var(--text-warning);
 }

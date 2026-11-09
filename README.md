@@ -63,7 +63,7 @@ flowchart LR
 |---|---|
 | `cracamole-web` | **系統正式部署入口**。提供 Axum HTTP/WebSocket 服務、Argon2id 管理員驗證、連線 CRUD、SSH/RDP 主機身分探測、內嵌靜態資產與私人 loopback `guacd` 生命週期管理。 |
 | `cracamole-store` | Web 與開發中的 Windows 原生介面共用的管理員帳密驗證、連線設定驗證與保存。 |
-| `cracamole-desktop` | 開發中的 Windows 原生介面；目前提供登入、基本連線新增／編輯／刪除、隨視窗調整的遠端畫面、輸入區、基本滑鼠及文字剪貼簿。原生系統剪貼簿、完整鍵鼠、真實 RDP 服務與可見畫面仍未完成驗收。登入使用 `CRACAMOLE_ADMIN_USERNAME`／`CRACAMOLE_ADMIN_PASSWORD`；桌面資料獨立保存於 `%LOCALAPPDATA%\cracamole-desktop`，可用 `CRACAMOLE_DESKTOP_DATA_DIR` 指定其他**專用目錄**。工作階段預設八小時；可用 `CRACAMOLE_DESKTOP_SESSION_MAX_SECS` 設定 1 至 28800 秒的較短期限。 |
+| `cracamole-desktop` | 開發中的 Windows 原生介面；目前提供登入、基本連線新增／編輯／刪除、SSH／Telnet／RDP／VNC 協定選項、隨視窗調整的遠端畫面、輸入區、基本滑鼠及文字剪貼簿。VNC 原生介面目前僅驗證設定保存，尚未完成端對端驗收；完整鍵鼠、真實 RDP 服務與可見畫面仍未完成驗收。登入使用 `CRACAMOLE_ADMIN_USERNAME`／`CRACAMOLE_ADMIN_PASSWORD`；桌面資料獨立保存於 `%LOCALAPPDATA%\cracamole-desktop`，可用 `CRACAMOLE_DESKTOP_DATA_DIR` 指定其他**專用目錄**。工作階段預設八小時；可用 `CRACAMOLE_DESKTOP_SESSION_MAX_SECS` 設定 1 至 28800 秒的較短期限。 |
 | `guacd` | Guacamole 線路協定路由與外掛註冊表（`Registry`）。可獨立執行以供相容性測試，但**非**完整 Web 系統入口。 |
 | `proto-ssh` | 純 Rust SSH 客戶端（基於 `russh`），支援密碼、OpenSSH/PEM 私鑰與密語、嚴格 `known_hosts` 驗證（含 `@revoked` 撤銷檢查）、PTY 動態縮放、雙向剪貼簿與安全貼上過濾。 |
 | `proto-telnet` | Telnet 狀態機與自動登入提示字元（正規表示式）比對，共用 `guac-terminal` 渲染管線。 |
@@ -80,6 +80,12 @@ Windows 原生版使用獨立資料目錄，不會自動讀取或遷移 Web 版�
 若有設定 `CRACAMOLE_DESKTOP_SESSION_MAX_SECS`，其值必須是 1 至 28800 的整數；無效值會使程式顯示錯誤並以非零狀態結束，避免誤用較長的預設期限。未設定時使用八小時。Windows x64 自動化已確認錯誤訊息、結束碼及不建立桌面資料目錄。
 
 SSH 自動化亦驗證中文及 UTF-16 代理對輸入可送達遠端；Windows x64 可見桌面已取樣測試終端機的文字及背景。Windows 輸入法的組字操作仍需實機驗收。
+
+原生連線時可點選遠端畫面輸入，鍵盤捕捉欄位縮為 1×1 並保留焦點；遠端畫面也獲得更多垂直空間。Windows x64 隱藏視窗已驗證 RDP 調整尺寸及控制項大小，實體滑鼠、輸入法及完整可見畫面仍待驗收。
+
+原生連線清單會隨主視窗放大，登出按鈕與連線操作分開。Windows x64 隱藏視窗已驗證放大後的清單與 RDP 連線結束時返回清單；極小視窗及可見畫面仍待驗收。
+
+原生清單的「複製」可建立新連線並帶入公開設定，名稱尾數會遞增；不帶入密碼、私鑰或密語，變更協定、主機或連接埠時移除既有身分指紋。Windows x64 隱藏視窗已驗證 Telnet 設定與密碼處理；SSH／RDP 指紋複製路徑及實際焦點仍待驗收。
 
 Windows x64 的本機 Telnet fixture 另驗證原生視窗新增連線、接收影格、中英文輸入、登出或工作階段到期後伺服器在視窗關閉前收到 EOF，以及遠端主動結束時更新狀態並清除舊影格；預設使用隱藏視窗，未檢查螢幕合成畫面或實體輸入裝置。可在有互動桌面的工作階段使用下列命令取樣可見的測試文字與背景；測試短暫顯示自己的視窗而不切換焦點，並先確認取樣位置屬於測試程序。最近一次此可見測試及既有 SSH 可見測試在同一 RDP 工作階段均未偵測到預期像素；後續診斷顯示該工作階段的螢幕 `GetPixel` 在測試視窗及螢幕原點均回傳失敗，無法完成取樣，不能將失敗視為可見畫面通過或據此判定畫面渲染異常。
 
@@ -144,6 +150,8 @@ Remove-Item Env:CRACAMOLE_TEST_DESKTOP_BINARY
 ```
 
 選取 SSH 或 RDP 連線後，可先按「核對身分」，透過其他可信管道比對指紋再確認保存。RDP 可設定網域及安全模式，預設使用 NLA；TLS 或自動協商須明確選擇。SSH 私鑰登入可在連線編輯畫面填入私鑰檔案路徑與密語；私鑰須是最多 8192 位元組的 UTF-8 文字。編輯時若協定、主機、連接埠及安全設定不變，未填入的機密會保留，勾選清除可移除；變更上述設定時須重新提供機密。檔案內容與密語保存於桌面連線庫，並非靜態加密。這是開發中版本，尚未完成下述原生介面驗收。
+
+SSH 私鑰路徑可使用「瀏覽…」開啟 Windows 檔案選擇器；取消時保留原有輸入。Windows x64 自動化已驗證開啟與取消，實際選取檔案及可見操作仍待驗收。
 
 SSH／Telnet 可選擇 UTF-8、Big5 等核心支援的終端機編碼。Telnet 可設定登入成功與失敗的正規表示式，兩者須同時填寫；留空則不等待登入結果。連線可設為唯讀，禁止送出遠端輸入；視窗會顯示唯讀狀態並停用輸入區。RDP 另可分別禁止從遠端複製及貼到遠端。這些限制由共用協定核心執行。
 

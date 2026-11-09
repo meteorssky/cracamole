@@ -51,6 +51,7 @@ test('ssh: unknown host requires approval, then a changed or revoked key is bloc
   const saved = (await (await page.request.get('api/connections')).json()).find(c => c.name === name);
   expect(saved.params['host-key']).toContain(remoteFile('/etc/ssh/ssh_host_ed25519_key.pub').trim().split(' ')[1]);
   await page.getByRole('button', { name: '中斷連線', exact: true }).click();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
   await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click();
   const key = saved.params['host-key'];
   await page.getByLabel('主機金鑰（known_hosts）').fill(key + '\n@revoked * ' + key);
@@ -284,6 +285,7 @@ test('Java-free connection editing, credential redaction, restart persistence an
   const name = `Persist ${Date.now()}`;
   await login(page);
   await addConnection(page, name, 'ssh', 'example.invalid');
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
   await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click();
   const form = page.locator('#connection-form');
   await expect(form.getByLabel('密碼', { exact: true })).toHaveValue('');
@@ -295,6 +297,7 @@ test('Java-free connection editing, credential redaction, restart persistence an
   await ready(request);
   await login(page);
   await expect(page.getByRole('button', { name: `連線 ${name} edited`, exact: true })).toBeVisible();
+  await page.getByRole('button', { name: `連線 ${name} edited`, exact: true }).focus();
   await page.getByRole('button', { name: `刪除 ${name} edited`, exact: true }).click();
   await page.getByRole('button', { name: '刪除這台主機', exact: true }).click();
   await expect(page.getByRole('button', { name: `連線 ${name} edited`, exact: true })).toHaveCount(0);

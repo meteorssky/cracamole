@@ -33,6 +33,15 @@ export function createSession({ connection, mount, onState, onClipboard, onModif
   const host = document.createElement('div');
   host.append(display.getElement());
   mount.append(host);
+  const mobileInput = document.createElement('textarea');
+  mobileInput.className = 'terminal-ime';
+  mobileInput.setAttribute('aria-label', '遠端文字輸入');
+  mobileInput.setAttribute('autocomplete', 'off');
+  mobileInput.setAttribute('autocapitalize', 'off');
+  mobileInput.setAttribute('spellcheck', 'false');
+  mobileInput.maxLength = 4096;
+  mobileInput.tabIndex = -1;
+  mount.append(mobileInput);
 
   const modifiers = { ctrl: false, alt: false };
   let state = 'connecting';
@@ -50,6 +59,68 @@ export function createSession({ connection, mount, onState, onClipboard, onModif
   function key(pressed, keysym) {
     client.sendKeyEvent(pressed ? 1 : 0, keysym);
   }
+
+  function sendMobileKey(keysym) {
+    if (disposed || state !== 'connected') return;
+    pressModifiers();
+    key(true, keysym);
+    key(false, keysym);
+    releaseModifiers();
+  }
+
+  function flushMobileText() {
+    const text = mobileInput.value;
+    mobileInput.value = '';
+    for (const character of text) {
+      const code = character.codePointAt(0);
+      if (code === 10 || code === 13) sendMobileKey(0xff0d);
+      else if (code >= 0x20 && code <= 0x10ffff && code !== 0x7f) {
+        sendMobileKey(code <= 0xff ? code : 0x01000000 | code);
+      }
+    }
+  }
+
+  let composing = false;
+  const onCompositionStart = event => { event.stopPropagation(); composing = true; };
+  const onCompositionEnd = event => {
+    event.stopPropagation();
+    composing = false;
+    queueMicrotask(() => { if (!disposed && !composing) flushMobileText(); });
+  };
+  const onMobileInput = event => {
+    event.stopPropagation();
+    if (event.isComposing || composing) return;
+    if (event.inputType === 'deleteContentBackward' && !mobileInput.value) sendMobileKey(0xff08);
+    else flushMobileText();
+  };
+  const onMobileBeforeInput = event => {
+    if (event.isComposing || composing) return;
+    if (event.inputType === 'deleteContentBackward' || event.inputType === 'insertLineBreak') {
+      event.preventDefault();
+      sendMobileKey(event.inputType === 'deleteContentBackward' ? 0xff08 : 0xff0d);
+    }
+  };
+  const onMobileKeyDown = event => {
+    event.stopPropagation();
+    if (event.isComposing || composing) return;
+    const special = { Backspace: 0xff08, Enter: 0xff0d, Tab: 0xff09, Escape: 0xff1b,
+      ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54 };
+    if (Object.hasOwn(special, event.key)) {
+      event.preventDefault();
+      sendMobileKey(special[event.key]);
+    }
+  };
+  const onTouchFocus = event => {
+    if (event.pointerType === 'touch' && state === 'connected') mobileInput.focus();
+  };
+  const onMobileKeyUp = event => event.stopPropagation();
+  mobileInput.addEventListener('compositionstart', onCompositionStart);
+  mobileInput.addEventListener('compositionend', onCompositionEnd);
+  mobileInput.addEventListener('input', onMobileInput);
+  mobileInput.addEventListener('beforeinput', onMobileBeforeInput);
+  mobileInput.addEventListener('keydown', onMobileKeyDown);
+  mobileInput.addEventListener('keyup', onMobileKeyUp);
+  mount.addEventListener('pointerdown', onTouchFocus);
 
   function releaseModifiers() {
     for (const name of ['alt', 'ctrl']) {
@@ -146,12 +217,14 @@ export function createSession({ connection, mount, onState, onClipboard, onModif
       return state;
     },
     paste(text) {
-      if (state !== 'connected' || !text) return;
+      if (state !== 'connected' || !text) return false;
       try {
         const bytes = encodeClipboard(text);
         sendClipboard(client, bytes);
+        return true;
       } catch (error) {
         onClipboardError(error.message);
+        return false;
       }
     },
     sendKey(keysym) {
@@ -185,6 +258,14 @@ export function createSession({ connection, mount, onState, onClipboard, onModif
       mount.removeEventListener('blur', onBlur);
       mount.removeEventListener('keydown', onKeyDown, true);
       mount.removeEventListener('paste', onPaste);
+      mount.removeEventListener('pointerdown', onTouchFocus);
+      mobileInput.removeEventListener('compositionstart', onCompositionStart);
+      mobileInput.removeEventListener('compositionend', onCompositionEnd);
+      mobileInput.removeEventListener('input', onMobileInput);
+      mobileInput.removeEventListener('beforeinput', onMobileBeforeInput);
+      mobileInput.removeEventListener('keydown', onMobileKeyDown);
+      mobileInput.removeEventListener('keyup', onMobileKeyUp);
+      mobileInput.remove();
       keyboard.onkeydown = null;
       keyboard.onkeyup = null;
       keyboard.reset();

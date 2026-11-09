@@ -1,7 +1,7 @@
 import { api, ApiError } from '../api.js';
 import { $ } from '../util/dom.js';
 import { openDialog } from '../ui/dialog.js';
-import { defaultPort, protocolArgs } from '../util/protocols.js';
+import { defaultPort, protocolArgs, quickAddress } from '../util/protocols.js';
 import {
   collapseAllOptions,
   fillOptions,
@@ -35,6 +35,7 @@ const FORM_PARAMS = [
 ];
 
 let editing = null;
+let cloneSource = null;
 let connectAfterSave = false;
 let onSaved = async () => {};
 
@@ -70,7 +71,10 @@ function showError(field, message) {
   const node = $(id);
   node.textContent = message;
   node.hidden = false;
-  const input = form().elements[field];
+  const input = field === 'protocol'
+    ? form().querySelector('input[name="protocol"]:checked') || form().querySelector('input[name="protocol"]')
+    : form().elements[field];
+  if (!input) return;
   input.setAttribute('aria-invalid', 'true');
   input.closest('details')?.setAttribute('open', ''); // never leave an error inside a collapsed section
   input.focus();
@@ -89,7 +93,7 @@ function validate(f) {
 }
 
 function buildParams(f, protocol) {
-  const params = { ...(editing?.params || {}) };
+  const params = { ...(editing?.params || cloneSource?.params || {}) };
   for (const key of ['hostname', 'port', 'username']) params[key] = f.elements[key].value.trim();
   for (const key of SECRET_FIELDS) {
     const value = f.elements[key].value;
@@ -98,6 +102,15 @@ function buildParams(f, protocol) {
   const accepted = protocolArgs(protocol);
   for (const [name, read] of FORM_PARAMS) {
     if (accepted.has(name)) params[name] = read(f);
+  }
+  if (cloneSource && (
+    protocol !== cloneSource.protocol ||
+    params.hostname.toLowerCase() !== (cloneSource.params.hostname || '').trim().toLowerCase() ||
+    (params.port || defaultPort(protocol)) !==
+      ((cloneSource.params.port || '').trim() || defaultPort(cloneSource.protocol))
+  )) {
+    delete params['host-key'];
+    delete params['server-cert-sha256'];
   }
   // The server rejects parameters a protocol does not declare, so never carry over leftovers
   // from another protocol the connection used before.
@@ -123,11 +136,13 @@ function fillSecretHints(connection) {
 }
 
 export function openEditor(connection = null, protocol = null) {
+  cloneSource = null;
   editing = connection;
   const f = form();
   f.reset();
   clearErrors();
   $('editor-title').textContent = connection ? '編輯連線' : '新增連線';
+  $('duplicate-connection').hidden = !connection;
   if (connection) {
     f.elements.name.value = connection.name;
     f.elements.protocol.value = connection.protocol;
@@ -146,6 +161,40 @@ export function openEditor(connection = null, protocol = null) {
   openDialog($('connection-editor'), f.elements.name);
 }
 
+export function openQuickEditor(target) {
+  openEditor(null, target.protocol);
+  const f = form();
+  f.elements.hostname.value = target.hostname;
+  f.elements.port.value = target.port;
+  f.elements.username.value = target.username;
+  f.elements.name.value = (target.username ? target.username + '@' : '')
+    .concat(target.hostname).slice(0, 120);
+  f.elements.password.focus();
+}
+
+function duplicateName(name) {
+  const match = name.match(/^(.*?)(\d+)$/u);
+  if (!match) return (name + ' - 複製').slice(0, 120);
+  const next = (BigInt(match[2]) + 1n).toString().padStart(match[2].length, '0');
+  return (match[1] + next).slice(0, 120);
+}
+
+export function duplicateConnection(connection) {
+  const publicParams = Object.fromEntries(
+    Object.entries(connection.params || {}).filter(([key]) => !SECRET_FIELDS.includes(key)),
+  );
+  const source = { ...connection, params: publicParams, configured_secrets: [] };
+  openEditor(source);
+  editing = null;
+  cloneSource = source;
+  $('editor-title').textContent = '複製連線';
+  $('duplicate-connection').hidden = true;
+  form().elements.name.value = duplicateName(connection.name);
+  fillSecretHints(null);
+  form().elements.hostname.focus();
+  form().elements.hostname.select();
+}
+
 export function initEditor({ saved }) {
   onSaved = saved;
   const optionsBox = $('protocol-options');
@@ -160,22 +209,56 @@ export function initEditor({ saved }) {
   });
   $('close-editor').addEventListener('click', () => dialog.close());
   $('cancel-editor').addEventListener('click', () => dialog.close());
+  $('duplicate-connection').addEventListener('click', () => {
+    if (!editing) return;
+    const source = editing;
+    dialog.addEventListener('close', () => duplicateConnection(source), { once: true });
+    dialog.close();
+  });
   $('save-and-connect').addEventListener('click', () => {
     connectAfterSave = true;
     form().requestSubmit();
   });
   dialog.addEventListener('close', () => {
     editing = null;
+    cloneSource = null;
     connectAfterSave = false;
     form().reset();
   });
-  form().elements.protocol.addEventListener('change', applyProtocol);
+  form().addEventListener('change', event => {
+    if (event.target.name === 'protocol') applyProtocol();
+  });
+  form().elements.hostname.addEventListener('paste', event => {
+    const text = event.clipboardData?.getData('text/plain') || '';
+    if (/^(?:[a-z][a-z0-9+.-]*:\/\/)?[^@/\s]*:[^@/\s]*@/i.test(text.trim())) {
+      event.preventDefault();
+      showError('hostname', '連線位址不可包含密碼，請在密碼欄位輸入。');
+      return;
+    }
+    const address = quickAddress(text);
+    if (!address?.explicit) return;
+    event.preventDefault();
+    const f = form();
+    if (address.protocolExplicit) {
+      f.elements.protocol.value = address.protocol;
+      applyProtocol();
+    }
+    f.elements.hostname.value = address.hostname;
+    if (address.username) f.elements.username.value = address.username;
+    if (address.port) f.elements.port.value = address.port;
+    clearErrors();
+  });
   form().addEventListener('submit', async event => {
     event.preventDefault();
     const f = event.target;
     const shouldConnect = connectAfterSave;
     connectAfterSave = false;
     clearErrors();
+    if (!editing && !f.elements.name.value.trim() && f.elements.hostname.value.trim()) {
+      const user = f.elements.username.value.trim();
+      f.elements.name.value = Array.from((user ? user + '@' : '') + f.elements.hostname.value.trim())
+        .slice(0, 120).join('');
+    }
     const problem = validate(f);
     if (problem) {
       showError(...problem);

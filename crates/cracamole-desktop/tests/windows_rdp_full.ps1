@@ -168,6 +168,11 @@ try {
     Click (Button '連線')
     Wait-For { @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'Static' -and [RdpFullGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero }).Count -gt 0 } 'RDP frame not installed' 25
     $frameControl = @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'Static' -and [RdpFullGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero })[0]
+    $inputRect = New-Object RdpFullGui+Rect
+    if (-not [RdpFullGui]::GetWindowRect($inputs[2], [ref]$inputRect) -or
+        ($inputRect.Right - $inputRect.Left) -gt 3 -or ($inputRect.Bottom - $inputRect.Top) -gt 3) {
+        throw 'remote keyboard input control is not compact'
+    }
     $initialGdi = [RdpFullGui]::GetGuiResources($process.Handle, 0)
     if ($initialGdi -eq 0) { throw 'cannot read GDI resource count' }
     $bitmaps = [Collections.Generic.HashSet[long]]::new()

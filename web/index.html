@@ -65,6 +65,7 @@
           <label class="field__label visually-hidden" for="library-search">搜尋連線</label>
           <input class="input" id="library-search" type="search" placeholder="搜尋名稱、主機或協定（按 / 聚焦）" autocomplete="off">
         </div>
+        <button id="quick-connect" class="btn btn--small" type="button" hidden></button>
         <div id="connections-list" class="card-list"></div>
         <p id="no-match" class="muted small" hidden>沒有符合的連線。</p>
       </aside>
@@ -137,8 +138,10 @@
         <strong id="terminal-name">準備連線</strong>
         <span id="status-meta" class="session-chip__meta"></span>
       </div>
+      <nav id="recent-connections" class="recent-connections" aria-label="最近連線" hidden></nav>
       <span class="statusbar__spacer"></span>
       <div class="statusbar__actions">
+        <button id="quick-paste" class="btn btn--quiet btn--small" type="button" disabled>貼上本機剪貼簿</button>
         <button id="toggle-clipboard" class="btn btn--quiet btn--small" type="button" aria-expanded="false" aria-controls="clipboard-panel" disabled>剪貼簿</button>
         <button id="toggle-keybar" class="btn btn--quiet btn--small" type="button" aria-pressed="false" aria-controls="keybar" disabled>輔助鍵</button>
         <button id="send-cad" class="btn btn--quiet btn--small" type="button" hidden>Ctrl+Alt+Del</button>
@@ -166,12 +169,11 @@
             <input class="input" id="f-name" name="name" required maxlength="120" placeholder="例如：開發主機" aria-describedby="error-name">
             <p class="field__error" id="error-name" hidden></p>
           </div>
-          <div class="field">
-            <label class="field__label" for="f-protocol">協定</label>
-            <select class="input" id="f-protocol" name="protocol">
-            </select>
+          <fieldset class="field protocol-field">
+            <legend class="field__label">協定</legend>
+            <div id="f-protocol" class="protocol-segments"></div>
             <p class="field__error" id="error-protocol" hidden></p>
-          </div>
+          </fieldset>
         </div>
         <div class="form-grid">
           <div class="field">
@@ -276,6 +278,7 @@
         <p id="editor-error" class="form-error" role="alert" hidden></p>
       </div>
       <div class="dialog__footer">
+        <button id="duplicate-connection" class="btn" type="button" hidden>複製為新連線</button>
         <button id="cancel-editor" class="btn" type="button">取消</button>
         <button id="save-and-connect" class="btn" type="button">儲存並連線</button>
         <button id="save-connection" class="btn btn--primary" type="submit">儲存連線</button>
@@ -330,11 +333,11 @@
 
       <div id="logs-container" class="logs__body" tabindex="0" role="region" aria-label="日誌內容">
         <div id="logs-list" class="logs__list"></div>
-        <p id="logs-empty" class="muted small" style="text-align: center; padding: 2rem 0;" hidden>目前沒有日誌資料。</p>
+        <p id="logs-empty" class="logs__empty muted small" hidden>目前沒有日誌資料。</p>
       </div>
 
       <div class="dialog__footer">
-        <span id="logs-status" class="muted small" style="margin-inline-end: auto;">載入中…</span>
+        <span id="logs-status" class="logs__status muted small">載入中…</span>
         <button id="close-logs-btn" class="btn" type="button">關閉</button>
       </div>
     </div>

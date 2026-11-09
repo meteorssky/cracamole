@@ -2,7 +2,7 @@
 // tests prefixed "mobile:" that connect need the sshd fixture (scripts/e2e_remote.sh).
 const { test, expect } = require('@playwright/test');
 const AxeBuilder = require('@axe-core/playwright').default;
-const { remoteFile, ready, login, addConnection } = require('./helpers');
+const { remoteFile, ready, login, addConnection, selectProtocol, protocolLabel } = require('./helpers');
 
 const origin = page => new URL(page.url()).origin;
 
@@ -55,17 +55,158 @@ test('ui: first run guides to the first host and opens the editor for the chosen
   await expect(page.getByRole('heading', { name: '新增你的第一台主機' })).toBeVisible();
   await page.getByRole('button', { name: '新增 RDP 主機' }).click();
   const form = page.locator('#connection-form');
-  await expect(form.getByLabel('協定', { exact: true })).toHaveValue('rdp');
+  await expect(form.getByRole('radio', { name: 'RDP', exact: true })).toBeChecked();
   await expect(form.getByLabel('網域（可選）')).toBeVisible();
   await expect(form.getByLabel('主機金鑰（known_hosts）')).toBeHidden();
   await expect(form.getByLabel('連接埠')).toHaveAttribute('placeholder', '3389');
+});
+
+test('ui: pinned hosts and collapsed groups persist, while search expands matching groups', async ({ page }) => {
+  await login(page);
+  const group = `測試群組-${Date.now()}`;
+  const name = `${group} / server-01`;
+  await addConnection(page, name, 'ssh', 'example.invalid');
+  const row = page.getByRole('article').filter({ has: page.getByRole('button', { name: `連線 ${name}`, exact: true }) });
+  const box = await row.boundingBox();
+  expect(box.height).toBeGreaterThanOrEqual(44);
+  expect(box.height).toBeLessThanOrEqual(50);
+  await page.mouse.move(box.x + 4, box.y + 4);
+  await expect.poll(() => page.getByRole('button', { name: `釘選 ${name}`, exact: true })
+    .evaluate(button => getComputedStyle(button.parentElement).opacity)).toBe('1');
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
+  await page.getByRole('button', { name: `釘選 ${name}`, exact: true }).click();
+  await expect(page.getByText('★ 常用釘選（1）')).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
+  await expect(page.getByRole('button', { name: `取消釘選 ${name}`, exact: true })).toBeVisible();
+  await page.getByRole('button', { name: `取消釘選 ${name}`, exact: true }).click();
+  await page.getByText(`${group}（1）`).click();
+  await expect(page.getByRole('button', { name: `連線 ${name}`, exact: true })).toBeHidden();
+  await page.reload();
+  await expect(page.getByRole('button', { name: `連線 ${name}`, exact: true })).toBeHidden();
+  await page.getByRole('searchbox', { name: '搜尋連線' }).fill(name);
+  await expect(page.getByRole('button', { name: `連線 ${name}`, exact: true })).toBeVisible();
+  await page.getByRole('searchbox', { name: '搜尋連線' }).press('ArrowDown');
+  await expect(page.getByRole('button', { name: `連線 ${name}`, exact: true })).toBeFocused();
+  await page.keyboard.press('Control+k');
+  await expect(page.getByRole('searchbox', { name: '搜尋連線' })).toBeFocused();
+});
+
+test('ui: quick address opens a prefilled editor and rejects passwords and invalid ports', async ({ page }) => {
+  await login(page);
+  const search = page.getByRole('searchbox', { name: '搜尋連線' });
+  for (const [address, protocol, user, host, port] of [
+    ['alice@server.example:2222', 'ssh', 'alice', 'server.example', '2222'],
+    ['rdp://admin@[2001:db8::1]:3389', 'rdp', 'admin', '2001:db8::1', '3389'],
+  ]) {
+    await search.fill(address);
+    await expect(page.getByRole('button', { name: /快速設定/ })).toBeVisible();
+    await search.press('Enter');
+    const editor = page.getByRole('dialog', { name: '新增連線' });
+    await expect(editor.getByRole('radio', { name: protocolLabel(protocol), exact: true })).toBeChecked();
+    await expect(editor.getByLabel('帳號', { exact: true })).toHaveValue(user);
+    await expect(editor.getByLabel('主機名稱或 IP')).toHaveValue(host);
+    await expect(editor.getByLabel('連接埠')).toHaveValue(port);
+    await expect(editor.getByLabel('密碼', { exact: true })).toBeFocused();
+    await editor.getByRole('button', { name: '取消' }).click();
+  }
+  for (const invalid of ['ssh://alice:password@host', 'host:99999', 'https://host', 'host/path',
+    'ssh -p 22 host;whoami', 'ssh -p 22 host whoami']) {
+    await search.fill(invalid);
+    await expect(page.getByRole('button', { name: /快速設定/ })).toHaveCount(0);
+  }
+  const existing = await page.request.post('api/connections', {
+    headers: { Origin: origin(page) },
+    data: { name: '既有 SSH', protocol: 'ssh', params: { hostname: 'server.example', username: 'Alice' } },
+  });
+  expect(existing.status()).toBe(201);
+  await page.reload();
+  await search.fill('ssh://Alice@server.example:22');
+  await expect(page.getByRole('button', { name: /快速設定/ })).toHaveCount(0);
+  await search.fill('ssh://alice@server.example:22');
+  await expect(page.getByRole('button', { name: /快速設定/ })).toBeVisible();
+});
+
+test('ui: host paste splits address and a blank name is generated without reading the system clipboard', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: '新增連線', exact: true }).click();
+  const form = page.getByRole('dialog', { name: '新增連線' });
+  const hostname = form.getByLabel('主機名稱或 IP');
+  async function paste(text) {
+    await hostname.evaluate((element, value) => {
+      const event = new Event('paste', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'clipboardData', { value: { getData: () => value } });
+      element.dispatchEvent(event);
+    }, text);
+  }
+  await paste('ssh -p 2222 ubuntu@10.0.1.5');
+  await expect(form.getByRole('radio', { name: 'SSH', exact: true })).toBeChecked();
+  await expect(hostname).toHaveValue('10.0.1.5');
+  await expect(form.getByLabel('帳號', { exact: true })).toHaveValue('ubuntu');
+  await expect(form.getByLabel('連接埠')).toHaveValue('2222');
+  await paste('rdp://Alice@[2001:db8::4]:3390');
+  await expect(form.getByRole('radio', { name: 'RDP', exact: true })).toBeChecked();
+  await expect(hostname).toHaveValue('2001:db8::4');
+  await expect(form.getByLabel('帳號', { exact: true })).toHaveValue('Alice');
+  await expect(form.getByLabel('連接埠')).toHaveValue('3390');
+  await paste('rdp://Alice:secret@other.example');
+  await expect(hostname).toHaveValue('2001:db8::4');
+  await expect(form.getByText('連線位址不可包含密碼，請在密碼欄位輸入。')).toBeVisible();
+  const request = page.waitForRequest(req => req.method() === 'POST' && req.url().endsWith('/api/connections'));
+  await form.getByRole('button', { name: '儲存連線', exact: true }).click();
+  expect((await request).postDataJSON().name).toBe('Alice@2001:db8::4');
+  await expect(form).toBeHidden();
+});
+
+test('ui: duplicating a host omits secrets and drops trust only when its destination changes', async ({ page }) => {
+  await login(page);
+  const name = `clone-${Date.now()}-01`;
+  const response = await page.request.post('api/connections', {
+    headers: { Origin: origin(page) },
+    data: {
+      name, protocol: 'ssh',
+      params: { hostname: 'server.example', port: '22', username: 'alice', password: 'fixture-secret',
+        'host-key': 'ssh-ed25519 fixture-key' },
+    },
+  });
+  expect(response.status()).toBe(201);
+  await page.reload();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
+  await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click();
+  await page.getByRole('dialog', { name: '編輯連線' })
+    .getByRole('button', { name: '複製為新連線' }).click();
+  const fromEditor = page.getByRole('dialog', { name: '複製連線' });
+  await expect(fromEditor.getByLabel('主機名稱或 IP')).toBeFocused();
+  await fromEditor.getByRole('button', { name: '取消' }).click();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
+  await page.keyboard.press('Control+d');
+  await expect(page.getByRole('dialog', { name: '複製連線' })).toBeVisible();
+  await page.getByRole('dialog', { name: '複製連線' }).getByRole('button', { name: '取消' }).click();
+  for (const changed of [false, true]) {
+    await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
+    await page.getByRole('button', { name: `複製 ${name}`, exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '複製連線' });
+    await expect(dialog.getByLabel('連線名稱')).toHaveValue(name.replace(/01$/, '02'));
+    const host = dialog.getByLabel('主機名稱或 IP');
+    await expect(host).toBeFocused();
+    await expect(dialog.getByLabel('密碼', { exact: true })).toHaveValue('');
+    if (changed) await host.fill('new.example');
+    const request = page.waitForRequest(req => req.method() === 'POST' && req.url().endsWith('/api/connections'));
+    await dialog.getByRole('button', { name: '儲存連線', exact: true }).click();
+    const body = (await request).postDataJSON();
+    expect(body.params.password).toBeUndefined();
+    expect(body.params['private-key']).toBeUndefined();
+    if (changed) expect(body.params['host-key']).toBeUndefined();
+    else expect(body.params['host-key']).toBe('ssh-ed25519 fixture-key');
+    await expect(dialog).toBeHidden();
+  }
 });
 
 test('ui: the editor shows only the fields of the selected protocol and explains mistakes in place', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: '新增連線', exact: true }).click();
   const form = page.locator('#connection-form');
-  const protocol = form.getByLabel('協定', { exact: true });
+  const protocol = { selectOption: value => selectProtocol(form, value) };
 
   // fields follow the protocol
   await expect(form.getByLabel('主機金鑰（known_hosts）')).toBeVisible();
@@ -100,6 +241,20 @@ test('ui: the editor shows only the fields of the selected protocol and explains
   await expect(page.getByRole('button', { name: '新增連線', exact: true })).toBeFocused();
 });
 
+test('ui: protocol segments support pointer, keyboard and forced colours', async ({ page }) => {
+  await page.emulateMedia({ forcedColors: 'active' });
+  await login(page);
+  await page.getByRole('button', { name: '新增連線', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新增連線' });
+  await dialog.getByText('RDP', { exact: true }).click();
+  const selected = dialog.getByRole('radio', { name: 'RDP', exact: true });
+  await expect(selected).toBeChecked();
+  expect(await selected.evaluate(input => getComputedStyle(input.nextElementSibling).outlineStyle)).toBe('solid');
+  await selectProtocol(dialog, 'ssh');
+  await expect(dialog.getByRole('radio', { name: 'SSH', exact: true })).toBeChecked();
+  await expect(dialog.getByLabel('主機金鑰（known_hosts）')).toBeVisible();
+});
+
 test('ui: the API reports which field is wrong', async ({ page }) => {
   await login(page);
   const response = await page.request.post('api/connections', {
@@ -115,6 +270,7 @@ test('ui: deleting a host asks first, defaults to the safe choice, and can be ca
   await login(page);
   await addConnection(page, name, 'ssh', 'example.invalid');
   const card = page.getByRole('button', { name: `連線 ${name}`, exact: true });
+  await card.focus();
 
   await page.getByRole('button', { name: `刪除 ${name}`, exact: true }).click();
   const dialog = page.getByRole('dialog', { name: `刪除「${name}」？` });
@@ -124,6 +280,7 @@ test('ui: deleting a host asks first, defaults to the safe choice, and can be ca
   await expect(dialog).toBeHidden();
   await expect(card).toBeVisible();
 
+  await card.focus();
   await page.getByRole('button', { name: `刪除 ${name}`, exact: true }).click();
   await page.getByRole('button', { name: '刪除這台主機', exact: true }).click();
   await expect(card).toHaveCount(0);
@@ -174,7 +331,7 @@ test('ui: advanced settings are different for SSH, Telnet and RDP', async ({ pag
   await login(page);
   await page.getByRole('button', { name: '新增連線', exact: true }).click();
   const form = page.locator('#connection-form');
-  const protocol = form.getByLabel('協定', { exact: true });
+  const protocol = { selectOption: value => selectProtocol(form, value) };
   const shows = async (visible, hidden) => {
     for (const title of visible) await expect(section(form, title), title).toBeVisible();
     for (const title of hidden) await expect(section(form, title), title).toBeHidden();
@@ -217,13 +374,14 @@ test('ui: advanced settings are saved, restored, and dropped when the protocol c
   expect(params.command).toBeUndefined(); // unset options are not stored at all
 
   // reopening restores them
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
   await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click();
   await expect(form.getByLabel('字型大小（pt）')).toHaveValue('16');
   await expect(form.getByLabel('配色')).toHaveValue('green-black');
   await expect(form.getByRole('checkbox', { name: /唯讀/ })).toBeChecked();
 
   // switching to RDP removes the terminal-only settings and keeps the shared ones
-  await form.getByLabel('協定', { exact: true }).selectOption('rdp');
+  await selectProtocol(form, 'rdp');
   await section(form, 'RDP 畫面與效能').click();
   await form.getByRole('checkbox', { name: '顯示桌布' }).check();
   await form.getByRole('button', { name: '儲存連線' }).click();
@@ -322,11 +480,12 @@ for (const scheme of ['light', 'dark']) {
 
     for (const protocol of ['ssh', 'telnet', 'rdp']) {
       await page.getByRole('button', { name: '新增連線', exact: true }).click();
-      await page.locator('#connection-form').getByLabel('協定', { exact: true }).selectOption(protocol);
+      await selectProtocol(page.locator('#connection-form'), protocol);
       await expectAccessible(page, `${protocol} editor (${scheme})`);
       await page.keyboard.press('Escape');
     }
 
+    await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
     await page.getByRole('button', { name: `刪除 ${name}`, exact: true }).click();
     await expectAccessible(page, `confirm dialog (${scheme})`);
     await page.getByRole('button', { name: '取消' }).click();
