@@ -112,7 +112,7 @@ try {
     $children = [DesktopLoginTest]::Children($window)
     $inputs = @($children | Where-Object { [DesktopLoginTest]::Class($_) -eq 'Edit' })
     $login = @($children | Where-Object { [DesktopLoginTest]::Text($_) -eq '登入' })
-    if ($inputs.Count -ne 13 -or $login.Count -ne 1) { throw "找不到登入控制項（Edit 數量：$($inputs.Count)）" }
+    if ($inputs.Count -ne 14 -or $login.Count -ne 1) { throw "找不到登入控制項（Edit 數量：$($inputs.Count)）" }
     [void][DesktopLoginTest]::SendMessage($inputs[1], 0x000C, [IntPtr]::Zero, 'wrong-password')
     [void][DesktopLoginTest]::SendMessage($login[0], 0x00F5, [IntPtr]::Zero, $null)
     if (-not ($children | Where-Object { [DesktopLoginTest]::Text($_) -eq '帳號或密碼不正確。' })) { throw '錯誤密碼未被拒絕' }

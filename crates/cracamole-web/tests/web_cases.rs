@@ -600,6 +600,51 @@ async fn web_identity_probe_requires_auth_origin_and_matching_protocol() {
         );
     }
     let cookie = login(&service).await;
+    let probe = json!({"protocol":"ssh", "hostname":"127.0.0.1", "port":"22"});
+    assert_eq!(
+        call(
+            &service,
+            "POST",
+            "/api/identity-probe",
+            Some(probe.clone()),
+            None,
+            "http://localhost"
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &service,
+            "POST",
+            "/api/identity-probe",
+            Some(probe),
+            Some(&cookie),
+            "https://attacker.invalid"
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    for invalid in [
+        json!({"protocol":"telnet", "hostname":"localhost", "port":"23"}),
+        json!({"protocol":"ssh", "hostname":"", "port":"22"}),
+        json!({"protocol":"ssh", "hostname":"localhost", "port":"65536"}),
+        json!({"protocol":"ssh", "hostname":"localhost", "port":"22", "password":"must-not-be-accepted"}),
+    ] {
+        let status = call(
+            &service,
+            "POST",
+            "/api/identity-probe",
+            Some(invalid),
+            Some(&cookie),
+            "http://localhost",
+        )
+        .await
+        .0;
+        assert!(status.is_client_error());
+    }
     let (_, _, connection) = call(
         &service,
         "POST",

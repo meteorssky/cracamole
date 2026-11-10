@@ -67,6 +67,7 @@ test('ui: pinned hosts and collapsed groups persist, while search expands matchi
   const name = `${group} / server-01`;
   await addConnection(page, name, 'ssh', 'example.invalid');
   const row = page.getByRole('article').filter({ has: page.getByRole('button', { name: `連線 ${name}`, exact: true }) });
+  await row.scrollIntoViewIfNeeded();
   const box = await row.boundingBox();
   expect(box.height).toBeGreaterThanOrEqual(44);
   expect(box.height).toBeLessThanOrEqual(50);
@@ -90,6 +91,69 @@ test('ui: pinned hosts and collapsed groups persist, while search expands matchi
   await expect(page.getByRole('button', { name: `連線 ${name}`, exact: true })).toBeFocused();
   await page.keyboard.press('Control+k');
   await expect(page.getByRole('searchbox', { name: '搜尋連線' })).toBeFocused();
+});
+
+test('ui: add a host from a collapsed group without changing its expansion state', async ({ page }) => {
+  await login(page);
+  const group = `群組新增-${Date.now()}`;
+  await addConnection(page, `${group} / node-01`, 'ssh', 'example.invalid');
+  const header = page.getByText(`${group}（1）`, { exact: true });
+  await header.click();
+  const details = header.locator('..');
+  await expect(details).not.toHaveAttribute('open', '');
+  await page.getByRole('button', { name: `新增至群組 ${group}` }).click();
+  const editor = page.getByRole('dialog', { name: '新增連線' });
+  await expect(editor.getByLabel('連線名稱')).toHaveValue(`${group} / `);
+  await expect(editor.getByLabel('連線名稱')).toBeFocused();
+  await editor.getByLabel('連線名稱').fill(`${group} / node-02`);
+  await editor.getByLabel('主機名稱或 IP').fill('other.invalid');
+  await editor.getByRole('button', { name: '儲存連線', exact: true }).click();
+  await expect(editor).toBeHidden();
+  await expect(page.getByText(`${group}（2）`, { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: `連線 ${group} / node-02` })).toBeHidden();
+});
+
+test('ui: reserved group names remain separate and legacy collapsed state is migrated', async ({ page }) => {
+  await login(page);
+  const tag = String(Date.now());
+  const names = [`plain-${tag}`, `未分類 / named-${tag}`, `★ 常用釘選 / named-${tag}`, `pinned-${tag}`];
+  const ids = [];
+  for (const name of names) {
+    const response = await page.request.post('api/connections', {
+      headers: { Origin: origin(page) },
+      data: { name, protocol: 'ssh', params: { hostname: 'example.invalid' } },
+    });
+    expect(response.status()).toBe(201);
+    ids.push((await response.json()).id);
+  }
+  await page.evaluate(id => {
+    localStorage.setItem('cracamole-pinned', JSON.stringify([id]));
+    localStorage.setItem('cracamole-collapsed-groups', JSON.stringify(['未分類', '★ 常用釘選']));
+    localStorage.removeItem('cracamole-collapsed-groups-v2');
+  }, ids[3]);
+  await page.reload();
+  const summary = text => page.locator('summary.conn-group__title').filter({ hasText: text });
+  const named = summary('未分類（1）');
+  const ungrouped = summary('未分類（無群組）');
+  const pinned = summary('★ 常用釘選（1）').filter({ hasNotText: '群組：' });
+  const explicitPinned = summary('群組：★ 常用釘選（1）');
+  for (const group of [named, ungrouped, pinned, explicitPinned]) {
+    await expect(group).toBeVisible();
+    await expect(group.locator('..')).not.toHaveAttribute('open', '');
+  }
+  await named.click();
+  await expect(page.getByRole('button', { name: `連線 ${names[1]}`, exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: `連線 ${names[0]}`, exact: true })).toBeHidden();
+  await page.reload();
+  await expect(page.getByRole('button', { name: `連線 ${names[1]}`, exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: `連線 ${names[0]}`, exact: true })).toBeHidden();
+  await page.getByRole('button', { name: '新增至群組 未分類', exact: true }).click();
+  const editor = page.getByRole('dialog', { name: '新增連線' });
+  await expect(editor.getByLabel('連線名稱')).toHaveValue('未分類 / ');
+  await editor.getByRole('button', { name: '取消' }).click();
+  for (const id of ids) {
+    await page.request.delete(`api/connections/${id}`, { headers: { Origin: origin(page) } });
+  }
 });
 
 test('ui: quick address opens a prefilled editor and rejects passwords and invalid ports', async ({ page }) => {
@@ -125,6 +189,77 @@ test('ui: quick address opens a prefilled editor and rejects passwords and inval
   await expect(page.getByRole('button', { name: /快速設定/ })).toHaveCount(0);
   await search.fill('ssh://alice@server.example:22');
   await expect(page.getByRole('button', { name: /快速設定/ })).toBeVisible();
+});
+
+test('ui: editor identity probe rejects stale results and never saves trust automatically', async ({ page }) => {
+  await login(page);
+  const name = `身分探測測試-${Date.now()}`;
+  const response = await page.request.post('api/connections', {
+    headers: { Origin: origin(page) },
+    data: { name, protocol: 'ssh', params: { hostname: 'fixture.invalid' } },
+  });
+  expect(response.status()).toBe(201);
+  const saved = await response.json();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let started;
+  const called = new Promise(resolve => { started = resolve; });
+  await page.route('**/api/connections/*/host-key', async route => {
+    started();
+    await gate;
+    await route.fulfill({ json: { hostname: 'fixture.invalid', port: 22,
+      public_key: 'ssh-ed25519 test', fingerprint: 'SHA256:test', trusted: false, matches: false } });
+  });
+  await page.reload();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
+  await page.getByRole('button', { name: `編輯 ${name}` }).click();
+  const dialog = page.getByRole('dialog', { name: '編輯連線' });
+  const button = dialog.getByRole('button', { name: '探測主機身分' });
+  await button.click();
+  await called;
+  await dialog.getByLabel('主機名稱或 IP').fill('other.invalid');
+  release();
+  await expect(dialog.getByRole('status')).toBeHidden();
+  await dialog.getByLabel('主機名稱或 IP').fill('fixture.invalid');
+  await expect(button).toBeEnabled();
+  await button.click();
+  await expect(dialog.getByRole('status')).toContainText('尚未保存信任');
+  await dialog.getByLabel('主機名稱或 IP').evaluate(input => {
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { getData: () => 'alice@other.invalid:2222' } });
+    input.dispatchEvent(event);
+  });
+  await expect(button).toBeEnabled();
+  await expect(dialog.getByRole('status')).toBeHidden();
+  const unchanged = await (await page.request.get(`api/connections/${saved.id}`)).json();
+  expect(unchanged.params['host-key']).toBeFalsy();
+  await dialog.getByRole('button', { name: '取消' }).click();
+});
+
+test('ui: draft identity refuses mismatched SSH trust and can fill a verified RDP pin', async ({ page }) => {
+  await login(page);
+  await page.route('**/api/identity-probe', async route => {
+    const body = route.request().postDataJSON();
+    if (body.protocol === 'ssh') {
+      await route.fulfill({ json: { hostname: body.hostname, port: Number(body.port), fingerprint: 'SHA256:test',
+        public_key: 'ssh-ed25519 test', trusted: true, matches: false } });
+    } else {
+      await route.fulfill({ json: { hostname: body.hostname, port: Number(body.port), sha256: 'a'.repeat(64) } });
+    }
+  });
+  await page.getByRole('button', { name: '新增連線', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新增連線' });
+  await dialog.getByLabel('主機名稱或 IP').fill('host.invalid');
+  await dialog.getByRole('button', { name: '探測主機身分' }).click();
+  await expect(dialog.getByRole('status')).toContainText('不符或已撤銷');
+  await expect(dialog.getByRole('button', { name: '已核對，填入信任設定' })).toBeHidden();
+  await selectProtocol(dialog, 'rdp');
+  await dialog.getByRole('button', { name: '探測主機身分' }).click();
+  await expect(dialog.getByRole('status')).toContainText('尚未比對已保存信任');
+  await dialog.getByRole('button', { name: '已核對，填入信任設定' }).click();
+  await page.getByRole('dialog', { name: '確認主機身分' }).getByRole('button', { name: '已核對，填入設定' }).click();
+  await expect(dialog.locator('[name="server-cert-sha256"]')).toHaveValue('a'.repeat(64));
+  await dialog.getByRole('button', { name: '取消' }).click();
 });
 
 test('ui: host paste splits address and a blank name is generated without reading the system clipboard', async ({ page }) => {
@@ -296,7 +431,7 @@ test('ui: a failed connection says what happened and offers the next step, not a
   const overlay = page.locator('#overlay');
   await expect(overlay).toContainText('找不到主機', { timeout: 30000 });
   await expect(overlay).toContainText('請確認拼字與 DNS');
-  await expect(page.locator('#terminal-status')).toHaveText('連線失敗');
+  await expect(page.locator('#terminal-status')).toHaveText('找不到主機');
   await expect(overlay.getByRole('button', { name: '重新連線' })).toBeVisible();
   await expect(overlay.getByRole('button', { name: '編輯連線' })).toBeVisible();
 

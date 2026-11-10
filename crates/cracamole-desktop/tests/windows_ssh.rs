@@ -68,6 +68,10 @@ async fn browser_shared_ssh_composited_terminal() {
         "合成輸入法文字未送達或重複送達 SSH fixture"
     );
     assert_eq!(received.iter().filter(|&&byte| byte == 0x7f).count(), 1);
+    assert!(
+        !received.contains(&0x0b),
+        "Ctrl+K 不應傳送至遠端 SSH 工作階段"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -156,6 +160,40 @@ async fn exercise(private_key_auth: bool, big5: bool) {
             .output()
             .expect("啟動 Windows 原生 SSH 測試")
     });
+    let once_rejected = sync_dir.join("once-untrusted-rejected");
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !once_rejected.exists() && !task.is_finished() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("等待一次性 SSH 指紋拒絕逾時");
+    if once_rejected.exists() {
+        assert!(
+            server.rec.lock().unwrap().auth_methods_tried.is_empty(),
+            "核對前不應傳送驗證資訊"
+        );
+        std::fs::write(sync_dir.join("continue-once"), b"").unwrap();
+    }
+    let once_trusted = sync_dir.join("once-trusted");
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !once_trusted.exists() && !task.is_finished() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("等待一次性 SSH 已信任連線逾時");
+    if once_trusted.exists() {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while server.rec.lock().unwrap().auth_methods_tried.is_empty() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("核對後的一次性 SSH 未驗證");
+        std::fs::write(sync_dir.join("continue-after-once"), b"").unwrap();
+    }
+    let after_once = server.rec.lock().unwrap().auth_methods_tried.clone();
     let ready = sync_dir.join("untrusted-rejected");
     tokio::time::timeout(Duration::from_secs(30), async {
         while !ready.exists() && !task.is_finished() {
@@ -166,7 +204,7 @@ async fn exercise(private_key_auth: bool, big5: bool) {
     .expect("等待未知主機測試逾時");
     if ready.exists() {
         assert!(
-            server.rec.lock().unwrap().auth_methods_tried.is_empty(),
+            server.rec.lock().unwrap().auth_methods_tried == after_once,
             "信任前不應傳送驗證資訊"
         );
         std::fs::write(sync_dir.join("continue"), b"").unwrap();

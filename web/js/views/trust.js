@@ -13,7 +13,7 @@ export function identityText(identity) {
   return lines.join(String.fromCharCode(10));
 }
 
-export async function inspectIdentity(target, isCurrent, showOverlay) {
+export async function inspectIdentity(target, isCurrent, showOverlay, onIdentityProblem) {
   const ssh = identityKind(target.connection.protocol) === 'host-key';
   const path = ssh ? '/host-key' : '/certificate';
   let identity;
@@ -35,6 +35,7 @@ export async function inspectIdentity(target, isCurrent, showOverlay) {
   const matches = ssh ? identity.matches : identity.matches_pin;
   if (trusted && matches) return;
   target.identity = identity;
+  onIdentityProblem(trusted ? '身分不符' : '待核對身分');
   showOverlay({
     title: trusted ? (ssh ? '主機金鑰已變更或遭撤銷' : '憑證已變更')
       : (ssh ? '尚未信任 SSH 主機金鑰' : '無法驗證伺服器憑證'),

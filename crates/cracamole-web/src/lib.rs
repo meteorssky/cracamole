@@ -139,6 +139,7 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
             post(trust::certificate),
         )
         .route("/api/connections/{id}/host-key", post(trust::host_key))
+        .route("/api/identity-probe", post(trust::draft_identity))
         .route("/api/logs", get(get_logs))
         .layer(DefaultBodyLimit::max(128 * 1024))
         .layer(middleware::from_fn(security_headers))

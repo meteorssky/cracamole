@@ -1,6 +1,7 @@
 import { api, ApiError } from '../api.js';
 import { $ } from '../util/dom.js';
 import { openDialog } from '../ui/dialog.js';
+import { initEditorIdentity, refreshEditorIdentity } from './editor-identity.js';
 import { defaultPort, protocolArgs, quickAddress } from '../util/protocols.js';
 import {
   collapseAllOptions,
@@ -158,6 +159,7 @@ export function openEditor(connection = null, protocol = null) {
   f.elements['ignore-cert'].checked = params['ignore-cert'] === 'true';
   fillSecretHints(connection);
   applyProtocol();
+  refreshEditorIdentity();
   openDialog($('connection-editor'), f.elements.name);
 }
 
@@ -170,6 +172,14 @@ export function openQuickEditor(target) {
   f.elements.name.value = (target.username ? target.username + '@' : '')
     .concat(target.hostname).slice(0, 120);
   f.elements.password.focus();
+}
+
+export function openGroupEditor(group) {
+  openEditor();
+  const name = form().elements.name;
+  name.value = group + ' / ';
+  name.focus();
+  name.setSelectionRange(name.value.length, name.value.length);
 }
 
 function duplicateName(name) {
@@ -187,6 +197,7 @@ export function duplicateConnection(connection) {
   openEditor(source);
   editing = null;
   cloneSource = source;
+  refreshEditorIdentity();
   $('editor-title').textContent = '複製連線';
   $('duplicate-connection').hidden = true;
   form().elements.name.value = duplicateName(connection.name);
@@ -197,6 +208,7 @@ export function duplicateConnection(connection) {
 
 export function initEditor({ saved }) {
   onSaved = saved;
+  initEditorIdentity(() => editing);
   const optionsBox = $('protocol-options');
   renderOptions(optionsBox);
   const dialog = $('connection-editor');
@@ -247,6 +259,7 @@ export function initEditor({ saved }) {
     if (address.username) f.elements.username.value = address.username;
     if (address.port) f.elements.port.value = address.port;
     clearErrors();
+    f.elements.hostname.dispatchEvent(new Event('input', { bubbles: true }));
   });
   form().addEventListener('submit', async event => {
     event.preventDefault();

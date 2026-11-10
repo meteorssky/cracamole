@@ -81,6 +81,11 @@ pub static ASSETS: &[Asset] = &[
     asset!("js/views/login.js", JS, "js/views/login.js"),
     asset!("js/views/library.js", JS, "js/views/library.js"),
     asset!("js/views/editor.js", JS, "js/views/editor.js"),
+    asset!(
+        "js/views/editor-identity.js",
+        JS,
+        "js/views/editor-identity.js"
+    ),
     asset!("js/views/options.js", JS, "js/views/options.js"),
     asset!(
         "js/views/option-sections.js",

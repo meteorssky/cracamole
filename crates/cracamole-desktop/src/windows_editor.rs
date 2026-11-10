@@ -45,6 +45,8 @@ pub struct Editor {
     failure_label: nwg::Label,
     clear: nwg::CheckBox,
     pub save: nwg::Button,
+    pub save_connect: nwg::Button,
+    pub connect_once: nwg::Button,
     pub cancel: nwg::Button,
     base: RefCell<Option<PublicConnection>>,
     visible: Cell<bool>,
@@ -97,6 +99,8 @@ impl Editor {
         let mut failure_label = nwg::Label::default();
         let mut clear = nwg::CheckBox::default();
         let mut save = nwg::Button::default();
+        let mut save_connect = nwg::Button::default();
+        let mut connect_once = nwg::Button::default();
         let mut cancel = nwg::Button::default();
         nwg::TextInput::builder()
             .position((95, 126))
@@ -238,11 +242,23 @@ impl Editor {
             .parent(window)
             .build(&mut save)?;
         nwg::Button::builder()
+            .text("儲存並連線")
+            .position((266, 445))
+            .size((120, 32))
+            .parent(window)
+            .build(&mut save_connect)?;
+        nwg::Button::builder()
             .text("取消")
             .position((145, 445))
             .size((100, 32))
             .parent(window)
             .build(&mut cancel)?;
+        nwg::Button::builder()
+            .text("免保存連線")
+            .position((410, 445))
+            .size((120, 32))
+            .parent(window)
+            .build(&mut connect_once)?;
         let editor = Self {
             labels,
             name,
@@ -269,6 +285,8 @@ impl Editor {
             failure_label,
             clear,
             save,
+            save_connect,
+            connect_once,
             cancel,
             base: RefCell::new(None),
             visible: Cell::new(false),
@@ -293,6 +311,9 @@ impl Editor {
         self.read_only.set_visible(visible);
         self.clear.set_visible(visible);
         self.save.set_visible(visible);
+        self.save_connect.set_visible(visible);
+        self.connect_once
+            .set_visible(visible && self.base.borrow().is_none() && !self.duplicate.get());
         self.cancel.set_visible(visible);
         if !visible {
             self.password.set_text("");
@@ -305,6 +326,18 @@ impl Editor {
 
     pub fn is_visible(&self) -> bool {
         self.visible.get()
+    }
+
+    pub fn matches_once_ssh(&self, host: &str, port: u16) -> bool {
+        self.visible.get()
+            && self.base.borrow().is_none()
+            && !self.duplicate.get()
+            && self.protocol.selection_string().as_deref() == Some("ssh")
+            && self.hostname.text().trim().eq_ignore_ascii_case(host)
+            && match self.port.text().as_str() {
+                "" => port == 22,
+                value => value.parse::<u16>().ok() == Some(port),
+            }
     }
 
     fn show_protocol_fields(&self, visible: bool) {
@@ -373,6 +406,10 @@ impl Editor {
         ]
     }
 
+    pub fn protocol_handle(&self) -> nwg::ControlHandle {
+        self.protocol.handle
+    }
+
     pub fn begin(&self, base: Option<PublicConnection>) {
         self.duplicate.set(false);
         let value = |key: &str| {
@@ -439,10 +476,110 @@ impl Editor {
         self.hostname.set_selection(0..u32::MAX);
     }
 
+    pub fn is_quick_endpoint(address: &str) -> Result<bool, &'static str> {
+        Ok(parse_endpoint(address)?.is_some())
+    }
+
+    pub fn existing_quick(
+        address: &str,
+        entries: &[PublicConnection],
+    ) -> Result<Option<String>, &'static str> {
+        let target = parse_endpoint(address)?.ok_or("請輸入 user@host 或 host:port。")?;
+        let target_port = target
+            .port
+            .as_deref()
+            .unwrap_or("22")
+            .parse::<u16>()
+            .map_err(|_| "連接埠無效。")?;
+        let mut matches = entries.iter().filter(|entry| {
+            entry.protocol == "ssh"
+                && entry
+                    .params
+                    .get("hostname")
+                    .is_some_and(|host| host.eq_ignore_ascii_case(&target.host))
+                && entry.params.get("username").map_or("", String::as_str)
+                    == target.user.as_deref().unwrap_or("")
+                && entry
+                    .params
+                    .get("port")
+                    .filter(|port| !port.is_empty())
+                    .map_or(Some(22), |port| port.parse::<u16>().ok())
+                    == Some(target_port)
+        });
+        let first = matches.next().map(|entry| entry.id.clone());
+        if matches.next().is_some() {
+            return Err("有多筆相同 SSH 目的地，請從清單選擇。");
+        }
+        Ok(first)
+    }
+
+    pub fn begin_quick(&self, address: &str) -> Result<(), &'static str> {
+        let endpoint = parse_endpoint(address)?.ok_or("請輸入 user@host 或 host:port。")?;
+        self.begin(None);
+        self.hostname.set_text(&endpoint.host);
+        if let Some(port) = endpoint.port {
+            self.port.set_text(&port);
+        }
+        if let Some(user) = endpoint.user {
+            self.username.set_text(&user);
+        }
+        self.hostname.set_focus();
+        Ok(())
+    }
+
+    pub fn normalize_endpoint(&self) -> Result<(), &'static str> {
+        if let Some(endpoint) = parse_endpoint(&self.hostname.text())? {
+            if endpoint.ssh_command && self.protocol.selection_string().as_deref() != Some("ssh") {
+                self.password.set_text("");
+                self.protocol.set_selection(Some(0));
+                self.protocol_changed(self.protocol.handle);
+            }
+            self.hostname.set_text(&endpoint.host);
+            if let Some(value) = endpoint.port {
+                self.port.set_text(&value);
+            }
+            if let Some(value) = endpoint.user {
+                self.username.set_text(&value);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn normalize_blurred_endpoint(
+        &self,
+        previous: &(String, String, String, String),
+    ) -> Result<(), &'static str> {
+        if !self.hostname.focus()
+            && self.hostname.text() == previous.0
+            && self.port.text() == previous.1
+            && self.username.text() == previous.2
+            && self.protocol.selection_string().as_deref() == Some(previous.3.as_str())
+        {
+            self.normalize_endpoint()?;
+        }
+        Ok(())
+    }
+
+    pub fn normalize_pasted_endpoint(
+        &self,
+        previous: &(String, String, String, String),
+    ) -> Result<(), &'static str> {
+        if self.hostname.text() == previous.0
+            && self.port.text() == previous.1
+            && self.username.text() == previous.2
+            && self.protocol.selection_string().as_deref() == Some(previous.3.as_str())
+        {
+            self.normalize_endpoint()?;
+        }
+        Ok(())
+    }
+
     pub fn draft(&self) -> Result<(Option<String>, Draft), &'static str> {
+        self.normalize_endpoint()?;
         let protocol = self.protocol.selection_string().unwrap_or_default();
         let hostname = self.hostname.text();
         let port = self.port.text();
+        let username = self.username.text();
         let base = self.base.borrow();
         let mut params = base
             .as_ref()
@@ -462,9 +599,20 @@ impl Editor {
             params.remove("host-key");
             params.remove("server-cert-sha256");
         }
+        let name = if self.name.text().trim().is_empty() {
+            let generated = if username.is_empty() {
+                hostname.clone()
+            } else {
+                format!("{username}@{hostname}")
+            };
+            self.name.set_text(&generated);
+            generated
+        } else {
+            self.name.text()
+        };
         params.insert("hostname".into(), hostname);
         params.insert("port".into(), port);
-        params.insert("username".into(), self.username.text());
+        params.insert("username".into(), username);
         params.insert(
             "read-only".into(),
             (self.read_only.check_state() == nwg::CheckBoxState::Checked).to_string(),
@@ -528,9 +676,6 @@ impl Editor {
             }
         } else {
             let password = Zeroizing::new(self.password.text());
-            if !password.is_empty() {
-                params.insert("password".into(), password.to_string());
-            }
             let key_path = self.key_path.text();
             let passphrase = Zeroizing::new(self.passphrase.text());
             if protocol != "ssh" && (!key_path.is_empty() || !passphrase.is_empty()) {
@@ -555,6 +700,9 @@ impl Editor {
                 let key = std::str::from_utf8(&bytes).map_err(|_| "私鑰檔案必須是 UTF-8 文字。")?;
                 params.insert("private-key".into(), key.into());
             }
+            if !password.is_empty() {
+                params.insert("password".into(), password.to_string());
+            }
             if !passphrase.is_empty() {
                 params.insert("passphrase".into(), passphrase.to_string());
             }
@@ -566,12 +714,102 @@ impl Editor {
                 base.as_ref().map(|old| old.id.clone())
             },
             Draft {
-                name: self.name.text(),
+                name,
                 protocol,
                 params,
             },
         ))
     }
+}
+
+struct ParsedEndpoint {
+    user: Option<String>,
+    host: String,
+    port: Option<String>,
+    ssh_command: bool,
+}
+
+fn parse_endpoint(value: &str) -> Result<Option<ParsedEndpoint>, &'static str> {
+    let value = value.trim();
+    let invalid = "主機格式無效，請使用 user@host:port 或 [IPv6]:port。";
+    if value
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("ssh"))
+        && value.chars().any(char::is_whitespace)
+    {
+        let parts: Vec<_> = value.split_whitespace().collect();
+        if parts.len() != 4
+            || parts[1] != "-p"
+            || value.chars().any(char::is_control)
+            || parts[3].starts_with('-')
+            || parts[3].contains(['\'', '"', '`', '$', ';', '&', '|', '\\'])
+        {
+            return Err(invalid);
+        }
+        let mut endpoint = parse_endpoint(&format!("{}:{}", parts[3], parts[2]))?.ok_or(invalid)?;
+        endpoint.ssh_command = true;
+        return Ok(Some(endpoint));
+    }
+    if value.parse::<std::net::Ipv6Addr>().is_ok() {
+        return Ok(None);
+    }
+    if !value.contains(['@', ':', '[', ']']) {
+        return Ok(None);
+    }
+    if value.contains(['/', '?', '#', '\\']) || value.chars().any(char::is_whitespace) {
+        return Err(invalid);
+    }
+    let (user, address) = if let Some((user, address)) = value.split_once('@') {
+        if user.is_empty() || user.contains([':', '@']) || address.contains('@') {
+            return Err(invalid);
+        }
+        (Some(user.to_string()), address)
+    } else {
+        (None, value)
+    };
+    let bracketed = address.starts_with('[');
+    let (host, port) = if let Some(rest) = address.strip_prefix('[') {
+        let (host, suffix) = rest.split_once(']').ok_or(invalid)?;
+        if host.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(invalid);
+        }
+        let port = if suffix.is_empty() {
+            None
+        } else {
+            Some(suffix.strip_prefix(':').ok_or(invalid)?)
+        };
+        (host, port)
+    } else if let Some((host, port)) = address.split_once(':') {
+        (host, Some(port))
+    } else {
+        (address, None)
+    };
+    if host.is_empty()
+        || (!bracketed && host.contains(':'))
+        || host.contains(['[', ']', '@'])
+        || host.len() > 255
+    {
+        return Err(invalid);
+    }
+    if let Some(port) = port {
+        if port.is_empty()
+            || !port.bytes().all(|byte| byte.is_ascii_digit())
+            || port
+                .parse::<u16>()
+                .ok()
+                .filter(|number| *number > 0)
+                .is_none()
+        {
+            return Err(invalid);
+        }
+    }
+    Ok(Some(ParsedEndpoint {
+        user,
+        host: host.to_string(),
+        port: port.map(str::to_string),
+        ssh_command: false,
+    }))
 }
 
 fn duplicate_name(name: &str) -> String {
@@ -594,7 +832,9 @@ fn duplicate_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::duplicate_name;
+    use super::{duplicate_name, parse_endpoint, Editor};
+    use cracamole_store::PublicConnection;
+    use std::collections::BTreeMap;
 
     #[test]
     fn duplicate_names_keep_numeric_padding() {
@@ -602,5 +842,152 @@ mod tests {
         assert_eq!(duplicate_name("主機-9"), "主機-10");
         assert_eq!(duplicate_name("主機"), "主機 - 複製");
         assert!(duplicate_name(&"主".repeat(120)).chars().count() <= 120);
+    }
+
+    #[test]
+    fn endpoint_parsing_rejects_ambiguous_or_secret_inputs() {
+        let endpoint = parse_endpoint("alice@[2001:db8::1]:3389").unwrap().unwrap();
+        assert_eq!(endpoint.user.as_deref(), Some("alice"));
+        assert_eq!(endpoint.host, "2001:db8::1");
+        assert_eq!(endpoint.port.as_deref(), Some("3389"));
+        let endpoint = parse_endpoint("alice@example.test:2222").unwrap().unwrap();
+        assert_eq!(endpoint.user.as_deref(), Some("alice"));
+        assert_eq!(endpoint.host, "example.test");
+        assert_eq!(endpoint.port.as_deref(), Some("2222"));
+        let endpoint = parse_endpoint("alice@example.test").unwrap().unwrap();
+        assert_eq!(endpoint.user.as_deref(), Some("alice"));
+        assert!(endpoint.port.is_none());
+        assert!(parse_endpoint("2001:db8::1").unwrap().is_none());
+        assert!(parse_endpoint("user:secret@host:22").is_err());
+        assert!(parse_endpoint("host:65536").is_err());
+        assert!(parse_endpoint("host:0").is_err());
+        assert!(parse_endpoint("[2001:db8::1]:bad").is_err());
+        assert!(parse_endpoint("ssh://host").is_err());
+        let command = parse_endpoint("ssh -p 2222 alice@[2001:db8::1]")
+            .unwrap()
+            .unwrap();
+        assert!(command.ssh_command);
+        assert_eq!(command.host, "2001:db8::1");
+        assert_eq!(command.port.as_deref(), Some("2222"));
+        for invalid in [
+            "ssh -p 0 alice@host",
+            "ssh -p 22 user:secret@host",
+            "ssh -p 22 host:23",
+            "ssh -p 22 host;cmd",
+            "ssh -p 22 host command",
+            "ssh -o option host",
+        ] {
+            assert!(parse_endpoint(invalid).is_err(), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn pasted_endpoint_only_updates_unchanged_fields() {
+        native_windows_gui::init().unwrap();
+        let mut window = native_windows_gui::Window::default();
+        native_windows_gui::Window::builder()
+            .size((640, 600))
+            .flags(native_windows_gui::WindowFlags::WINDOW)
+            .build(&mut window)
+            .unwrap();
+        let editor = Editor::new(&window).unwrap();
+        editor.begin(None);
+        editor.hostname.set_text("alice@[2001:db8::1]:2222");
+        editor.port.set_text("23");
+        editor.username.set_text("old");
+        let snapshot = (
+            editor.hostname.text(),
+            editor.port.text(),
+            editor.username.text(),
+            editor.protocol.selection_string().unwrap(),
+        );
+        editor.normalize_pasted_endpoint(&snapshot).unwrap();
+        assert_eq!(editor.hostname.text(), "2001:db8::1");
+        assert_eq!(editor.port.text(), "2222");
+        assert_eq!(editor.username.text(), "alice");
+
+        editor.hostname.set_text("bob@host.example:2222");
+        let stale = (
+            editor.hostname.text(),
+            editor.port.text(),
+            editor.username.text(),
+            editor.protocol.selection_string().unwrap(),
+        );
+        editor.port.set_text("3333");
+        editor.normalize_pasted_endpoint(&stale).unwrap();
+        assert_eq!(editor.hostname.text(), "bob@host.example:2222");
+        assert_eq!(editor.port.text(), "3333");
+        assert_eq!(editor.username.text(), "alice");
+
+        editor.hostname.set_text("bob:secret@host:22");
+        let invalid = (
+            editor.hostname.text(),
+            editor.port.text(),
+            editor.username.text(),
+            editor.protocol.selection_string().unwrap(),
+        );
+        assert!(editor.normalize_pasted_endpoint(&invalid).is_err());
+        assert_eq!(editor.hostname.text(), invalid.0);
+        assert_eq!(editor.port.text(), invalid.1);
+        assert_eq!(editor.username.text(), invalid.2);
+
+        editor.protocol.set_selection(Some(2));
+        editor.password.set_text("old-rdp-password");
+        editor.hostname.set_text("ssh -p 2200 bob@host.example");
+        let command = (
+            editor.hostname.text(),
+            editor.port.text(),
+            editor.username.text(),
+            editor.protocol.selection_string().unwrap(),
+        );
+        editor.protocol.set_selection(Some(3));
+        editor.normalize_pasted_endpoint(&command).unwrap();
+        assert_eq!(editor.protocol.selection_string().as_deref(), Some("vnc"));
+        assert_eq!(editor.hostname.text(), command.0);
+        editor.protocol.set_selection(Some(2));
+        editor.normalize_pasted_endpoint(&command).unwrap();
+        assert_eq!(editor.protocol.selection_string().as_deref(), Some("ssh"));
+        assert_eq!(editor.hostname.text(), "host.example");
+        assert_eq!(editor.port.text(), "2200");
+        assert_eq!(editor.username.text(), "bob");
+        assert_eq!(editor.password.text(), "");
+    }
+
+    #[test]
+    fn quick_existing_requires_a_unique_matching_ssh_endpoint() {
+        let connection = PublicConnection {
+            id: "one".into(),
+            name: "host".into(),
+            protocol: "ssh".into(),
+            params: BTreeMap::from([
+                ("hostname".into(), "EXAMPLE.test".into()),
+                ("username".into(), "alice".into()),
+            ]),
+            configured_secrets: Vec::new(),
+        };
+        assert_eq!(
+            Editor::existing_quick("alice@example.test:22", std::slice::from_ref(&connection))
+                .unwrap()
+                .as_deref(),
+            Some("one")
+        );
+        assert!(
+            Editor::existing_quick("bob@example.test:22", std::slice::from_ref(&connection))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            Editor::existing_quick("alice@example.test:23", std::slice::from_ref(&connection))
+                .unwrap()
+                .is_none()
+        );
+        let duplicate = PublicConnection {
+            id: "two".into(),
+            name: connection.name.clone(),
+            protocol: connection.protocol.clone(),
+            params: connection.params.clone(),
+            configured_secrets: Vec::new(),
+        };
+        assert!(Editor::existing_quick("alice@example.test:22", &[connection, duplicate]).is_err());
     }
 }

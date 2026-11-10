@@ -2,7 +2,7 @@
 import { $, el } from '../util/dom.js';
 import { identityText, inspectIdentity, saveIdentity } from './trust.js';
 import { endpoint, identityKind, protocolLabel } from '../util/protocols.js';
-import { createSession } from '../session/guac.js';
+import { createSession, loadGuacamole } from '../session/guac.js';
 import { CTRL_ALT_DEL, KEYS } from '../session/keys.js';
 import { toast } from '../ui/toast.js';
 import { confirmAction } from '../ui/dialog.js';
@@ -40,7 +40,7 @@ function hideClipboard() {
 }
 
 function pasteFromPanel() {
-  if (current?.session.paste($('clipboard-text').value)) {
+  if (current?.session?.paste($('clipboard-text').value)) {
     hideClipboard();
     current.session.focus();
   }
@@ -84,7 +84,7 @@ function renderKeybar(modifiers = { ctrl: false, alt: false }) {
         'aria-pressed': key.modifier ? String(Boolean(modifiers[key.modifier])) : null,
         onmousedown: event => event.preventDefault(),
         onclick: () => {
-          if (!current) return;
+          if (!current?.session) return;
           if (key.modifier) current.session.toggleModifier(key.modifier);
           else current.session.sendKey(key.keysym);
         },
@@ -131,7 +131,8 @@ function onSessionState(connection, state, info) {
         (connection.params['ignore-cert'] !== 'true' || connection.params['server-cert-sha256'])))
   ) {
     const target = current;
-    inspectIdentity(target, () => current === target, showOverlay);
+    inspectIdentity(target, () => current === target, showOverlay,
+      status => setStatus(status, 'error'));
   }
 }
 
@@ -200,6 +201,24 @@ export async function openSession(connection) {
   $('overlay-endpoint').textContent = meta;
   $('send-cad').hidden = connection.protocol !== 'rdp';
   renderKeybar();
+  const target = current;
+  setControls(false);
+  onSessionState(connection, 'connecting');
+  try {
+    await loadGuacamole();
+  } catch {
+    if (current !== target) return;
+    current.state = 'closed';
+    setStatus('載入失敗', 'error');
+    showOverlay({
+      title: '無法載入連線元件',
+      detail: '請檢查網路或重新整理頁面，然後再試一次。',
+      tone: 'error',
+      canRetry: true,
+    });
+    return;
+  }
+  if (current !== target) return;
   current.session = createSession({
     connection,
     mount: $('terminal'),
@@ -290,7 +309,7 @@ export function initStage(callbacks) {
   $('back-to-menu').addEventListener('click', () => closeSession());
   $('pill-back').addEventListener('click', () => closeSession());
   $('toggle-keybar').addEventListener('click', () => setKeybarVisible($('keybar').hidden));
-  $('send-cad').addEventListener('click', () => current?.session.sendCombo(CTRL_ALT_DEL));
+  $('send-cad').addEventListener('click', () => current?.session?.sendCombo(CTRL_ALT_DEL));
   $('toggle-clipboard').addEventListener('click', () => {
     const panel = $('clipboard-panel');
     panel.hidden = !panel.hidden;
@@ -302,7 +321,7 @@ export function initStage(callbacks) {
     if (event.key === 'Escape') {
       event.preventDefault();
       hideClipboard();
-      current?.session.focus();
+      current?.session?.focus();
     } else if (event.key === 'Enter' && event.ctrlKey && !$('paste-clipboard').disabled) {
       event.preventDefault();
       pasteFromPanel();
@@ -335,5 +354,5 @@ export function initStage(callbacks) {
     event.preventDefault();
     event.returnValue = '';
   });
-  window.addEventListener('pagehide', () => current?.session.dispose());
+  window.addEventListener('pagehide', () => current?.session?.dispose());
 }

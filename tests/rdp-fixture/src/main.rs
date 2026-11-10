@@ -115,6 +115,7 @@ struct InputHandler {
     clipboard_sender: clipboard::SharedSender,
     clipboard_updated: Arc<AtomicBool>,
     focus_test_step: u8,
+    secure_attention_step: usize,
 }
 
 struct Validator(PathBuf);
@@ -140,6 +141,23 @@ impl CredentialValidator for Validator {
 }
 impl RdpServerInputHandler for InputHandler {
     fn keyboard(&mut self, event: KeyboardEvent) {
+        let expected = match self.secure_attention_step {
+            0 => matches!(event, KeyboardEvent::Pressed { code: 0x1d, extended: false }),
+            1 => matches!(event, KeyboardEvent::Pressed { code: 0x38, extended: false }),
+            2 => matches!(event, KeyboardEvent::Pressed { code: 0x53, extended: true }),
+            3 => matches!(event, KeyboardEvent::Released { code: 0x53, extended: true }),
+            4 => matches!(event, KeyboardEvent::Released { code: 0x38, extended: false }),
+            5 => matches!(event, KeyboardEvent::Released { code: 0x1d, extended: false }),
+            _ => false,
+        };
+        if expected {
+            self.secure_attention_step += 1;
+            if self.secure_attention_step == 6 {
+                let _ = std::fs::write(self.directory.join("secure-attention"), b"ok");
+            }
+        } else {
+            self.secure_attention_step = 0;
+        }
         let expected = match self.focus_test_step {
             0 => matches!(
                 event,
@@ -282,6 +300,7 @@ async fn main() -> anyhow::Result<()> {
             clipboard_sender: clipboard_sender.clone(),
             clipboard_updated: clipboard_updated.clone(),
             focus_test_step: 0,
+            secure_attention_step: 0,
         })
         .with_display_handler(Display(
             connected.clone(),

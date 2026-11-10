@@ -2,7 +2,7 @@
 use crate::{display::Display, session::Session};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use cracamole_store::Connection;
-use guac_protocol::Instruction;
+use guac_protocol::{Instruction, Status};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -12,6 +12,64 @@ pub struct Frame {
     pub width: usize,
     pub height: usize,
     pub rgba: Arc<[u8]>,
+}
+
+#[derive(Debug)]
+pub enum DriverError {
+    Remote(Status),
+    Other(String),
+}
+
+impl From<String> for DriverError {
+    fn from(value: String) -> Self {
+        Self::Other(value)
+    }
+}
+
+impl From<&str> for DriverError {
+    fn from(value: &str) -> Self {
+        Self::Other(value.to_owned())
+    }
+}
+
+fn remote_error(instruction: &Instruction) -> DriverError {
+    instruction
+        .args
+        .get(1)
+        .filter(|_| instruction.args.len() == 2)
+        .and_then(|value| value.parse::<u16>().ok())
+        .and_then(Status::from_code)
+        .filter(|status| *status != Status::Success)
+        .map_or_else(
+            || DriverError::Other("invalid remote error".into()),
+            DriverError::Remote,
+        )
+}
+
+// A fast plugin failure can close the write side while its error is already
+// queued for reading. Preserve that status without treating EOF as success.
+async fn error_after_failed_write(
+    session: &mut Session,
+    cancel: &CancellationToken,
+    original: String,
+) -> DriverError {
+    let read_error = async {
+        for _ in 0..64 {
+            match session.read().await {
+                Ok(Some(instruction)) if instruction.opcode == "error" => {
+                    return Some(remote_error(&instruction));
+                }
+                Ok(Some(instruction)) if instruction.opcode != "disconnect" => {}
+                _ => return None,
+            }
+        }
+        None
+    };
+    tokio::select! {
+        _ = cancel.cancelled() => DriverError::Other(original),
+        result = tokio::time::timeout(std::time::Duration::from_secs(1), read_error) =>
+            result.ok().flatten().unwrap_or(DriverError::Other(original)),
+    }
 }
 
 pub enum Input {
@@ -111,7 +169,7 @@ pub async fn run(
     frames: watch::Sender<Option<Arc<Frame>>>,
     clipboard: watch::Sender<Option<Arc<str>>>,
     cancel: CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), DriverError> {
     let mut session = tokio::select! {
         _ = cancel.cancelled() => return Ok(()),
         result = Session::connect(connection, width, height) => result?,
@@ -163,14 +221,42 @@ pub async fn run(
                             frames.send_replace(Some(Arc::new(Frame { width, height, rgba: Arc::from(display.pixels()) })));
                             dirty = false;
                         }
-                        session.send(Instruction::new("sync", instruction.args)).await?;
+                        if let Err(error) = session.send(Instruction::new("sync", instruction.args)).await {
+                            return Err(error_after_failed_write(&mut session, &cancel, error).await);
+                        }
                     }
                     "nop" | "ack" => {}
                     "disconnect" => return Ok(()),
-                    "error" => return Err("remote session failed".into()),
-                    _ => return Err(format!("unsupported session instruction: {}", instruction.opcode)),
+                    "error" => return Err(remote_error(&instruction)),
+                    _ => return Err(format!("unsupported session instruction: {}", instruction.opcode).into()),
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{remote_error, DriverError};
+    use guac_protocol::{Instruction, Status};
+
+    #[test]
+    fn remote_error_uses_only_a_valid_status_code() {
+        let error = Instruction::new("error", ["sensitive remote message", "769"]);
+        assert!(matches!(
+            remote_error(&error),
+            DriverError::Remote(Status::ClientUnauthorized)
+        ));
+        for args in [
+            vec!["secret", "0"],
+            vec!["secret", "65535"],
+            vec!["secret"],
+            vec!["secret", "769", "extra"],
+        ] {
+            assert!(matches!(
+                remote_error(&Instruction::new("error", args)),
+                DriverError::Other(_)
+            ));
         }
     }
 }

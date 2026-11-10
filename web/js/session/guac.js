@@ -4,6 +4,33 @@ import { classify } from './reasons.js';
 import { encodeClipboard, receiveClipboard, sendClipboard } from './text.js';
 
 const keyboards = new WeakMap(); // Guacamole.Keyboard cannot be detached, so one per mount element
+let libraryLoading = null;
+
+// Share an in-flight load, but let a failed request be retried on the next connection.
+export function loadGuacamole() {
+  if (globalThis.Guacamole?.Client) return Promise.resolve();
+  if (libraryLoading) return libraryLoading;
+  libraryLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = '/assets/vendor/guacamole.js';
+    script.onload = () => {
+      if (globalThis.Guacamole?.Client) resolve();
+      else {
+        script.remove();
+        reject(new Error('Guacamole client unavailable'));
+      }
+    };
+    script.onerror = () => {
+      script.remove();
+      reject(new Error('Guacamole client failed to load'));
+    };
+    document.head.append(script);
+  }).catch(error => {
+    libraryLoading = null;
+    throw error;
+  });
+  return libraryLoading;
+}
 
 function keyboardFor(element) {
   let keyboard = keyboards.get(element);

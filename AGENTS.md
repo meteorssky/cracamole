@@ -19,6 +19,7 @@
 - 代理來源只透過 `CRACAMOLE_TRUSTED_PROXIES` 明確列出的 peer IP 信任其覆寫的單一 `X-Real-IP`；不得直接信任任意轉送標頭。設定方式見 README。
 - RDP／VNC 解碼圖必須在配置前驗證遠端尺寸並取得共用記憶體額度；VNC 設定了帳密卻只收到「無驗證」時須拒絕連線，不得降級；剪貼簿須限制活動串流數、總 bytes 與閒置時間。終端機貼上不得讓文字內的 ESC／控制碼突破 bracketed paste 邊界。
 - 連線設定保存於私有 JSON／Docker volume。機密目前未做靜態加密，Unix 目錄／檔案權限為 0700／0600；不得宣稱已加密。API 不回傳密碼、私鑰或密語；不得寫入 URL、日誌或 Git。目的地及安全設定不變時，編輯未提供的機密保留，明確空值清除；變更協定、主機、連接埠或安全設定時不得沿用未提供的機密。
+- Windows 桌面版一次性 SSH 的獨立主機信任保存於私有資料目錄的 `ssh-identities.json`，只含目的地與公鑰；須驗證存取權限、原子寫入，並拒絕覆寫衝突的既有身分。
 - daemon 僅監聽私人 loopback，不發布 4822。正式 Compose 預設僅發布主機 loopback HTTP；遠端使用透過 HTTPS reverse proxy，保留 Host 與 WebSocket，啟用 Secure cookie。
 - 前端（`web/`）與 Windows 原生桌面介面（`crates/cracamole-desktop`）的 UI/UX 變更必須遵守 `web/GUIDELINES.md` 與 `design.md`（無建置步驟、CSP、token、無障礙、現代化極速連線與連線設定複製準則、§12 桌面版商業級雙欄工作台與自動化測試契約、測試與完成定義）；全平台診斷與設計背景見 `design.md` 與本機 `docs/ux-redesign.md`。
 - `web/vendor/` 的 Apache JavaScript 保留 LICENSE／NOTICE；更新時使用釘選來源與 checksum。

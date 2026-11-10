@@ -25,6 +25,7 @@ test('authentication failures are recognised (status 769 and 771)', async () => 
   for (const code of [769, 771]) {
     const result = classify(ended({ code, message: 'Aborted. See logs.' }));
     assert.strictEqual(result.reason, 'auth');
+    assert.strictEqual(result.status, '驗證失敗');
     assert.strictEqual(result.canEdit, true);
     assert.strictEqual(result.tone, 'error');
   }
@@ -33,6 +34,7 @@ test('authentication failures are recognised (status 769 and 771)', async () => 
 test('timeouts, missing hosts and unreachable upstreams each get their own explanation', async () => {
   const { classify } = await load();
   assert.strictEqual(classify(ended({ code: 514, message: '' })).reason, 'timeout');
+  assert.strictEqual(classify(ended({ code: 514, message: '' })).status, '連線逾時');
   assert.strictEqual(classify(ended({ code: 519, message: '' })).reason, 'not-found');
   assert.strictEqual(classify(ended({ code: 515, message: '' })).reason, 'upstream');
   assert.strictEqual(classify(ended({ code: 520, message: '' })).reason, 'upstream');

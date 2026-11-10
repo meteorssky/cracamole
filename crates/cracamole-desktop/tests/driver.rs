@@ -1,6 +1,46 @@
 use cracamole_desktop::driver::{self, Input};
 use cracamole_store::Connection;
 use std::{collections::BTreeMap, time::Duration};
+
+#[tokio::test]
+async fn unknown_ssh_host_reports_upstream_not_found() {
+    let connection = Connection {
+        id: "missing".into(),
+        name: "missing".into(),
+        protocol: "ssh".into(),
+        params: BTreeMap::from([
+            ("hostname".into(), "no-such-host.invalid".into()),
+            ("username".into(), "fixture".into()),
+            ("password".into(), "fixture-secret".into()),
+        ]),
+    };
+    let (_input, receiver) = tokio::sync::mpsc::channel(4);
+    let (frames, _) = tokio::sync::watch::channel(None);
+    let (clipboard, _) = tokio::sync::watch::channel(None);
+    let result = tokio::time::timeout(
+        Duration::from_secs(20),
+        driver::run(
+            &connection,
+            640,
+            480,
+            receiver,
+            frames,
+            clipboard,
+            tokio_util::sync::CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("主機名稱解析未完成");
+    assert!(
+        matches!(
+            result,
+            Err(driver::DriverError::Remote(
+                guac_protocol::Status::UpstreamNotFound
+            ))
+        ),
+        "unexpected result: {result:?}"
+    );
+}
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,

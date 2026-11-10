@@ -6,7 +6,7 @@ import { initTheme } from './util/theme.js';
 import { confirmAction } from './ui/dialog.js';
 import { toast } from './ui/toast.js';
 import { initDrawer, setDrawerOpen } from './views/drawer.js';
-import { duplicateConnection, openEditor, openQuickEditor, initEditor } from './views/editor.js';
+import { duplicateConnection, openEditor, openGroupEditor, openQuickEditor, initEditor } from './views/editor.js';
 import { initLibrary, setActive, setConnections } from './views/library.js';
 import { hideLogin, initLogin, showLogin } from './views/login.js';
 import { initLogs, openLogs } from './views/logs.js';
@@ -102,6 +102,7 @@ async function boot() {
   });
   initLibrary({
     onAdd: () => openEditor(),
+    onAddGroup: group => openGroupEditor(group),
     onOpen: connection => openSession(connection),
     onEdit: connection => openEditor(connection),
     onDuplicate: duplicateConnection,

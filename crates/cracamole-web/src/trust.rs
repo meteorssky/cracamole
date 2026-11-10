@@ -7,6 +7,7 @@ use axum::{
     Json,
 };
 use guac_session::{IdentityKind, ProtocolInfo, SessionError, Status};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     future::Future,
@@ -27,27 +28,85 @@ async fn authorize(
     headers: &HeaderMap,
     id: &str,
 ) -> Result<(Connection, Probe), ApiError> {
-    let (expires, cancel) = app.auth.authorize(headers).await?;
-    auth::same_origin(headers)?;
+    let probe = authorize_probe(app, headers).await?;
     let connection = app
         .store
         .get(id)
         .await
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "找不到連線"))?;
+    Ok((connection, probe))
+}
+
+async fn authorize_probe(app: &App, headers: &HeaderMap) -> Result<Probe, ApiError> {
+    let (expires, cancel) = app.auth.authorize(headers).await?;
+    auth::same_origin(headers)?;
     let permit = app.probes.clone().try_acquire_owned().map_err(|_| {
         ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "主機身分探測忙碌，請稍後再試",
         )
     })?;
-    Ok((
-        connection,
-        Probe {
-            _permit: permit,
-            expires,
-            cancel,
-        },
-    ))
+    Ok(Probe {
+        _permit: permit,
+        expires,
+        cancel,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftProbe {
+    protocol: String,
+    hostname: String,
+    port: String,
+}
+
+pub async fn draft_identity(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(request): Json<DraftProbe>,
+) -> Result<Json<Value>, ApiError> {
+    let probe = authorize_probe(&app, &headers).await?;
+    let protocol = crate::protocols::info(&request.protocol)
+        .filter(|info| {
+            matches!(
+                info.identity,
+                IdentityKind::HostKey | IdentityKind::Certificate
+            )
+        })
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "這個協定沒有可核對的主機身分"))?;
+    let host = request.hostname.trim();
+    let draft = cracamole_store::Draft {
+        name: "probe".into(),
+        protocol: request.protocol,
+        params: [
+            ("hostname".into(), host.into()),
+            ("port".into(), request.port.trim().into()),
+        ]
+        .into(),
+    };
+    cracamole_store::validate(&draft)
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.message))?;
+    let port = draft.params["port"]
+        .parse::<u16>()
+        .unwrap_or(protocol.default_port);
+    let result = match protocol.identity {
+        IdentityKind::HostKey => {
+            let info = probe
+                .run(&app, guacd::probe_host_key(host, port, None, 10))
+                .await?;
+            json!({"hostname":host,"port":port,"fingerprint":info.fingerprint,
+                "public_key":info.public_key,"trusted":info.trusted,"matches":info.matches})
+        }
+        IdentityKind::Certificate => {
+            let info = probe
+                .run(&app, guacd::probe_certificate(host, port, 10))
+                .await?;
+            json!({"hostname":host,"port":port,"sha256":info.sha256})
+        }
+        _ => unreachable!(),
+    };
+    Ok(Json(result))
 }
 
 impl Probe {
@@ -119,7 +178,7 @@ pub async fn certificate(
         .and_then(|p| guacd::normalize_fingerprint(p));
     tracing::info!("certificate probe for {id}: sha256 {}", info.sha256);
     Ok(Json(
-        json!({ "sha256": info.sha256, "subject": info.subject, "issuer": info.issuer,
+        json!({ "hostname": host, "port": port, "sha256": info.sha256, "subject": info.subject, "issuer": info.issuer,
         "pinned": pinned, "matches_pin": pinned.as_deref() == Some(info.sha256.as_str()) }),
     ))
 }
@@ -145,7 +204,7 @@ pub async fn host_key(
         .run(&app, guacd::probe_host_key(host, port, configured, 10))
         .await?;
     Ok(Json(
-        json!({"public_key": info.public_key, "fingerprint": info.fingerprint,
+        json!({"hostname": host, "port": port, "public_key": info.public_key, "fingerprint": info.fingerprint,
         "trusted": info.trusted, "matches": info.matches}),
     ))
 }
