@@ -42,7 +42,7 @@ test('portable settings can be reviewed and saved without clipboard access', asy
   await dialog.getByRole('button', { name: '清除選取' }).click();
   await expect(dialog.getByRole('button', { name: '產生交換資料' })).toBeDisabled();
   await expect(dialog.locator('#portable-selection-count')).toContainText('已選取 0 筆');
-  await dialog.getByRole('button', { name: '選取前 100 筆' }).click();
+  await dialog.getByRole('button', { name: '只選取本頁' }).click();
   expect(await dialog.locator('#portable-results input:checked').count())
     .toBe(Math.min(100, await dialog.locator('#portable-results input').count()));
   await dialog.getByRole('button', { name: '清除選取' }).click();

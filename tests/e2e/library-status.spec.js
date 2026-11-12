@@ -134,19 +134,19 @@ test('recent and connected filters follow session state and search', async ({ pa
   const connected = filters.getByRole('button', { name: '已連線', exact: true });
   await connected.click();
   await expect(connected).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近` })).toBeVisible();
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近`, exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: `連線 ${prefix} 未使用` })).toHaveCount(0);
   await page.evaluate(async id => {
     const library = await import('/assets/js/views/library.js');
     library.setActive(id, 'closed', '連線已結束');
   }, ids[0]);
-  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近` })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近`, exact: true })).toHaveCount(0);
   await recent.click();
   await expect(recent).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近` })).toBeVisible();
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近`, exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: `連線 ${prefix} 未使用` })).toHaveCount(0);
   await page.reload();
   await page.getByLabel('搜尋連線').fill(prefix);
   await page.getByRole('group', { name: '篩選連線' }).getByRole('button', { name: '最近', exact: true }).click();
-  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近` })).toBeVisible();
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近`, exact: true })).toBeVisible();
 });

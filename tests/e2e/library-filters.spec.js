@@ -214,7 +214,8 @@ test('group header and actions remain available while scrolling its hosts', asyn
   const [drawerBox, summaryBox, addBox] = await Promise.all([
     drawer.boundingBox(), summary.boundingBox(), add.boundingBox(),
   ]);
-  expect(Math.abs(summaryBox.y - drawerBox.y)).toBeLessThanOrEqual(2);
+  const paddingTop = await drawer.evaluate(element => parseFloat(getComputedStyle(element).paddingTop));
+  expect(Math.abs(summaryBox.y - drawerBox.y - paddingTop)).toBeLessThanOrEqual(2);
   expect(Math.abs(addBox.y - summaryBox.y)).toBeLessThanOrEqual(2);
   await add.click();
   await expect(page.getByRole('dialog', { name: '新增連線' }).getByLabel('所屬群組（選填）')).toHaveValue(group);
