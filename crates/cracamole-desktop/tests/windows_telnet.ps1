@@ -24,6 +24,7 @@ public static class TelnetGui {
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out Rect r);
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out Rect r);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
     [DllImport("user32.dll", EntryPoint="GetWindowLongW")] public static extern int GetWindowLong(IntPtr h, int index);
@@ -83,7 +84,7 @@ try {
     $inputs = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Edit' })
     $combos = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'ComboBox' })
     $list = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'ListBox' })[0]
-    if ($inputs.Count -ne 14 -or $combos.Count -ne 4) { throw '找不到預期的編輯控制項' }
+    if ($inputs.Count -ne 17 -or $combos.Count -ne 4) { throw '找不到預期的編輯控制項' }
     function Button([string]$label) { $found = @($children | Where-Object { [TelnetGui]::Text($_) -eq $label }); if ($found.Count -ne 1) { throw "找不到按鈕：$label" }; return $found[0] }
     Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
     if ($env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
@@ -110,14 +111,14 @@ try {
         $process.Refresh(); if ($process.ExitCode -ne 0) { throw '桌面程式異常結束' }
         return
     }
-    foreach ($label in @('連線', '編輯', '刪除', '核對身分', '複製')) {
+    foreach ($label in @('連線', '編輯', '刪除', '核對身分', '複製', '複製設定')) {
         if ([TelnetGui]::IsWindowEnabled((Button $label))) { throw "無連線時操作仍啟用：$label" }
     }
     $libraryOriginal = New-Object TelnetGui+Rect
     $librarySmall = New-Object TelnetGui+Rect
     if (-not [TelnetGui]::GetWindowRect($window, [ref]$libraryOriginal) -or -not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 400, 550, 0x0006) -or -not [TelnetGui]::GetWindowRect($window, [ref]$librarySmall)) { throw '無法縮放連線庫視窗' }
     $libraryRects = @()
-    foreach ($label in @('重新載入', '連線', '登出', '新增', '編輯', '刪除', '核對身分', '複製', '收折群組', '展開群組', '樹狀檢視')) {
+    foreach ($label in @('重新載入', '連線', '登出', '新增', '編輯', '刪除', '核對身分', '複製', '收折群組', '展開群組', '樹狀檢視', '複製設定', '匯入設定', '群組更名', '釘選／取消')) {
         $r = New-Object TelnetGui+Rect
         if (-not [TelnetGui]::GetWindowRect((Button $label), [ref]$r) -or $r.Left -lt $librarySmall.Left -or $r.Top -lt $librarySmall.Top -or $r.Right -gt $librarySmall.Right -or $r.Bottom -gt $librarySmall.Bottom) { throw "小視窗連線庫控制項超出邊界：$label" }
         foreach ($other in $libraryRects) {
@@ -138,39 +139,51 @@ try {
         if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 900, 700, 0x0006)) { throw '無法調整視窗' }
         Wait-For {
             [TelnetGui]::GetWindowRect($list, [ref]$after) -and
-            ($after.Right - $after.Left) -gt ($before.Right - $before.Left) -and
+            ($after.Right - $after.Left) -eq 260 -and
             ($after.Bottom - $after.Top) -gt ($before.Bottom - $before.Top)
-        } '連線清單未隨視窗放大'
+        } '雙欄模式未保持側欄寬度或擴大清單高度'
+        $stage = @($children | Where-Object { [TelnetGui]::Text($_).StartsWith('選擇左側連線並按 Enter') })
+        if ($stage.Count -ne 1 -or ([TelnetGui]::GetWindowLong($stage[0], -16) -band 0x10000000) -eq 0) { throw '雙欄工作台指引未顯示' }
+        $stageRect = New-Object TelnetGui+Rect
+        if (-not [TelnetGui]::GetWindowRect($stage[0], [ref]$stageRect) -or $stageRect.Left -le $after.Right) { throw '工作台指引與側欄重疊' }
+        foreach ($label in @('重新載入', '連線', '登出', '新增', '編輯', '刪除', '核對身分', '複製', '釘選／取消')) {
+            $actionRect = New-Object TelnetGui+Rect
+            if (-not [TelnetGui]::GetWindowRect((Button $label), [ref]$actionRect) -or
+                $actionRect.Left -le $after.Right -or $actionRect.Bottom -gt $stageRect.Top) {
+                throw "寬視窗管理按鈕未位於右側工作區：$label"
+            }
+        }
     }
     if ($env:CRACAMOLE_TEST_SAVE_CONNECT -eq '1') {
-        Set-Text $inputs[13] 'alice@127.0.0.1:2222'
-        [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        Set-Text $inputs[14] 'alice@127.0.0.1:2222'
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
         Wait-For { [TelnetGui]::EditText($inputs[4]) -eq '127.0.0.1' -and [TelnetGui]::EditText($inputs[5]) -eq '2222' -and [TelnetGui]::EditText($inputs[6]) -eq 'alice' } 'quick endpoint not populated'
         if ([IO.File]::Exists((Join-Path $testDir 'connections.json')) -or [TelnetGui]::EditText($inputs[7]) -ne '') { throw 'quick endpoint unexpectedly saved a connection or secret' }
         Click (Button '取消')
-        Set-Text $inputs[13] 'alice:secret@host:22'
-        [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        Set-Text $inputs[14] 'alice:secret@host:22'
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
         Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq '主機格式無效，請使用 user@host:port 或 [IPv6]:port。' }).Count -eq 1 } 'invalid quick endpoint was not rejected'
         if (([TelnetGui]::GetWindowLong($inputs[3], -16) -band 0x10000000) -ne 0 -or [IO.File]::Exists((Join-Path $testDir 'connections.json'))) { throw 'invalid quick endpoint opened or saved a connection' }
-        Set-Text $inputs[13] ''
+        Set-Text $inputs[14] ''
         Click (Button '新增')
         Set-Text $inputs[3] '既有連線'
         Set-Text $inputs[4] '127.0.0.1'
         Set-Text $inputs[5] '1'
         Click (Button '儲存')
-        Set-Text $inputs[13] 'not-a-real-host'
+        Set-Text $inputs[14] 'not-a-real-host'
         Wait-For { [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero } '搜尋未篩選不符合的連線'
-        foreach ($label in @('連線', '編輯', '刪除', '核對身分', '複製')) {
+        foreach ($label in @('連線', '編輯', '刪除', '核對身分', '複製', '複製設定')) {
             if ([TelnetGui]::IsWindowEnabled((Button $label))) { throw "搜尋無結果時操作仍啟用：$label" }
         }
-        Set-Text $inputs[13] '127.0.0.1'
+        Set-Text $inputs[14] '127.0.0.1'
         Wait-For { [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]1 } '搜尋未顯示符合的連線'
         if (-not [TelnetGui]::IsWindowEnabled((Button '連線'))) { throw '有選取結果時連線仍停用' }
-        Set-Text $inputs[13] ''
+        Set-Text $inputs[14] ''
     }
     if ($SwitchPort) {
         Click (Button '新增')
-        Set-Text $inputs[3] '機房 / 切換目標'
+        Set-Text $inputs[3] '切換目標'
+        Set-Text $inputs[13] '機房'
         [void][TelnetGui]::SendMessageInt($combos[0], 0x014E, [IntPtr]1, [IntPtr]::Zero)
         $change = [IntPtr]([TelnetGui]::GetDlgCtrlID($combos[0]) -bor (1 -shl 16))
         [void][TelnetGui]::SendMessageInt($window, 0x0111, $change, $combos[0])
@@ -256,6 +269,28 @@ try {
     } elseif ($env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
         [void][TelnetGui]::SendMessageInt($inputs[4], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     } else { Click (Button '儲存') }
+    if (-not $SwitchPort -and -not $env:CRACAMOLE_TEST_SAVE_CONNECT -and -not $env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
+        if (-not [TelnetGui]::IsWindowEnabled((Button '複製設定'))) { throw '選取連線時複製設定未啟用' }
+        [void][TelnetGui]::PostMessage((Button '複製設定'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '複製設定確認未顯示'
+        [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]2, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -eq [IntPtr]::Zero } '取消複製設定後確認未關閉'
+        [void][TelnetGui]::PostMessage((Button '複製設定'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '複製範圍選擇未顯示'
+        [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]6, [IntPtr]::Zero)
+        Wait-For { $dialog = [TelnetGui]::FindDialog([uint32]$process.Id); $dialog -ne [IntPtr]::Zero -and [TelnetGui]::Text($dialog) -eq '選擇交換格式' } '交換格式選擇未顯示'
+        [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]2, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -eq [IntPtr]::Zero } '取消交換格式後確認未關閉'
+        [void][TelnetGui]::PostMessage((Button '複製設定'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '單筆匯出選擇未顯示'
+        [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]7, [IntPtr]::Zero)
+        Wait-For { $dialog = [TelnetGui]::FindDialog([uint32]$process.Id); $dialog -ne [IntPtr]::Zero -and [TelnetGui]::Text($dialog) -eq '選擇交換格式' } '單筆匯出格式選擇未顯示'
+        [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]6, [IntPtr]::Zero)
+        Wait-For { ([TelnetGui]::GetWindowLong($inputs[15], -16) -band 0x10000000) -ne 0 } '匯出預覽未顯示'
+        if (-not [TelnetGui]::EditText($inputs[15]).Contains('127.0.0.1')) { throw '匯出預覽缺少公開目的地' }
+        Click (Button '取消匯出')
+        Wait-For { ([TelnetGui]::GetWindowLong($inputs[15], -16) -band 0x10000000) -eq 0 } '取消匯出後預覽未關閉'
+    }
     if ($env:CRACAMOLE_TEST_SAVE_CONNECT -eq '1') {
         if (-not [IO.File]::Exists((Join-Path $testDir 'connections.json'))) { throw '儲存並連線未儲存設定' }
         $saved = (Get-Content -Raw -Encoding utf8 (Join-Path $testDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.params.port -eq [string]$Port }
@@ -268,22 +303,22 @@ try {
         } else { [void][TelnetGui]::SendMessageInt($list, 0x0100, [IntPtr]13, [IntPtr]::Zero) }
     } else {
         if ($SwitchPort) {
-            Set-Text $inputs[13] '找不到的主機'
-            [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
-            [void][TelnetGui]::PostMessage($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+            Set-Text $inputs[14] '找不到的主機'
+            [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+            [void][TelnetGui]::PostMessage($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
             Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq '沒有符合的連線，請調整搜尋條件。' }).Count -eq 1 } '搜尋無結果時未提示'
             Start-Sleep -Milliseconds 200
             if (([TelnetGui]::GetWindowLong($inputs[3], -16) -band 0x10000000) -ne 0) { throw '重複 Enter 意外開啟新增連線編輯器' }
-            Set-Text $inputs[13] 'user:secret@host:22'
-            [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+            Set-Text $inputs[14] 'user:secret@host:22'
+            [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
             Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq '主機格式無效，請使用 user@host:port 或 [IPv6]:port。' }).Count -eq 1 } '搜尋框未拒絕包含密碼的位址'
-            Set-Text $inputs[13] '未分類'
+            Set-Text $inputs[14] '未分類'
             if ([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]1 -or -not [TelnetGui]::ListText($list, 0).Contains('Telnet fixture')) { throw '未分類群組搜尋錯誤' }
-            Set-Text $inputs[13] '機房'
+            Set-Text $inputs[14] '機房'
             if ([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]1) { throw '群組搜尋未找到連線' }
             Click (Button '收折群組')
             if ([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]1) { throw '搜尋中收折群組不應隱藏符合項目' }
-            Set-Text $inputs[13] ''
+            Set-Text $inputs[14] ''
             if ([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]1 -or [TelnetGui]::ListText($list, 0).Contains('切換目標')) { throw '清除搜尋後群組未收折' }
             Click (Button '收折群組')
             if ([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero) { throw '未分類群組未收折' }
@@ -295,21 +330,21 @@ try {
             if ([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]2) { throw '展開群組未還原所有連線' }
             [void][TelnetGui]::SendMessageInt($combos[3], 0x014E, [IntPtr]::Zero, [IntPtr]::Zero)
             [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]1, [IntPtr]::Zero)
-            Set-Text $inputs[13] '127.0.0.1'
+            Set-Text $inputs[14] '127.0.0.1'
             if ([TelnetGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]1) { throw '搜尋後未保留所選連線' }
-            [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]0x26, [IntPtr]::Zero)
+            [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]0x26, [IntPtr]::Zero)
             if ([TelnetGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero) { throw '搜尋框向上鍵未選擇上一筆連線' }
-            [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]0x28, [IntPtr]::Zero)
+            [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]0x28, [IntPtr]::Zero)
             if ([TelnetGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]1) { throw '搜尋框向下鍵未選擇下一筆連線' }
-            Set-Text $inputs[13] 'Telnet fixture'
+            Set-Text $inputs[14] 'Telnet fixture'
         }
         [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
-        if ($SwitchPort) { [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero) }
+        if ($SwitchPort) { [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero) }
         else { Click (Button '連線') }
     }
     Wait-For { @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Static' -and [TelnetGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero }).Count -gt 0 } 'Telnet 畫面未顯示'
     if ($SwitchPort) {
-        Set-Text $inputs[13] ''
+        Set-Text $inputs[14] ''
         $trees = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'SysTreeView32' })
         if ($trees.Count -ne 1) { throw '原生群組樹控制項數量錯誤' }
         $tree = $trees[0]
@@ -335,7 +370,7 @@ try {
         $child = [TelnetGui]::SendMessageInt($tree, 0x110A, [IntPtr]4, $root)
         if ($child -eq [IntPtr]::Zero) { throw '群組樹缺少主機節點' }
         [void][TelnetGui]::SendMessageInt($tree, 0x110B, [IntPtr]9, $root)
-        [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]0x28, [IntPtr]::Zero)
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]0x28, [IntPtr]::Zero)
         if ([TelnetGui]::SendMessageInt($tree, 0x110A, [IntPtr]9, [IntPtr]::Zero) -ne $child) { throw '搜尋框方向鍵未選取樹狀主機節點' }
         Wait-For { [TelnetGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero } '樹節點選取未同步連線清單'
         if (-not [TelnetGui]::ListText($list, 0).Contains('切換目標')) { throw '樹狀節點未指向切換目標' }
@@ -352,9 +387,11 @@ try {
     if ([TelnetGui]::IsWindowEnabled((Button '上一個連線'))) { throw '沒有上一個連線時按鈕應停用' }
     if ([TelnetGui]::IsWindowEnabled((Button '最近'))) { throw '沒有最近連線時選單應停用' }
     Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -match 'TELNET.*UTF-8.*畫面 \d+×\d+.*剩餘 \d\d:\d\d:\d\d' }).Count -eq 1 } '工作階段狀態缺少協定、編碼、畫面尺寸或剩餘時間'
-    Set-Text $inputs[13] 'not-a-real-host'
+    Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -match '^已連線 · TELNET · 未加密 · .+' }).Count -eq 1 } '工作階段標頭缺少名稱、協定或未加密標記'
+    $sessionHeader = @($children | Where-Object { [TelnetGui]::Text($_) -match '^已連線 · TELNET · 未加密 · .+' })[0]
+    Set-Text $inputs[14] 'not-a-real-host'
     Wait-For { [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero } '工作階段搜尋未篩選連線'
-    Set-Text $inputs[13] ''
+    Set-Text $inputs[14] ''
     Wait-For { [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -ge 1 } '清除搜尋後未還原連線'
     Wait-For { @((0..([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32() - 1)) | Where-Object { [TelnetGui]::ListText($list, $_).Contains('目前工作階段（已連線）') }).Count -eq 1 } '搜尋後未保留已連線狀態'
     $rows = [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
@@ -363,9 +400,20 @@ try {
     $sessionFrame = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Static' -and [TelnetGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero })[0]
     $originalWindow = New-Object TelnetGui+Rect
     $smallWindow = New-Object TelnetGui+Rect
-    if (-not [TelnetGui]::GetWindowRect($window, [ref]$originalWindow) -or -not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 400, 550, 0x0006) -or -not [TelnetGui]::GetWindowRect($window, [ref]$smallWindow)) { throw '無法調整工作階段視窗' }
+    if (-not [TelnetGui]::GetWindowRect($window, [ref]$originalWindow) -or -not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 1400, 700, 0x0006)) { throw '無法調整工作階段寬視窗' }
+    $headerRect = New-Object TelnetGui+Rect
+    if (-not [TelnetGui]::GetWindowRect($sessionHeader, [ref]$headerRect)) { throw '無法取得工作階段標頭' }
+    foreach ($label in @('中斷連線', '貼上', '全螢幕', '登出', '收折側欄', '上一個連線', '最近')) {
+        $rect = New-Object TelnetGui+Rect
+        if (-not [TelnetGui]::GetWindowRect((Button $label), [ref]$rect) -or [Math]::Abs($rect.Top - $headerRect.Top) -gt 2 -or $rect.Left -lt $headerRect.Right) { throw "寬視窗工具列未與標頭同列：$label" }
+    }
+    if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 400, 550, 0x0006) -or -not [TelnetGui]::GetWindowRect($window, [ref]$smallWindow)) { throw '無法調整工作階段窄視窗' }
+    Wait-For { ([TelnetGui]::GetWindowLong($sessionHeader, -16) -band 0x10000000) -eq 0 } '窄視窗仍顯示工作階段標頭'
+    if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 900, 700, 0x0006)) { throw '無法調整工作階段寬視窗' }
+    Wait-For { ([TelnetGui]::GetWindowLong($sessionHeader, -16) -band 0x10000000) -ne 0 } '寬視窗未顯示工作階段標頭'
+    if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 400, 550, 0x0006)) { throw '無法還原工作階段窄視窗' }
     $buttonRects = @()
-    foreach ($label in @('中斷連線', '貼上', '全螢幕', '登出', '收折側欄', '上一個連線', '最近', '收折群組', '展開群組', '樹狀檢視')) {
+    foreach ($label in @('中斷連線', '貼上', '全螢幕', '登出', '收折側欄', '更多', '收折群組', '展開群組', '樹狀檢視', '釘選／取消')) {
         $r = New-Object TelnetGui+Rect
         if (-not [TelnetGui]::GetWindowRect((Button $label), [ref]$r) -or $r.Left -lt $smallWindow.Left -or $r.Top -lt $smallWindow.Top -or $r.Right -gt $smallWindow.Right -or $r.Bottom -gt $smallWindow.Bottom) { throw "小視窗控制項超出視窗：$label" }
         foreach ($other in $buttonRects) {
@@ -376,7 +424,7 @@ try {
     $smallFrame = New-Object TelnetGui+Rect
     if (-not [TelnetGui]::GetWindowRect($sessionFrame, [ref]$smallFrame)) { throw '無法讀取遠端畫布位置' }
     if (($smallFrame.Top - $smallWindow.Top) -gt 240) { throw '工作階段頂部留白過大' }
-    foreach ($label in @('中斷連線', '貼上', '全螢幕', '登出', '收折側欄', '上一個連線', '最近')) {
+    foreach ($label in @('中斷連線', '貼上', '全螢幕', '登出', '收折側欄', '更多')) {
         $r = New-Object TelnetGui+Rect
         if (-not [TelnetGui]::GetWindowRect((Button $label), [ref]$r) -or $r.Bottom -gt $smallFrame.Top) { throw "工作階段工具列不在畫布上方：$label" }
     }
@@ -387,15 +435,26 @@ try {
     $expandedFrame = New-Object TelnetGui+Rect
     $collapsedFrame = New-Object TelnetGui+Rect
     if (([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -eq 0 -or -not [TelnetGui]::GetWindowRect($sessionFrame, [ref]$expandedFrame)) { throw '工作階段未顯示連線側欄' }
+    $clientRect = New-Object TelnetGui+Rect
+    if (-not [TelnetGui]::GetClientRect($window, [ref]$clientRect) -or
+        ($expandedFrame.Right - $expandedFrame.Left) -ne ($clientRect.Right - $clientRect.Left)) {
+        throw '遠端畫布未填滿視窗可用寬度'
+    }
     Click (Button '收折側欄')
     if (([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -ne 0 -or -not [TelnetGui]::GetWindowRect($sessionFrame, [ref]$collapsedFrame) -or
-        ($collapsedFrame.Right - $collapsedFrame.Left) -le ($expandedFrame.Right - $expandedFrame.Left)) { throw '收折側欄未擴大遠端畫面' }
+        $collapsedFrame.Left -ne $expandedFrame.Left -or $collapsedFrame.Top -ne $expandedFrame.Top -or
+        $collapsedFrame.Right -ne $expandedFrame.Right -or $collapsedFrame.Bottom -ne $expandedFrame.Bottom) { throw '收折側欄不應變更遠端畫布尺寸' }
     if (([TelnetGui]::GetWindowLong($combos[3], -16) -band 0x10000000) -ne 0) { throw '收折側欄後群組選擇器仍顯示' }
     Click (Button '展開側欄')
     if (([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -eq 0) { throw '無法重新展開側欄' }
     if (([TelnetGui]::GetWindowLong($combos[3], -16) -band 0x10000000) -eq 0) { throw '展開側欄後群組選擇器未顯示' }
+    [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]0x1b, [IntPtr]::Zero)
+    Wait-For { ([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -eq 0 } 'Escape 未收折工作階段側欄'
+    Click (Button '展開側欄')
+    Wait-For { ([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -ne 0 } 'Escape 收折後無法重新展開側欄'
     if ($env:CRACAMOLE_TEST_VISIBLE_TELNET -eq '1') {
         $frame = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Static' -and [TelnetGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero })[0]
+        Click (Button '收折側欄')
         try {
             [void][TelnetGui]::ShowWindow($window, 4) # SW_SHOWNOACTIVATE
             if (-not [TelnetGui]::SetWindowPos($window, [IntPtr](-1), 0, 0, 0, 0, 0x0011)) { throw '無法顯示測試視窗' }
@@ -403,14 +462,15 @@ try {
             catch { throw "未偵測到 Telnet 文字及背景：$([TelnetGui]::PixelDiagnostic)" }
             Write-Output '已確認 Windows 螢幕上的 Telnet 測試文字與背景。'
         } finally { [void][TelnetGui]::ShowWindow($window, 0) }
+        Click (Button '展開側欄')
     }
     [void][TelnetGui]::SendMessageInt($inputs[2], 0x0102, [IntPtr]122, [IntPtr]::Zero)
     [void][TelnetGui]::SendMessageInt($inputs[2], 0x0102, [IntPtr]0x4e2d, [IntPtr]::Zero)
     if ($SwitchPort) {
-        Set-Text $inputs[13] '切換目標'
+        Set-Text $inputs[14] '切換目標'
         [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
         $doubleClick = [IntPtr]([TelnetGui]::GetDlgCtrlID($list) -bor (2 -shl 16))
-        [void][TelnetGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
         Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '切換確認對話框未顯示'
         [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]7, [IntPtr]::Zero)
         Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -eq [IntPtr]::Zero } '取消後確認對話框未關閉'
@@ -421,7 +481,7 @@ try {
         Wait-For { [IO.File]::Exists((Join-Path $SyncDir 'closed')) -and [IO.File]::Exists((Join-Path $SyncDir 'second-connected')) } '確認後未切換至第二個工作階段'
         Wait-For { [TelnetGui]::ListText($list, 0).Contains('目前工作階段') -and [TelnetGui]::ListText($list, 0).Contains('切換目標') } '切換後未更新工作階段標記'
         Click (Button '收折群組')
-        Set-Text $inputs[13] ''
+        Set-Text $inputs[14] ''
         if ([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]1 -or [TelnetGui]::ListText($list, 0).Contains('切換目標')) { throw 'active group did not collapse' }
         Click (Button '展開群組')
         $rows = [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
@@ -434,17 +494,17 @@ try {
         Wait-For { [IO.File]::Exists((Join-Path $SyncDir 'second-closed')) -and [IO.File]::Exists((Join-Path $SyncDir 'returned-connected')) } 'recent connection did not return to first server'
         Click (Button '中斷連線')
         Wait-For { ([TelnetGui]::GetWindowLong($heading[0], -16) -band 0x10000000) -ne 0 } '中斷後未返回連線庫'
-        Set-Text $inputs[13] 'Telnet fixture'
+        Set-Text $inputs[14] 'Telnet fixture'
         if (-not [TelnetGui]::ListText($list, 0).Contains('已中斷')) { throw '手動中斷狀態未保留' }
         Click (Button '重新載入')
         if (-not [TelnetGui]::ListText($list, 0).Contains('已中斷')) { throw '重新載入後手動中斷狀態消失' }
-        Set-Text $inputs[13] '切換目標'
+        Set-Text $inputs[14] '切換目標'
         [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
         [void][TelnetGui]::PostMessage((Button '刪除'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
         Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '刪除確認對話框未顯示'
         [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]6, [IntPtr]::Zero)
         Wait-For { [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero } '刪除後連線仍在清單中'
-        Set-Text $inputs[13] 'Telnet fixture'
+        Set-Text $inputs[14] 'Telnet fixture'
         [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
         Click (Button '連線')
         Wait-For { [IO.File]::Exists((Join-Path $SyncDir 'reconnected-after-delete')) } '刪除最近連線後無法重新連線'
@@ -476,6 +536,8 @@ try {
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force; [void]$process.WaitForExit(10000) }
     if ([IO.Directory]::Exists($testDir)) {
         [IO.File]::Delete((Join-Path $testDir 'connections.json'))
+        [IO.File]::Delete((Join-Path $testDir 'pinned-connections.json'))
+        [IO.File]::Delete((Join-Path $testDir 'recent-connections.json'))
         [IO.File]::Delete((Join-Path $testDir 'desktop.lock'))
         [IO.Directory]::Delete($testDir)
     }

@@ -124,7 +124,7 @@ try {
     $inputs = @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'Edit' })
     $combos = @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'ComboBox' })
     $list = @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'ListBox' })[0]
-    if ($inputs.Count -ne 14 -or $combos.Count -ne 4) { throw 'editor controls missing' }
+    if ($inputs.Count -ne 17 -or $combos.Count -ne 4) { throw 'editor controls missing' }
     Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
     Click (Button '登入'); Click (Button '新增')
     Set-Text $inputs[3] 'RDP full fixture'
@@ -164,7 +164,7 @@ try {
     Wait-For { (([RdpFullGui]::Children($dialog) | ForEach-Object { [RdpFullGui]::Text($_) }) -join "`n").Contains($ready[1]) } 'certificate fingerprint mismatch'
     [void][RdpFullGui]::PostMessage($dialog, 0x0111, [IntPtr]6, [IntPtr]::Zero)
     Wait-For { @($children | Where-Object { [RdpFullGui]::Text($_) -eq '已儲存主機身分。' }).Count -eq 1 } 'certificate not saved'
-    Set-Text $inputs[13] 'RDP full fixture'
+    Set-Text $inputs[14] 'RDP full fixture'
     [void][RdpFullGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
     Click (Button '複製')
     Set-Text $inputs[3] 'RDP 同目的地'
@@ -172,7 +172,7 @@ try {
     $copies = @((Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value)
     $same = @($copies | Where-Object { $_.name -eq 'RDP 同目的地' })
     if ($same.Count -ne 1 -or $same[0].params.'server-cert-sha256' -ne $ready[1] -or $same[0].params.password) { throw 'same-host RDP duplicate did not preserve certificate without password' }
-    Set-Text $inputs[13] 'RDP full fixture'
+    Set-Text $inputs[14] 'RDP full fixture'
     [void][RdpFullGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
     Click (Button '複製')
     Set-Text $inputs[3] 'RDP 新目的地'; Set-Text $inputs[4] 'localhost'
@@ -181,7 +181,7 @@ try {
     $changed = @($copies | Where-Object { $_.name -eq 'RDP 新目的地' })
     if ($changed.Count -ne 1 -or $changed[0].params.'server-cert-sha256' -or $changed[0].params.password) { throw 'changed-host RDP duplicate retained certificate or password' }
     foreach ($name in @('RDP 同目的地', 'RDP 新目的地')) {
-        Set-Text $inputs[13] $name
+        Set-Text $inputs[14] $name
         [void][RdpFullGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
         [void][RdpFullGui]::PostMessage((Button '刪除'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
         Wait-For { [RdpFullGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } 'RDP duplicate deletion dialog not found'
@@ -189,7 +189,7 @@ try {
         Wait-For { [RdpFullGui]::Find([uint32]$process.Id, '#32770') -eq [IntPtr]::Zero } 'RDP duplicate deletion dialog did not close'
         Wait-For { @((Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.name -eq $name }).Count -eq 0 } 'RDP duplicate was not deleted'
     }
-    Set-Text $inputs[13] ''
+    Set-Text $inputs[14] ''
     [void][RdpFullGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
     Click (Button '連線')
     Wait-For { @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'Static' -and [RdpFullGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero }).Count -gt 0 } 'RDP frame not installed' 25
@@ -223,7 +223,9 @@ try {
     } 'initial bitmap did not settle' 10
     $beforeResizeBitmap = $script:lastBitmap
     if ($VisiblePixelCheck) {
+        Click (Button '收折側欄')
         Check-VisibleFrame $window $frameControl ([uint32]$process.Id) 0x1971d3 0x1971d2
+        Click (Button '展開側欄')
         Write-Output 'Windows 螢幕合成後的 9 個測試畫面像素符合預期。'
     }
     if (-not [RdpFullGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 900, 700, 0x0006) -or -not [RdpFullGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 1000, 800, 0x0006)) { throw 'window resize failed' }
@@ -233,12 +235,24 @@ try {
     $expectedHeight = [Math]::Max(200, [Math]::Min(4096, ($rect.Bottom - $rect.Top)))
     $expectedLayout = "${expectedWidth}x${expectedHeight}"
     Wait-For { try { [IO.File]::ReadAllText((Join-Path $fixtureDir 'layout')) -eq $expectedLayout } catch [IO.IOException] { $false } } "RDP server did not receive final window size $expectedLayout" 15
+    $beforeSidebar = New-Object RdpFullGui+Rect
+    $afterSidebar = New-Object RdpFullGui+Rect
+    if (-not [RdpFullGui]::GetWindowRect($frameControl, [ref]$beforeSidebar)) { throw 'cannot measure frame before sidebar toggle' }
+    Click (Button '收折側欄')
+    Click (Button '展開側欄')
+    Start-Sleep -Milliseconds 500
+    if (-not [RdpFullGui]::GetWindowRect($frameControl, [ref]$afterSidebar) -or
+        $beforeSidebar.Left -ne $afterSidebar.Left -or $beforeSidebar.Top -ne $afterSidebar.Top -or
+        $beforeSidebar.Right -ne $afterSidebar.Right -or $beforeSidebar.Bottom -ne $afterSidebar.Bottom -or
+        [IO.File]::ReadAllText((Join-Path $fixtureDir 'layout')) -ne $expectedLayout) { throw 'sidebar toggle changed remote frame or RDP size' }
     Wait-For {
         $current = [RdpFullGui]::SendMessageInt($frameControl, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero)
         $current -ne [IntPtr]::Zero -and $current -ne $beforeResizeBitmap
     } 'native window did not replace bitmap after RDP resize' 15
     if ($VisiblePixelCheck) {
+        Click (Button '收折側欄')
         Check-VisibleFrame $window $frameControl ([uint32]$process.Id) 0x197153 0x197153
+        Click (Button '展開側欄')
         Write-Output 'RDP 尺寸重新協商後的 9 個螢幕像素符合新影格。'
     }
     Write-Output "視窗尺寸變更：RDP 測試伺服器收到 $expectedLayout。"
@@ -267,12 +281,13 @@ try {
     Wait-For { [RdpFullGui]::IsWindowEnabled((Button 'Ctrl+Alt+Del')) } 'RDP secure attention button not enabled'
     Click (Button 'Ctrl+Alt+Del')
     Wait-For { [IO.File]::Exists((Join-Path $fixtureDir 'secure-attention')) } 'RDP server did not receive Ctrl+Alt+Del press and release sequence'
+    Wait-For { @($children | Where-Object { [RdpFullGui]::Text($_) -eq '已送出 Ctrl+Alt+Del。' }).Count -eq 1 } 'RDP secure attention feedback missing'
     [IO.File]::Delete((Join-Path $fixtureDir 'secure-attention'))
     $preSmall = New-Object RdpFullGui+Rect
     $small = New-Object RdpFullGui+Rect
     if (-not [RdpFullGui]::GetWindowRect($window, [ref]$preSmall) -or -not [RdpFullGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 400, 550, 0x0006) -or -not [RdpFullGui]::GetWindowRect($window, [ref]$small)) { throw 'cannot resize RDP window' }
     $smallButtons = @()
-    foreach ($label in @('中斷連線', '貼上', 'Ctrl+Alt+Del', '全螢幕', '登出', '收折側欄', '上一個連線', '最近', '收折群組', '展開群組', '樹狀檢視')) {
+    foreach ($label in @('中斷連線', '貼上', '全螢幕', '登出', '收折側欄', '更多', '收折群組', '展開群組', '樹狀檢視', '釘選／取消')) {
         $buttonRect = New-Object RdpFullGui+Rect
         if (-not [RdpFullGui]::GetWindowRect((Button $label), [ref]$buttonRect) -or $buttonRect.Left -lt $small.Left -or $buttonRect.Top -lt $small.Top -or $buttonRect.Right -gt $small.Right -or $buttonRect.Bottom -gt $small.Bottom) { throw "RDP small window control outside window: $label" }
         foreach ($other in $smallButtons) {
@@ -282,7 +297,7 @@ try {
     }
     $smallFrame = New-Object RdpFullGui+Rect
     if (-not [RdpFullGui]::GetWindowRect($frameControl, [ref]$smallFrame)) { throw 'cannot read RDP frame position' }
-    foreach ($label in @('中斷連線', '貼上', 'Ctrl+Alt+Del', '全螢幕', '登出', '收折側欄', '上一個連線', '最近')) {
+    foreach ($label in @('中斷連線', '貼上', '全螢幕', '登出', '收折側欄', '更多')) {
         $buttonRect = New-Object RdpFullGui+Rect
         if (-not [RdpFullGui]::GetWindowRect((Button $label), [ref]$buttonRect) -or $buttonRect.Bottom -gt $smallFrame.Top) { throw "RDP toolbar is not above frame: $label" }
     }
@@ -340,6 +355,8 @@ try {
     foreach ($name in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnv[$name]) }
     if ([IO.Directory]::Exists($desktopDir)) {
         [IO.File]::Delete((Join-Path $desktopDir 'connections.json'))
+        [IO.File]::Delete((Join-Path $desktopDir 'pinned-connections.json'))
+        [IO.File]::Delete((Join-Path $desktopDir 'recent-connections.json'))
         [IO.File]::Delete((Join-Path $desktopDir 'desktop.lock'))
         [IO.Directory]::Delete($desktopDir)
     }

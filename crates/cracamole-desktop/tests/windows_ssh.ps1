@@ -94,7 +94,7 @@ try {
     if (-not $process.WaitForInputIdle(10000)) { throw '原生控制項初始化逾時' }
     $children = [SshGui]::Children($window)
     $inputs = @($children | Where-Object { [SshGui]::Class($_) -eq 'Edit' })
-    if ($inputs.Count -ne 14) { throw '找不到預期的輸入控制項' }
+    if ($inputs.Count -ne 17) { throw '找不到預期的輸入控制項' }
     $combos = @($children | Where-Object { [SshGui]::Class($_) -eq 'ComboBox' })
     if ($combos.Count -ne 4) { throw '找不到文字編碼控制項' }
     function Button([string]$Text) {
@@ -164,8 +164,8 @@ try {
     Select-First $list
     Click (Button '收折群組')
     if ([SshGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero) { throw 'SSH group did not collapse' }
-    Set-Text $inputs[13] "alice@127.0.0.1:$Port"
-    [void][SshGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+    Set-Text $inputs[14] "alice@127.0.0.1:$Port"
+    [void][SshGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } 'untrusted SSH connection was not rejected'
     Click (Button '中斷連線')
     [IO.File]::WriteAllText((Join-Path $SyncDir 'untrusted-rejected'), '')
@@ -195,7 +195,7 @@ try {
         if ($saved.params.'private-key' -ne [IO.File]::ReadAllText($PrivateKeyPath) -or $saved.params.passphrase -ne 'fixture-passphrase') { throw '私鑰或密語保存錯誤' }
     } elseif ($saved.params.password -ne 'secret') { throw '密碼保存錯誤' }
     if (-not $PrivateKeyPath) {
-        Set-Text $inputs[13] 'SSH fixture'
+        Set-Text $inputs[14] 'SSH fixture'
         Select-First $list
         Click (Button '編輯')
         Set-Text $inputs[7] 'wrong-saved-password'
@@ -230,7 +230,7 @@ try {
     if ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $desktopDir 'connections.json'))) -ne [Convert]::ToBase64String($beforeOnce)) { throw '一次性 SSH 修改了已保存設定' }
     if ([SshGui]::EditText($inputs[7]) -ne '' -or [SshGui]::EditText($inputs[8]) -ne '' -or [SshGui]::EditText($inputs[9]) -ne '') { throw '一次性 SSH 後機密欄位未清除' }
     Click (Button '中斷連線')
-    Set-Text $inputs[13] 'SSH fixture'
+    Set-Text $inputs[14] 'SSH fixture'
     Select-First $list
     Click (Button '複製')
     Set-Text $inputs[3] 'SSH 同目的地'
@@ -238,7 +238,7 @@ try {
     $copies = @((Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value)
     $same = @($copies | Where-Object { $_.name -eq 'SSH 同目的地' })
     if ($same.Count -ne 1 -or $same[0].params.'host-key' -ne $PublicKey -or $same[0].params.password -or $same[0].params.'private-key' -or $same[0].params.passphrase) { throw 'same-host duplicate did not preserve identity without secrets' }
-    Set-Text $inputs[13] 'SSH fixture'
+    Set-Text $inputs[14] 'SSH fixture'
     Select-First $list
     Click (Button '複製')
     Set-Text $inputs[3] 'SSH 新目的地'
@@ -248,7 +248,7 @@ try {
     $changed = @($copies | Where-Object { $_.name -eq 'SSH 新目的地' })
     if ($changed.Count -ne 1 -or $changed[0].params.'host-key' -or $changed[0].params.password -or $changed[0].params.'private-key' -or $changed[0].params.passphrase) { throw 'changed-host duplicate retained identity or secrets' }
     foreach ($name in @('SSH 同目的地', 'SSH 新目的地')) {
-        Set-Text $inputs[13] $name
+        Set-Text $inputs[14] $name
         Select-First $list
         if ($name -eq 'SSH 同目的地') {
             [void][SshGui]::PostMessage($list, 0x0100, [IntPtr]0x2e, [IntPtr]::Zero)
@@ -265,32 +265,32 @@ try {
         Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -eq [IntPtr]::Zero } 'duplicate deletion dialog did not close'
         Wait-For { @((Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.name -eq $name }).Count -eq 0 } 'duplicate was not deleted'
     }
-    Set-Text $inputs[13] 'SSH fixture'
+    Set-Text $inputs[14] 'SSH fixture'
     Select-First $list
     Click (Button '複製')
     Set-Text $inputs[3] 'SSH 切換目標'
     Set-Text $inputs[4] 'localhost'
     Click (Button '儲存')
-    Set-Text $inputs[13] ''
+    Set-Text $inputs[14] ''
     Select-First $list
     Click (Button '核對身分')
     Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq 'SSH 主機金鑰與現有信任相符。' }).Count -eq 1 } 'identity did not match'
-    Set-Text $inputs[13] "alice@127.0.0.1:$Port"
-    [void][SshGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+    Set-Text $inputs[14] "alice@127.0.0.1:$Port"
+    [void][SshGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     Wait-For { @($children | Where-Object { [SshGui]::Class($_) -eq 'Static' -and [SshGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero }).Count -gt 0 } 'SSH frame not displayed' 15
     if (@((Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value).Count -ne 2) { throw 'quick connect created a duplicate connection' }
-    Set-Text $inputs[13] "alice@localhost:$Port"
-    [void][SshGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+    Set-Text $inputs[14] "alice@localhost:$Port"
+    [void][SshGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } 'active quick switch confirmation missing'
     [void][SshGui]::PostMessage([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0111, [IntPtr]7, [IntPtr]::Zero)
     Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -eq [IntPtr]::Zero } 'active quick switch cancellation failed'
-    Set-Text $inputs[13] "alice@127.0.0.1:$Port"
-    [void][SshGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+    Set-Text $inputs[14] "alice@127.0.0.1:$Port"
+    [void][SshGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '已連線至此主機。' }).Count -eq 1 } 'active quick connect to current host not recognized'
-    Set-Text $inputs[13] 'nobody@unconfigured.invalid:22'
-    [void][SshGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+    Set-Text $inputs[14] 'nobody@unconfigured.invalid:22'
+    [void][SshGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '此目的地尚未保存；請先中斷目前連線再新增。' }).Count -eq 1 } 'unknown active quick target did not preserve session'
-    Set-Text $inputs[13] ''
+    Set-Text $inputs[14] ''
     [void][SshGui]::PostMessage($list, 0x0100, [IntPtr]0x2e, [IntPtr]::Zero)
     [void][SshGui]::PostMessage($list, 0x0100, [IntPtr]0x71, [IntPtr]::Zero)
     Start-Sleep -Milliseconds 250
@@ -321,14 +321,14 @@ try {
         [void][SshGui]::SendMessageInt($inputs[2], 0x0102, [IntPtr]0xde42, [IntPtr]::Zero)
     }
     Start-Sleep -Milliseconds 500
-    Set-Text $inputs[13] "alice@localhost:$Port"
-    [void][SshGui]::SendMessageInt($inputs[13], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+    Set-Text $inputs[14] "alice@localhost:$Port"
+    [void][SshGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } 'confirmed active quick switch dialog missing'
     [void][SshGui]::PostMessage([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0111, [IntPtr]6, [IntPtr]::Zero)
     Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } 'untrusted quick target was not rejected' 15
     $target = @((Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.name -eq 'SSH 切換目標' })
     if ($target.Count -ne 1 -or $target[0].params.'host-key') { throw 'active quick switch automatically trusted host key' }
-    Set-Text $inputs[13] 'SSH 切換目標'
+    Set-Text $inputs[14] 'SSH 切換目標'
     Select-First $list
     [void][SshGui]::PostMessage((Button '刪除'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
     Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } 'quick target deletion confirmation missing'
@@ -399,6 +399,8 @@ try {
     if ([IO.Directory]::Exists($desktopDir)) {
         [IO.File]::Delete((Join-Path $desktopDir 'connections.json'))
         [IO.File]::Delete((Join-Path $desktopDir 'ssh-identities.json'))
+        [IO.File]::Delete((Join-Path $desktopDir 'pinned-connections.json'))
+        [IO.File]::Delete((Join-Path $desktopDir 'recent-connections.json'))
         [IO.File]::Delete((Join-Path $desktopDir 'desktop.lock'))
         [IO.Directory]::Delete($desktopDir)
     }

@@ -2,7 +2,7 @@
 use crate::windows_private::{ensure_private_directory, verify_private_file};
 use cracamole_store::{Connection, Draft, Invalid, PublicConnection, Store};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
     io::{self, Read, Write},
     os::windows::fs::OpenOptionsExt,
@@ -31,6 +31,8 @@ pub struct WindowsStore {
 
 type SshIdentities = BTreeMap<String, BTreeMap<String, String>>;
 const TRUST_FILE: &str = "ssh-identities.json";
+const PINS_FILE: &str = "pinned-connections.json";
+const RECENT_FILE: &str = "recent-connections.json";
 const MAX_TRUST_BYTES: u64 = 1024 * 1024;
 
 fn identity_host(host: &str) -> io::Result<String> {
@@ -55,6 +57,16 @@ fn valid_public_key(key: &str) -> bool {
     errors.is_empty() && entries.len() == 1 && !entries[0].revoked && entries[0].hosts.is_none()
 }
 
+fn valid_pin_id(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(index, byte)| {
+            if [8, 13, 18, 23].contains(&index) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
+            }
+        })
+}
 fn verify_if_present(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => verify_private_file(path),
@@ -123,6 +135,8 @@ impl WindowsStore {
         verify_private_file(&lock_path)?;
         verify_if_present(&directory.join("connections.json"))?;
         verify_if_present(&directory.join(TRUST_FILE))?;
+        verify_if_present(&directory.join(PINS_FILE))?;
+        verify_if_present(&directory.join(RECENT_FILE))?;
         let store = Store::open(directory.clone()).await?;
         Ok(Self {
             directory,
@@ -137,7 +151,9 @@ impl WindowsStore {
         ensure_private_directory(&self.directory)?;
         verify_private_file(&self.directory.join("desktop.lock"))?;
         verify_if_present(&self.directory.join("connections.json"))?;
-        verify_if_present(&self.directory.join(TRUST_FILE))
+        verify_if_present(&self.directory.join(TRUST_FILE))?;
+        verify_if_present(&self.directory.join(PINS_FILE))?;
+        verify_if_present(&self.directory.join(RECENT_FILE))
     }
 
     fn read_ssh_identities(&self) -> io::Result<SshIdentities> {
@@ -235,6 +251,145 @@ impl WindowsStore {
         verify_private_file(&self.directory.join(TRUST_FILE))
     }
 
+    /// 只儲存公開連線 ID；損壞或權限不正確時拒絕讀取。
+    pub fn pinned(&self) -> io::Result<BTreeSet<String>> {
+        let _guard = self
+            .trust_lock
+            .lock()
+            .map_err(|_| io::Error::other("metadata lock poisoned"))?;
+        self.read_pinned()
+    }
+
+    fn read_pinned(&self) -> io::Result<BTreeSet<String>> {
+        self.verify()?;
+        let path = self.directory.join(PINS_FILE);
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+            Err(error) => return Err(error),
+        };
+        verify_private_file(&path)?;
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        if bytes.len() > 1024 * 1024 {
+            return Err(io::Error::other("pin store too large"));
+        }
+        let pins: BTreeSet<String> = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        if pins.len() > 4096 || pins.iter().any(|id| !valid_pin_id(id)) {
+            return Err(io::Error::other("invalid pinned connection ID"));
+        }
+        Ok(pins)
+    }
+
+    pub fn set_pinned(&self, id: &str, pinned: bool) -> io::Result<()> {
+        if !valid_pin_id(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid pinned connection ID",
+            ));
+        }
+        let _guard = self
+            .trust_lock
+            .lock()
+            .map_err(|_| io::Error::other("metadata lock poisoned"))?;
+        let mut pins = self.read_pinned()?;
+        if pinned {
+            pins.insert(id.to_owned());
+        } else {
+            pins.remove(id);
+        }
+        if pins.len() > 4096 {
+            return Err(io::Error::other("pin store limit exceeded"));
+        }
+        let bytes = serde_json::to_vec(&pins).map_err(io::Error::other)?;
+        let mut temp = tempfile::NamedTempFile::new_in(&self.directory)?;
+        verify_private_file(temp.path())?;
+        temp.write_all(&bytes)?;
+        temp.as_file().sync_all()?;
+        self.verify()?;
+        temp.persist(self.directory.join(PINS_FILE))
+            .map_err(|error| error.error)?;
+        verify_private_file(&self.directory.join(PINS_FILE))
+    }
+    /// 最近成功連線的公開 ID，依使用時間由舊至新排列。
+    pub fn recent(&self) -> io::Result<Vec<String>> {
+        let _guard = self
+            .trust_lock
+            .lock()
+            .map_err(|_| io::Error::other("metadata lock poisoned"))?;
+        self.read_recent()
+    }
+
+    fn read_recent(&self) -> io::Result<Vec<String>> {
+        self.verify()?;
+        let path = self.directory.join(RECENT_FILE);
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        verify_private_file(&path)?;
+        let mut bytes = Vec::new();
+        file.take(4097).read_to_end(&mut bytes)?;
+        if bytes.len() > 4096 {
+            return Err(io::Error::other("recent store too large"));
+        }
+        let recent: Vec<String> = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        let unique: BTreeSet<_> = recent.iter().collect();
+        if recent.len() > 20
+            || unique.len() != recent.len()
+            || recent.iter().any(|id| !valid_pin_id(id))
+        {
+            return Err(io::Error::other("invalid recent connection IDs"));
+        }
+        Ok(recent)
+    }
+
+    pub fn record_recent(&self, id: &str) -> io::Result<()> {
+        if !valid_pin_id(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid recent connection ID",
+            ));
+        }
+        let _guard = self
+            .trust_lock
+            .lock()
+            .map_err(|_| io::Error::other("metadata lock poisoned"))?;
+        let mut recent = self.read_recent()?;
+        recent.retain(|entry| entry != id);
+        recent.push(id.to_owned());
+        if recent.len() > 20 {
+            recent.remove(0);
+        }
+        self.write_recent(&recent)
+    }
+
+    fn forget_recent(&self, id: &str) -> io::Result<()> {
+        let _guard = self
+            .trust_lock
+            .lock()
+            .map_err(|_| io::Error::other("metadata lock poisoned"))?;
+        let mut recent = self.read_recent()?;
+        let previous = recent.len();
+        recent.retain(|entry| entry != id);
+        if recent.len() == previous {
+            return Ok(());
+        }
+        self.write_recent(&recent)
+    }
+
+    fn write_recent(&self, recent: &[String]) -> io::Result<()> {
+        let bytes = serde_json::to_vec(recent).map_err(io::Error::other)?;
+        let mut temp = tempfile::NamedTempFile::new_in(&self.directory)?;
+        verify_private_file(temp.path())?;
+        temp.write_all(&bytes)?;
+        temp.as_file().sync_all()?;
+        self.verify()?;
+        temp.persist(self.directory.join(RECENT_FILE))
+            .map_err(|error| error.error)?;
+        verify_private_file(&self.directory.join(RECENT_FILE))
+    }
     pub async fn list(&self) -> io::Result<Vec<PublicConnection>> {
         self.verify()?;
         Ok(self.store.list().await)
@@ -257,10 +412,40 @@ impl WindowsStore {
         Ok(result)
     }
 
+    pub async fn rename_group(&self, old: &str, new: &str) -> Result<usize, SaveError> {
+        self.verify().map_err(SaveError::Io)?;
+        let result = self
+            .store
+            .rename_group(old, new)
+            .await
+            .map_err(SaveError::Io)?
+            .map_err(SaveError::Invalid)?;
+        self.verify().map_err(SaveError::Io)?;
+        Ok(result)
+    }
+
+    pub async fn import_new(&self, drafts: Vec<Draft>) -> Result<usize, SaveError> {
+        self.verify().map_err(SaveError::Io)?;
+        let created = self
+            .store
+            .import_new(drafts)
+            .await
+            .map_err(SaveError::Io)?
+            .map_err(SaveError::Invalid)?;
+        self.verify().map_err(SaveError::Io)?;
+        Ok(created.len())
+    }
     pub async fn delete(&self, id: &str) -> io::Result<bool> {
         self.verify()?;
         let result = self.store.delete(id).await?;
         self.verify()?;
+        // 清理已刪除 ID；若額外的中繼資料寫入失敗，不回報成連線刪除失敗。
+        if result && self.pinned().is_ok_and(|pins| pins.contains(id)) {
+            let _ = self.set_pinned(id, false);
+        }
+        if result {
+            let _ = self.forget_recent(id);
+        }
         Ok(result)
     }
 }
@@ -330,6 +515,43 @@ mod tests {
         assert!(store.delete(&saved.id).await.unwrap());
         drop(store);
         assert!(WindowsStore::open(path).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn bulk_import_is_atomic_and_creates_new_ids() {
+        let parent = tempfile::tempdir().unwrap();
+        let store = WindowsStore::open(parent.path().join("private"))
+            .await
+            .unwrap();
+        let saved = store
+            .save(None, draft(Some("existing-secret")))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut invalid = draft(None);
+        invalid.name.clear();
+        assert!(matches!(
+            store.import_new(vec![draft(None), invalid]).await,
+            Err(SaveError::Invalid(_))
+        ));
+        assert_eq!(store.list().await.unwrap().len(), 1);
+        assert_eq!(
+            store
+                .import_new(vec![draft(None), draft(None)])
+                .await
+                .unwrap(),
+            2
+        );
+        let entries = store.list().await.unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            store.get(&saved.id).await.unwrap().unwrap().params["password"],
+            "existing-secret"
+        );
+        assert_eq!(
+            entries.iter().filter(|entry| entry.id == saved.id).count(),
+            1
+        );
     }
 
     #[tokio::test]

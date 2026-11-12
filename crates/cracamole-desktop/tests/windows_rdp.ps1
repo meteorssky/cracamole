@@ -113,7 +113,7 @@ try {
     $inputs = @($children | Where-Object { [RdpGui]::Class($_) -eq 'Edit' })
     $list = @($children | Where-Object { [RdpGui]::Class($_) -eq 'ListBox' })[0]
     $combos = @($children | Where-Object { [RdpGui]::Class($_) -eq 'ComboBox' })
-    if ($combos.Count -ne 4 -or $inputs.Count -ne 14) { throw 'RDP editor controls missing' }
+    if ($combos.Count -ne 4 -or $inputs.Count -ne 17) { throw 'RDP editor controls missing' }
     $protocol = $combos[0]
     $security = $combos[1]
     Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
@@ -215,6 +215,8 @@ try {
     foreach ($name in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnv[$name]) }
     if ([IO.Directory]::Exists($desktopDir)) {
         [IO.File]::Delete((Join-Path $desktopDir 'connections.json'))
+        [IO.File]::Delete((Join-Path $desktopDir 'pinned-connections.json'))
+        [IO.File]::Delete((Join-Path $desktopDir 'recent-connections.json'))
         [IO.File]::Delete((Join-Path $desktopDir 'desktop.lock'))
         [IO.Directory]::Delete($desktopDir)
     }

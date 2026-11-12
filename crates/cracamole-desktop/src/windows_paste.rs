@@ -126,6 +126,24 @@ mod tests {
     }
 
     #[test]
+    fn simulated_exchange_read_validates_every_entry() {
+        let reader = PasteReader::new();
+        let limit = Arc::new(Semaphore::new(1));
+        let _job = reader.start_with(9, limit.try_acquire_owned().unwrap(), || {
+            Ok(r#"{"format":"cracamole-connections","version":1,"connections":[{"name":"一","protocol":"telnet","params":{"hostname":"one.example"}},{"name":"二","protocol":"ssh","params":{"hostname":"two.example"}}]}"#.into())
+        }).unwrap();
+        let result = reader
+            .receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        let text = result.text.unwrap();
+        let entries = cracamole_store::portable::import(&text).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "一");
+        assert_eq!(entries[1].name, "二");
+    }
+
+    #[test]
     fn successful_read_holds_permits_until_delivery() {
         let reader = PasteReader::new();
         let paste = Arc::new(Semaphore::new(1));

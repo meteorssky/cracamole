@@ -119,6 +119,8 @@ mod windows_ui {
         }
     }
 
+    type SessionMetadata = (String, String, Option<String>, bool);
+
     struct Active {
         connection_id: String,
         cancel: CancellationToken,
@@ -126,7 +128,7 @@ mod windows_ui {
         frames: watch::Receiver<Option<Arc<Frame>>>,
         clipboard: watch::Receiver<Option<Arc<str>>>,
         input_policy: watch::Receiver<Option<(bool, bool, bool)>>,
-        metadata: watch::Receiver<Option<(String, String, Option<String>)>>,
+        metadata: watch::Receiver<Option<SessionMetadata>>,
         shown_frame: bool,
         transient: bool,
         displayed_size: Option<(u32, u32)>,
@@ -397,6 +399,80 @@ mod windows_ui {
         })
     }
 
+    fn duplicate_shortcut(key: usize) -> bool {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
+        key == 0x44
+            && unsafe { GetKeyState(0x11) < 0 && GetKeyState(0x12) >= 0 && GetKeyState(0x10) >= 0 }
+    }
+
+    fn queue_sidebar_close(button: nwg::ControlHandle, pending: &RefCell<Option<u64>>, epoch: u64) {
+        let Ok(mut pending) = pending.try_borrow_mut() else {
+            return;
+        };
+        if pending.is_some() {
+            return;
+        }
+        *pending = Some(epoch);
+        if !button.hwnd().is_some_and(|hwnd| unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(hwnd.cast(), 0x00f5, 0, 0)
+                != 0
+        }) {
+            pending.take();
+        }
+    }
+
+    fn build_import_preview(window: &nwg::Window) -> Result<nwg::TextBox, nwg::NwgError> {
+        let mut preview = nwg::TextBox::default();
+        nwg::TextBox::builder()
+            .position((24, 128))
+            .size((570, 300))
+            .flags(
+                nwg::TextBoxFlags::VSCROLL
+                    | nwg::TextBoxFlags::AUTOVSCROLL
+                    | nwg::TextBoxFlags::TAB_STOP,
+            )
+            .limit(2 * 1024 * 1024)
+            .readonly(true)
+            .parent(window)
+            .build(&mut preview)?;
+        preview.set_visible(false);
+        Ok(preview)
+    }
+    fn layout_idle_workspace(
+        window: &nwg::Window,
+        stage: &nwg::Label,
+        group_rename: &nwg::Button,
+        export_settings: &nwg::Button,
+        import_settings: &nwg::Button,
+    ) {
+        let (width, height) = window.size();
+        let wide = width >= 760;
+        if wide {
+            group_rename.set_position(154, 224);
+            export_settings.set_position(24, 256);
+            import_settings.set_position(154, 256);
+            for button in [group_rename, export_settings, import_settings] {
+                button.set_size(120, 28);
+            }
+            let columns = ((width.saturating_sub(340) + 8) / 108).clamp(1, 5);
+            let toolbar_rows = 9u32.div_ceil(columns);
+            let stage_top = 128 + toolbar_rows * 40 + 16;
+            stage.set_position(316, stage_top as i32);
+            stage.set_size(
+                width.saturating_sub(340),
+                height.saturating_sub(stage_top + 24),
+            );
+        } else {
+            group_rename.set_position(240, 200);
+            group_rename.set_size(120, 28);
+            export_settings.set_position(152, 236);
+            export_settings.set_size(100, 28);
+            import_settings.set_position(260, 236);
+            import_settings.set_size(100, 28);
+        }
+        stage.set_visible(wide);
+    }
+
     fn layout_library(
         window: &nwg::Window,
         list: &nwg::ListBox<String>,
@@ -405,14 +481,49 @@ mod windows_ui {
             &nwg::ComboBox<String>,
             [&nwg::Button; 3],
         ),
-        buttons: [&nwg::Button; 8],
+        buttons: [&nwg::Button; 9],
     ) {
         let (width, height) = window.size();
-        let list_width = width.saturating_sub(48).max(96);
+        let wide = width >= 760;
+        let list_width = if wide {
+            260
+        } else {
+            width.saturating_sub(48).max(96)
+        };
+        if wide {
+            search.set_position(24, 128);
+            search.set_size(list_width, 28);
+            group_picker.set_position(24, 160);
+            group_picker.set_size(list_width, 150);
+            group_buttons[0].set_position(24, 192);
+            group_buttons[0].set_size(122, 28);
+            group_buttons[1].set_position(154, 192);
+            group_buttons[1].set_size(120, 28);
+            group_buttons[2].set_position(24, 224);
+            group_buttons[2].set_size(120, 28);
+            list.set_position(24, 288);
+            list.set_size(list_width, height.saturating_sub(312).max(64));
+            let columns = ((width.saturating_sub(340) + 8) / 108).clamp(1, 5);
+            for (index, button) in [
+                buttons[0], buttons[2], buttons[1], buttons[3], buttons[4], buttons[5], buttons[6],
+                buttons[7], buttons[8],
+            ]
+            .iter()
+            .enumerate()
+            {
+                button.set_size(100, 32);
+                button.set_position(
+                    316 + (index as u32 % columns * 108) as i32,
+                    128 + (index as u32 / columns * 40) as i32,
+                );
+            }
+            return;
+        }
         let columns = ((list_width + 8) / 108).clamp(1, 5);
         let top_rows = 3u32.div_ceil(columns);
-        let action_rows = 5u32.div_ceil(columns);
-        let reserved = 272 + 16 + top_rows * 40 + 16 + action_rows * 40 + 24;
+        let action_rows = 6u32.div_ceil(columns);
+        let (list_top, step, gap, button_height) = (272, 40, 16, 32);
+        let reserved = list_top + gap + top_rows * step + gap + action_rows * step + 24;
         let list_height = height.saturating_sub(reserved).max(64);
         search.set_position(24, 128);
         search.set_size(list_width, 28);
@@ -424,65 +535,80 @@ mod windows_ui {
         group_buttons[1].set_size(100, 28);
         group_buttons[2].set_position(24, 236);
         group_buttons[2].set_size(120, 28);
-        list.set_position(24, 272);
+        list.set_position(24, list_top as i32);
         list.set_size(list_width, list_height);
-        let row = 272 + list_height as i32 + 16;
+        let row = list_top as i32 + list_height as i32 + gap as i32;
         for (index, button) in [buttons[0], buttons[2], buttons[1]].iter().enumerate() {
+            button.set_size(100, button_height);
             button.set_position(
                 24 + (index as u32 % columns * 108) as i32,
-                row + (index as u32 / columns * 40) as i32,
+                row + (index as u32 / columns * step) as i32,
             );
         }
-        let action_y = row + (top_rows * 40) as i32 + 16;
+        let action_y = row + (top_rows * step + gap) as i32;
         for (index, button) in buttons[3..].iter().enumerate() {
+            button.set_size(100, button_height);
             button.set_position(
                 24 + (index as u32 % columns * 108) as i32,
-                action_y + (index as u32 / columns * 40) as i32,
+                action_y + (index as u32 / columns * step) as i32,
             );
         }
     }
-
     fn layout_session(
         window: &nwg::Window,
         image: &nwg::ImageFrame,
-        (input, footer, status): (&nwg::TextInput, &nwg::Label, &nwg::Label),
+        (input, footer, status, header): (&nwg::TextInput, &nwg::Label, &nwg::Label, &nwg::Label),
         list: &nwg::ListBox<String>,
         (search, group_picker, group_buttons): (
             &nwg::TextInput,
             &nwg::ComboBox<String>,
             [&nwg::Button; 3],
         ),
-        sidebar_visible: bool,
-        [logout, disconnect, paste, secure_attention, fullscreen, sidebar_toggle, recent_button, recent_menu]: [&nwg::Button;
-            8],
+        (sidebar_visible, pin, overlay): (bool, &nwg::Button, (&nwg::Label, &nwg::TreeView)),
+        [logout, disconnect, paste, secure_attention, fullscreen, sidebar_toggle, recent_button, recent_menu, more]: [&nwg::Button;
+            9],
     ) -> (u32, u32) {
         let (window_width, window_height) = window.size();
         let sidebar_width = if sidebar_visible {
-            window_width.saturating_sub(168).min(200)
+            window_width.saturating_sub(168).min(260)
         } else {
             0
         };
-        let left = if sidebar_visible {
-            45 + sidebar_width
+        // 側欄覆蓋畫布，開合不改變遠端尺寸或滑鼠座標。
+        let width = window_width.clamp(96, 4096);
+        let compact = window_width >= 1200;
+        let header_width = if compact { 270 } else { 0 };
+        let available = window_width.saturating_sub(48 + header_width).max(125);
+        let buttons: Vec<(&nwg::Button, u32)> = if compact {
+            vec![
+                (sidebar_toggle, 110),
+                (recent_button, 100),
+                (recent_menu, 60),
+                (paste, 86),
+                (secure_attention, 125),
+                (fullscreen, 92),
+                (disconnect, 100),
+                (logout, 100),
+            ]
         } else {
-            24
+            vec![
+                (sidebar_toggle, 100),
+                (paste, 72),
+                (fullscreen, 80),
+                (disconnect, 90),
+                (more, 60),
+                (logout, 72),
+            ]
         };
-        let width = window_width.saturating_sub(left + 24).clamp(96, 4096);
-        let available = window_width.saturating_sub(48).max(125);
-        let buttons = [
-            sidebar_toggle,
-            recent_button,
-            recent_menu,
-            paste,
-            secure_attention,
-            fullscreen,
-            disconnect,
-            logout,
-        ];
-        let widths = [110u32, 100, 60, 86, 125, 92, 100, 100];
-        let mut positions = [(0u32, 0u32); 8];
+        more.set_visible(!compact);
+        recent_button.set_visible(compact);
+        recent_menu.set_visible(compact);
+        if !compact {
+            secure_attention.set_visible(false);
+        }
+        let mut positions = vec![(0u32, 0u32); buttons.len()];
         let (mut x, mut row) = (0u32, 0u32);
-        for (index, button_width) in widths.iter().enumerate() {
+        for (index, (_, button_width)) in buttons.iter().enumerate() {
             if x > 0 && x + button_width > available {
                 x = 0;
                 row += 1;
@@ -490,18 +616,38 @@ mod windows_ui {
             positions[index] = (x, row);
             x += button_width + 8;
         }
-        let logout_right = available.saturating_sub(widths[7]);
-        if positions[7].1 != positions[6].1 || logout_right >= positions[6].0 + widths[6] + 8 {
-            positions[7].0 = logout_right;
+        let last = buttons.len() - 1;
+        let logout_right = available.saturating_sub(buttons[last].1);
+        if positions[last].1 != positions[last - 1].1
+            || logout_right >= positions[last - 1].0 + buttons[last - 1].1 + 8
+        {
+            positions[last].0 = logout_right;
         }
         let toolbar_height = (row + 1) * 32 + row * 8;
-        let stage_y = 44 + toolbar_height + 8;
+        let stage_y = if compact { 44 } else { 44 + toolbar_height + 8 };
         let height = window_height.saturating_sub(stage_y + 32).clamp(64, 4096);
-        for (button, (x, row)) in buttons.into_iter().zip(positions) {
-            button.set_position(24 + x as i32, 44 + (row * 40) as i32);
+        for ((button, button_width), (x, row)) in buttons.into_iter().zip(positions) {
+            button.set_size(button_width, 32);
+            button.set_position(
+                (24 + header_width + x) as i32,
+                if compact { 8 } else { 44 + (row * 40) as i32 },
+            );
         }
-        status.set_position(24, 8);
-        status.set_size(window_width.saturating_sub(48).max(96), 28);
+        let show_header = window_width >= 760;
+        header.set_visible(show_header);
+        if compact {
+            header.set_position(24, 8);
+            header.set_size(header_width - 8, 28);
+        } else if show_header {
+            let header_width = window_width.saturating_sub(48) / 2;
+            header.set_position(24, 8);
+            header.set_size(header_width.saturating_sub(8), 28);
+            status.set_position((24 + header_width) as i32, 8);
+            status.set_size(header_width, 28);
+        } else {
+            status.set_position(24, 8);
+            status.set_size(window_width.saturating_sub(48).max(96), 28);
+        }
         search.set_position(24, stage_y as i32);
         search.set_size(sidebar_width, 28);
         let group_width = sidebar_width.saturating_sub(8) / 2;
@@ -513,20 +659,72 @@ mod windows_ui {
         group_buttons[1].set_size(group_width, 28);
         group_buttons[2].set_position(24, (stage_y + 108) as i32);
         group_buttons[2].set_size(sidebar_width.min(120), 28);
+        pin.set_position(152, (stage_y + 108) as i32);
+        pin.set_size(sidebar_width.saturating_sub(128), 28);
         list.set_position(24, (stage_y + 144) as i32);
         list.set_size(sidebar_width, height.saturating_sub(144));
-        image.set_position(left as i32, stage_y as i32);
+        image.set_position(0, stage_y as i32);
         image.set_size(width, height);
+        let (background, tree) = overlay;
+        background.set_position(0, stage_y as i32);
+        background.set_size(sidebar_width.saturating_add(24), height);
+        let was_visible = control_has_visible_style(background.handle);
+        if was_visible != sidebar_visible {
+            background.set_visible(sidebar_visible);
+        }
+        if sidebar_visible && !was_visible {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            };
+            // 背景在畫布上方，側欄控制項在背景上方。
+            for handle in [
+                background.handle,
+                list.handle,
+                tree.handle,
+                search.handle,
+                group_picker.handle,
+                group_buttons[0].handle,
+                group_buttons[1].handle,
+                group_buttons[2].handle,
+                pin.handle,
+            ] {
+                if let Some(hwnd) = handle.hwnd() {
+                    unsafe {
+                        SetWindowPos(
+                            hwnd.cast(),
+                            HWND_TOP,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+            }
+        }
         let footer_y = (stage_y + height + 4) as i32;
         footer.set_position(24, footer_y);
-        footer.set_size(window_width.saturating_sub(48).max(96), 20);
+        if compact {
+            let half = window_width.saturating_sub(48) / 2;
+            footer.set_size(half.saturating_sub(8), 20);
+            status.set_position((24 + half) as i32, footer_y);
+            status.set_size(half, 20);
+        } else {
+            footer.set_size(window_width.saturating_sub(48).max(96), 20);
+        }
         // Keep the edit control focusable for keyboard and IME input without displaying typed text.
         input.set_position(24, footer_y + 1);
         input.set_size(1, 1);
         (width, height)
     }
 
-    fn restore_library_header(heading: &nwg::Label, status: &nwg::Label) {
+    fn restore_library_header(
+        heading: &nwg::Label,
+        status: &nwg::Label,
+        session_header: &nwg::Label,
+    ) {
+        session_header.set_visible(false);
         heading.set_visible(true);
         status.set_position(24, 70);
         status.set_size(570, 45);
@@ -619,13 +817,14 @@ mod windows_ui {
         connections: Vec<PublicConnection>,
         query: &str,
         collapsed: &BTreeSet<Option<String>>,
+        pinned: &BTreeSet<String>,
     ) -> Vec<LibraryGroup> {
         let query = query.trim().to_lowercase();
         let mut grouped = BTreeMap::<Option<String>, Vec<PublicConnection>>::new();
         for connection in connections {
             let key = connection_group_key(&connection.name);
             let matches = if query.is_empty() {
-                !collapsed.contains(&key)
+                !collapsed.contains(&key) || pinned.contains(&connection.id)
             } else {
                 connection.name.to_lowercase().contains(&query)
                     || key
@@ -664,31 +863,24 @@ mod windows_ui {
         groups: Vec<LibraryGroup>,
         collapsed: &BTreeSet<Option<String>>,
         searching: bool,
+        pinned: &BTreeSet<String>,
         statuses: &BTreeMap<String, ConnectionStatus>,
         selected: Option<&str>,
     ) -> (Vec<Option<String>>, Vec<String>) {
         let mut keys = Vec::new();
         let mut ids = Vec::new();
         tree.clear();
-        for group in groups {
-            if searching && group.visible.is_empty() {
-                continue;
-            }
-            let title = group.key.as_ref().map_or_else(
-                || "未分類（無群組）".to_string(),
-                |key| format!("群組：{key}"),
-            );
-            keys.push(group.key.clone());
-            let root = tree.insert_item_with_param(
-                &title,
-                None,
-                nwg::TreeInsert::Last,
-                -(keys.len() as isize),
-            );
-            for entry in group.visible {
+        let pinned_entries: Vec<_> = groups
+            .iter()
+            .flat_map(|group| group.visible.iter())
+            .filter(|entry| pinned.contains(&entry.id))
+            .collect();
+        if !pinned_entries.is_empty() {
+            let root = tree.insert_item_with_param("★ 常用釘選", None, nwg::TreeInsert::Last, 0);
+            for entry in pinned_entries {
                 ids.push(entry.id.clone());
                 let label = format_connection_status(
-                    &connection_label(&entry),
+                    &pinned_label(entry, pinned),
                     statuses.get(&entry.id).copied(),
                 );
                 let child = tree.insert_item_with_param(
@@ -711,6 +903,52 @@ mod windows_ui {
                     }
                 }
             }
+            tree.set_expand_state(&root, nwg::ExpandState::Expand);
+        }
+        for mut group in groups {
+            if searching && group.visible.is_empty() {
+                continue;
+            }
+            let title = group.key.as_ref().map_or_else(
+                || "未分類（無群組）".to_string(),
+                |key| format!("群組：{key}"),
+            );
+            keys.push(group.key.clone());
+            let root = tree.insert_item_with_param(
+                &title,
+                None,
+                nwg::TreeInsert::Last,
+                -(keys.len() as isize),
+            );
+            group
+                .visible
+                .sort_by_key(|entry| !pinned.contains(&entry.id));
+            for entry in group.visible {
+                ids.push(entry.id.clone());
+                let label = format_connection_status(
+                    &pinned_label(&entry, pinned),
+                    statuses.get(&entry.id).copied(),
+                );
+                let child = tree.insert_item_with_param(
+                    &label,
+                    Some(&root),
+                    nwg::TreeInsert::Last,
+                    ids.len() as isize,
+                );
+                if selected == Some(entry.id.as_str()) && !pinned.contains(&entry.id) {
+                    if let Some(hwnd) = tree.handle.hwnd() {
+                        unsafe {
+                            use windows_sys::Win32::UI::Controls::{TVGN_CARET, TVM_SELECTITEM};
+                            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                                hwnd.cast(),
+                                TVM_SELECTITEM,
+                                TVGN_CARET as usize,
+                                child.handle as isize,
+                            );
+                        }
+                    }
+                }
+            }
             if searching || !collapsed.contains(&group.key) {
                 tree.set_expand_state(&root, nwg::ExpandState::Expand);
             }
@@ -718,6 +956,14 @@ mod windows_ui {
         (keys, ids)
     }
 
+    fn pinned_label(connection: &PublicConnection, pinned: &BTreeSet<String>) -> String {
+        let label = connection_label(connection);
+        if pinned.contains(&connection.id) {
+            format!("★ {label}")
+        } else {
+            label
+        }
+    }
     fn tree_selected_item(tree: &nwg::TreeView) -> Option<nwg::TreeItem> {
         let hwnd = tree.handle.hwnd()?;
         let item = unsafe {
@@ -743,11 +989,22 @@ mod windows_ui {
             .and_then(|index| ids.borrow().get(index).cloned());
         match runtime.block_on(store.list()) {
             Ok(connections) => {
+                let pinned = match store.pinned() {
+                    Ok(pinned) => pinned,
+                    Err(_) => {
+                        status.set_text("無法讀取釘選設定，請檢查資料目錄權限。");
+                        return;
+                    }
+                };
+                let (history, recent_failed) = match store.recent() {
+                    Ok(history) => (history, false),
+                    Err(_) => (Vec::new(), true),
+                };
                 let previous_group = group_picker
                     .selection()
                     .and_then(|index| index.checked_sub(1))
                     .and_then(|index| group_ids.borrow().get(index).cloned());
-                let model = library_groups(connections, query, collapsed);
+                let model = library_groups(connections, query, collapsed, &pinned);
                 let groups: Vec<_> = model.iter().map(|group| group.key.clone()).collect();
                 let mut labels = vec!["所有群組".to_string()];
                 labels.extend(groups.iter().map(|group| {
@@ -761,8 +1018,15 @@ mod windows_ui {
                     .map_or(0, |index| index + 1);
                 *group_ids.borrow_mut() = groups;
                 group_picker.set_selection(Some(selected_group));
-                let connections: Vec<_> =
+                let mut connections: Vec<_> =
                     model.into_iter().flat_map(|group| group.visible).collect();
+                connections.sort_by_key(|connection| {
+                    let rank = history
+                        .iter()
+                        .position(|id| id == &connection.id)
+                        .map_or(0, |index| index + 1);
+                    (!pinned.contains(&connection.id), std::cmp::Reverse(rank))
+                });
                 let count = connections.len();
                 *ids.borrow_mut() = connections.iter().map(|c| c.id.clone()).collect();
                 list.set_collection(
@@ -770,7 +1034,7 @@ mod windows_ui {
                         .into_iter()
                         .map(|c| {
                             format_connection_status(
-                                &connection_label(&c),
+                                &pinned_label(&c, &pinned),
                                 statuses.borrow().get(&c.id).copied(),
                             )
                         })
@@ -783,7 +1047,9 @@ mod windows_ui {
                         .unwrap_or(0);
                     list.set_selection(Some(selected_index));
                 }
-                if update_status {
+                if recent_failed {
+                    status.set_text("已載入連線，但無法讀取最近連線排序，請檢查資料目錄。");
+                } else if update_status {
                     status.set_text(&format!("已載入 {count} 筆桌面連線。"));
                 }
             }
@@ -802,7 +1068,7 @@ mod windows_ui {
     fn update_library_actions(
         list: &nwg::ListBox<String>,
         ids: &RefCell<Vec<String>>,
-        buttons: [&nwg::Button; 5],
+        buttons: [&nwg::Button; 7],
     ) {
         let selected = list
             .selection()
@@ -881,20 +1147,36 @@ mod windows_ui {
         Some((point.x, point.y))
     }
 
-    fn build_connection_context_menu() -> Option<windows_sys::Win32::UI::WindowsAndMessaging::HMENU>
-    {
+    fn build_connection_context_menu(
+        connected: bool,
+        pinned: bool,
+    ) -> Option<windows_sys::Win32::UI::WindowsAndMessaging::HMENU> {
         use windows_sys::Win32::UI::WindowsAndMessaging::*;
         unsafe {
             let menu = CreatePopupMenu();
             if menu.is_null() {
                 return None;
             }
-            for (index, title) in ["連線", "編輯", "複製", "核對身分", "刪除"]
-                .into_iter()
-                .enumerate()
+            for (index, title) in [
+                "連線",
+                "編輯",
+                "複製",
+                "核對身分",
+                "刪除",
+                if pinned { "取消釘選" } else { "釘選" },
+                "複製設定",
+            ]
+            .into_iter()
+            .enumerate()
             {
                 let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
-                if AppendMenuW(menu, MF_STRING, index + 1, title.as_ptr()) == 0 {
+                let flags = MF_STRING
+                    | if connected && ((1..=4).contains(&index) || index == 6) {
+                        MF_GRAYED
+                    } else {
+                        0
+                    };
+                if AppendMenuW(menu, flags, index + 1, title.as_ptr()) == 0 {
                     DestroyMenu(menu);
                     return None;
                 }
@@ -903,6 +1185,20 @@ mod windows_ui {
         }
     }
 
+    fn post_context_action(
+        window: &nwg::Window,
+        button: windows_sys::Win32::Foundation::HWND,
+    ) -> bool {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetDlgCtrlID, PostMessageW, WM_COMMAND};
+        window.handle.hwnd().is_some_and(|parent| unsafe {
+            PostMessageW(
+                parent.cast(),
+                WM_COMMAND,
+                GetDlgCtrlID(button) as usize,
+                button as isize,
+            ) != 0
+        })
+    }
     fn build_recent_menu(
         labels: &[String],
     ) -> Option<windows_sys::Win32::UI::WindowsAndMessaging::HMENU> {
@@ -961,14 +1257,107 @@ mod windows_ui {
         }
     }
 
+    fn show_group_menu(
+        window: &nwg::Window,
+        button: &nwg::Button,
+        groups: &[String],
+    ) -> Option<usize> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+        if groups.len() > 4095 {
+            return None;
+        }
+        let hwnd = window.handle.hwnd()?.cast();
+        let button_hwnd = button.handle.hwnd()?.cast();
+        unsafe {
+            let menu = CreatePopupMenu();
+            if menu.is_null() {
+                return None;
+            }
+            for (index, label) in std::iter::once("未分類（無群組）")
+                .chain(groups.iter().map(String::as_str))
+                .enumerate()
+            {
+                let label = label.replace('&', "&&");
+                let title: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
+                if AppendMenuW(menu, MF_STRING, index + 1, title.as_ptr()) == 0 {
+                    DestroyMenu(menu);
+                    return None;
+                }
+            }
+            let mut rect: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
+            let selected = if GetWindowRect(button_hwnd, &mut rect) != 0 {
+                TrackPopupMenu(
+                    menu,
+                    TPM_RETURNCMD | TPM_NONOTIFY,
+                    rect.left,
+                    rect.bottom,
+                    0,
+                    hwnd,
+                    std::ptr::null(),
+                ) as usize
+            } else {
+                0
+            };
+            DestroyMenu(menu);
+            (1..=groups.len() + 1)
+                .contains(&selected)
+                .then(|| selected - 1)
+        }
+    }
+
+    fn show_session_more_menu(
+        window: &nwg::Window,
+        button: &nwg::Button,
+        enabled: [bool; 3],
+    ) -> Option<usize> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+        let hwnd = window.handle.hwnd()?.cast();
+        let button_hwnd = button.handle.hwnd()?.cast();
+        unsafe {
+            let menu = CreatePopupMenu();
+            if menu.is_null() {
+                return None;
+            }
+            for (index, title) in ["上一個連線", "最近連線", "Ctrl+Alt+Del"]
+                .into_iter()
+                .enumerate()
+            {
+                let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+                let flags = MF_STRING | if enabled[index] { 0 } else { MF_GRAYED };
+                if AppendMenuW(menu, flags, index + 1, title.as_ptr()) == 0 {
+                    DestroyMenu(menu);
+                    return None;
+                }
+            }
+            let mut rect: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
+            let selected = if GetWindowRect(button_hwnd, &mut rect) != 0 {
+                TrackPopupMenu(
+                    menu,
+                    TPM_RETURNCMD | TPM_NONOTIFY,
+                    rect.left,
+                    rect.bottom,
+                    0,
+                    hwnd,
+                    std::ptr::null(),
+                ) as usize
+            } else {
+                0
+            };
+            DestroyMenu(menu);
+            (1..=3).contains(&selected).then(|| selected - 1)
+        }
+    }
+
     fn connection_context_menu(
         window: &nwg::Window,
         position: Option<(i32, i32)>,
+        connected: bool,
+        pinned: bool,
     ) -> Option<usize> {
         use windows_sys::Win32::UI::WindowsAndMessaging::*;
         let hwnd = window.handle.hwnd()?.cast();
         unsafe {
-            let menu = build_connection_context_menu()?;
+            let menu = build_connection_context_menu(connected, pinned)?;
             let mut point: windows_sys::Win32::Foundation::POINT = std::mem::zeroed();
             let has_position = if let Some((x, y)) = position {
                 point.x = x;
@@ -991,7 +1380,7 @@ mod windows_ui {
                 0
             };
             DestroyMenu(menu);
-            (1..=5).contains(&selected).then(|| selected - 1)
+            (1..=7).contains(&selected).then(|| selected - 1)
         }
     }
 
@@ -1168,12 +1557,20 @@ mod windows_ui {
         let mut sidebar_toggle = nwg::Button::default();
         let mut recent_button = nwg::Button::default();
         let mut recent_menu = nwg::Button::default();
+        let mut session_more = nwg::Button::default();
         let mut session_footer = nwg::Label::default();
+        let mut session_header = nwg::Label::default();
+        let mut idle_stage = nwg::Label::default();
+        let mut sidebar_background = nwg::Label::default();
         let mut add = nwg::Button::default();
         let mut edit = nwg::Button::default();
         let mut delete = nwg::Button::default();
         let mut verify = nwg::Button::default();
         let mut duplicate = nwg::Button::default();
+        let mut pin = nwg::Button::default();
+        let mut export_settings = nwg::Button::default();
+        let mut import_settings = nwg::Button::default();
+        let mut group_rename = nwg::Button::default();
         let mut image = nwg::ImageFrame::default();
         let mut remote_input = nwg::TextInput::default();
         nwg::ListBox::builder()
@@ -1270,11 +1667,22 @@ mod windows_ui {
             .parent(&window)
             .build(&mut recent_menu)?;
         recent_menu.set_visible(false);
+        nwg::Button::builder()
+            .text("更多")
+            .size((60, 32))
+            .parent(&window)
+            .build(&mut session_more)?;
+        session_more.set_visible(false);
         nwg::Label::builder()
             .text("等待連線")
             .parent(&window)
             .build(&mut session_footer)?;
         session_footer.set_visible(false);
+        nwg::Label::builder()
+            .text("正在連線")
+            .parent(&window)
+            .build(&mut session_header)?;
+        session_header.set_visible(false);
         nwg::ImageFrame::builder()
             .position((24, 128))
             .size((570, 190))
@@ -1294,6 +1702,7 @@ mod windows_ui {
             (&mut delete, "刪除", 266),
             (&mut verify, "核對身分", 387),
             (&mut duplicate, "複製", 508),
+            (&mut pin, "釘選／取消", 24),
         ] {
             nwg::Button::builder()
                 .text(title)
@@ -1303,12 +1712,57 @@ mod windows_ui {
                 .build(button)?;
             button.set_visible(false);
         }
+        nwg::Button::builder()
+            .text("複製設定")
+            .position((152, 236))
+            .size((100, 28))
+            .parent(&window)
+            .build(&mut export_settings)?;
+        export_settings.set_visible(false);
+        nwg::Button::builder()
+            .text("匯入設定")
+            .position((260, 236))
+            .size((100, 28))
+            .parent(&window)
+            .build(&mut import_settings)?;
+        import_settings.set_visible(false);
+        nwg::Button::builder()
+            .text("群組更名")
+            .position((240, 200))
+            .size((120, 28))
+            .parent(&window)
+            .build(&mut group_rename)?;
+        group_rename.set_visible(false);
+        nwg::Label::builder()
+            .text("選擇左側連線並按 Enter 或雙擊，即可開始。\r\n\r\n也可搜尋主機或輸入連線 URI。")
+            .h_align(nwg::HTextAlign::Center)
+            .v_align(nwg::VTextAlign::Center)
+            .parent(&window)
+            .build(&mut idle_stage)?;
+        idle_stage.set_visible(false);
+        nwg::Label::builder()
+            .text("")
+            .parent(&window)
+            .build(&mut sidebar_background)?;
+        sidebar_background.set_visible(false);
+        // 讓遠端畫布與覆蓋背景在繪製時尊重上層兄弟控制項。
+        for handle in [image.handle, sidebar_background.handle] {
+            if let Some(hwnd) = handle.hwnd() {
+                unsafe {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::{
+                        GetWindowLongPtrW, SetWindowLongPtrW, GWL_STYLE, WS_CLIPSIBLINGS,
+                    };
+                    let style = GetWindowLongPtrW(hwnd.cast(), GWL_STYLE);
+                    SetWindowLongPtrW(hwnd.cast(), GWL_STYLE, style | WS_CLIPSIBLINGS as isize);
+                }
+            }
+        }
         let editor = Editor::new(&window)?;
         let mut search = nwg::TextInput::default();
         nwg::TextInput::builder()
             .position((24, 128))
             .size((200, 28))
-            .placeholder_text(Some("搜尋連線或主機"))
+            .placeholder_text(Some("搜尋或輸入連線 URI"))
             .parent(&window)
             .build(&mut search)?;
         search.set_visible(false);
@@ -1335,11 +1789,55 @@ mod windows_ui {
             .build(&mut group_picker)?;
         group_picker.set_selection(Some(0));
         group_picker.set_visible(false);
+        let import_preview = build_import_preview(&window)?;
+        let mut import_accept = nwg::Button::default();
+        let mut import_skip = nwg::Button::default();
+        let mut import_cancel = nwg::Button::default();
+        for (button, text, x) in [
+            (&mut import_accept, "檢查並新增", 24),
+            (&mut import_skip, "略過這筆", 132),
+            (&mut import_cancel, "取消匯入", 240),
+        ] {
+            nwg::Button::builder()
+                .text(text)
+                .position((x, 440))
+                .size((100, 32))
+                .parent(&window)
+                .build(button)?;
+            button.set_visible(false);
+        }
+        let mut rename_input = nwg::TextInput::default();
+        nwg::TextInput::builder()
+            .position((24, 128))
+            .size((320, 28))
+            .parent(&window)
+            .build(&mut rename_input)?;
+        rename_input.set_visible(false);
+        let mut rename_save = nwg::Button::default();
+        let mut rename_cancel = nwg::Button::default();
+        for (button, title, x) in [
+            (&mut rename_save, "確認更名", 24),
+            (&mut rename_cancel, "取消更名", 160),
+        ] {
+            nwg::Button::builder()
+                .text(title)
+                .position((x, 174))
+                .size((120, 32))
+                .parent(&window)
+                .build(button)?;
+            button.set_visible(false);
+        }
         let editor_text_handles = editor.text_fields();
         let editor_protocol_handle = editor.protocol_handle();
-        let endpoint_blurred = Rc::new(RefCell::new(None::<(String, String, String, String)>));
+        let import_preview_handle = import_preview.handle;
+        let import_cancel_handle = import_cancel.handle;
+        let endpoint_blurred = Rc::new(RefCell::new(
+            None::<(String, String, String, String, String)>,
+        ));
         let raw_endpoint_blurred = Rc::clone(&endpoint_blurred);
-        let endpoint_pasted = Rc::new(RefCell::new(None::<(String, String, String, String)>));
+        let endpoint_pasted = Rc::new(RefCell::new(
+            None::<(String, String, String, String, String)>,
+        ));
         let raw_endpoint_pasted = Rc::clone(&endpoint_pasted);
         let editor_cancel_handle = editor.cancel.handle;
         let mut timer = nwg::Timer::default();
@@ -1371,18 +1869,52 @@ mod windows_ui {
         let recent = RefCell::new(Vec::<String>::new());
         let statuses = RefCell::new(BTreeMap::<String, ConnectionStatus>::new());
         let pending_recent = RefCell::new(None::<(String, String)>);
+        let pending_toolbar_action = RefCell::new(None::<(nwg::ControlHandle, String)>);
         let collapsed_groups = RefCell::new(BTreeSet::<Option<String>>::new());
         let group_ids = RefCell::new(Vec::<Option<String>>::new());
         let ids = Rc::new(RefCell::new(Vec::<String>::new()));
         let pending_connect = RefCell::new(None::<String>);
         let pending_once = RefCell::new(None::<TransientConnection>);
-        let pending_context = RefCell::new(None::<(nwg::ControlHandle, String)>);
+        let pending_context = Rc::new(RefCell::new(
+            None::<(nwg::ControlHandle, String, Option<String>)>,
+        ));
+        let raw_duplicate_pending = Rc::clone(&pending_context);
+        let raw_list_duplicate_pending = Rc::clone(&pending_context);
+        let raw_list_duplicate_ids = Rc::clone(&ids);
         let pending_tree = Rc::new(RefCell::new(None::<(String, Option<String>, u32)>));
         let raw_pending_tree = Rc::clone(&pending_tree);
         let raw_tree_ids = Rc::clone(&ids);
         let context_clicked = RefCell::new(None::<(usize, String, bool)>);
         let active = Rc::new(RefCell::new(None::<Active>));
+        let raw_list_duplicate_active = Rc::clone(&active);
+        let duplicate_handle = duplicate.handle;
         let raw_tree_active = Rc::clone(&active);
+        let sidebar_epoch = Rc::new(Cell::new(0u64));
+        let raw_sidebar_epoch = Rc::clone(&sidebar_epoch);
+        let pending_sidebar_close = Rc::new(RefCell::new(None::<u64>));
+        let raw_pending_sidebar_close = Rc::clone(&pending_sidebar_close);
+        let raw_sidebar_active = Rc::clone(&active);
+        let sidebar_button_handle = sidebar_toggle.handle;
+        let sidebar_key_handles = [
+            search.handle,
+            connections.handle,
+            group_tree.handle,
+            group_picker.handle,
+            collapse_group.handle,
+            expand_groups.handle,
+            tree_toggle.handle,
+            pin.handle,
+            sidebar_toggle.handle,
+        ];
+        let import_reader = PasteReader::new();
+        let import_job = RefCell::new(None::<PasteJob>);
+        let import_limit = Arc::new(tokio::sync::Semaphore::new(1));
+        let import_id = Cell::new(0u64);
+        let import_queue = RefCell::new(std::collections::VecDeque::<Draft>::new());
+        let import_current = RefCell::new(None::<Draft>);
+        let import_bulk_mode = Cell::new(false);
+        let export_preview = RefCell::new(None::<String>);
+        let rename_group_current = RefCell::new(None::<String>);
         let paste_reader = PasteReader::new();
         let paste_job = RefCell::new(None::<PasteJob>);
         let paste_id = Cell::new(0u64);
@@ -1464,9 +1996,10 @@ mod windows_ui {
                 };
                 *context_clicked.borrow_mut() = target;
             }
+            let mut context_connect = false;
             if event == nwg::Event::OnButtonClick {
-                let pending = {
-                    let mut pending = pending_context.borrow_mut();
+                let toolbar_request = {
+                    let mut pending = pending_toolbar_action.borrow_mut();
                     if pending
                         .as_ref()
                         .is_some_and(|(expected, _)| *expected == handle)
@@ -1476,17 +2009,40 @@ mod windows_ui {
                         None
                     }
                 };
-                if let Some((expected, id)) = pending {
-                    if expected == handle
-                        && connections
-                            .selection()
-                            .and_then(|index| ids.borrow().get(index).cloned())
-                            .as_deref()
-                            != Some(id.as_str())
-                    {
-                        explanation.set_text("選取的連線已變更，請重新操作。");
+                if let Some((_, source)) = toolbar_request {
+                    if active.borrow().as_ref().is_none_or(|session| {
+                        session.connection_id != source || !session.shown_frame
+                    }) {
                         return;
                     }
+                }
+                let pending = {
+                    let mut pending = pending_context.borrow_mut();
+                    if pending
+                        .as_ref()
+                        .is_some_and(|(expected, _, _)| *expected == handle)
+                    {
+                        pending.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some((expected, id, source)) = pending {
+                    let selected = connections
+                        .selection()
+                        .and_then(|index| ids.borrow().get(index).cloned());
+                    let current = active
+                        .borrow()
+                        .as_ref()
+                        .map(|session| session.connection_id.clone());
+                    if expected != handle
+                        || selected.as_deref() != Some(id.as_str())
+                        || current != source
+                    {
+                        explanation.set_text("選取的連線或工作階段已變更，請重新操作。");
+                        return;
+                    }
+                    context_connect = expected == connect.handle && source.is_some();
                 }
             }
             if (event == nwg::Event::OnWindowClose && handle == event_window.handle)
@@ -1542,6 +2098,7 @@ mod windows_ui {
                                 return;
                             }
                         };
+                        *recent.borrow_mut() = opened.recent().unwrap_or_default();
                         expires.set(Some(Instant::now() + session_lifetime));
                         username_label.set_visible(false);
                         username_input.set_visible(false);
@@ -1563,6 +2120,17 @@ mod windows_ui {
                         delete.set_visible(true);
                         verify.set_visible(true);
                         duplicate.set_visible(true);
+                        pin.set_visible(true);
+                        export_settings.set_visible(true);
+                        import_settings.set_visible(true);
+                        group_rename.set_visible(true);
+                        layout_idle_workspace(
+                            &event_window,
+                            &idle_stage,
+                            &group_rename,
+                            &export_settings,
+                            &import_settings,
+                        );
                         layout_library(
                             &event_window,
                             &connections,
@@ -1573,7 +2141,7 @@ mod windows_ui {
                             ),
                             [
                                 &refresh, &logout, &connect, &add, &edit, &delete, &verify,
-                                &duplicate,
+                                &duplicate, &pin,
                             ],
                         );
                         refresh_connections(
@@ -1588,7 +2156,15 @@ mod windows_ui {
                         update_library_actions(
                             &connections,
                             &ids,
-                            [&connect, &edit, &delete, &verify, &duplicate],
+                            [
+                                &connect,
+                                &edit,
+                                &delete,
+                                &verify,
+                                &duplicate,
+                                &export_settings,
+                                &pin,
+                            ],
                         );
                         *store.borrow_mut() = Some(opened);
                         connections.set_focus();
@@ -1617,10 +2193,34 @@ mod windows_ui {
                         update_library_actions(
                             &connections,
                             &ids,
-                            [&connect, &edit, &delete, &verify, &duplicate],
+                            [
+                                &connect,
+                                &edit,
+                                &delete,
+                                &verify,
+                                &duplicate,
+                                &export_settings,
+                                &pin,
+                            ],
                         );
                     }
                 } else {
+                    import_job.borrow_mut().take();
+                    import_queue.borrow_mut().clear();
+                    import_current.borrow_mut().take();
+                    import_bulk_mode.set(false);
+                    export_preview.borrow_mut().take();
+                    rename_group_current.borrow_mut().take();
+                    rename_input.set_text("");
+                    rename_input.set_visible(false);
+                    rename_save.set_visible(false);
+                    rename_cancel.set_visible(false);
+                    import_preview.set_text("");
+                    import_preview.set_visible(false);
+                    import_accept.set_visible(false);
+                    import_skip.set_visible(false);
+                    import_cancel.set_visible(false);
+                    import_settings.set_text("匯入設定");
                     expires.set(None);
                     pending_connect.borrow_mut().take();
                     pending_once.borrow_mut().take();
@@ -1630,6 +2230,7 @@ mod windows_ui {
                     fullscreen.set_text("全螢幕");
                     fullscreen.set_visible(false);
                     sidebar_toggle.set_visible(false);
+                    session_more.set_visible(false);
                     recent_button.set_visible(false);
                     recent_menu.set_visible(false);
                     recent.borrow_mut().clear();
@@ -1638,8 +2239,9 @@ mod windows_ui {
                     tree_toggle.set_text("樹狀檢視");
                     tree_signature.borrow_mut().take();
                     pending_recent.borrow_mut().take();
+                    pending_toolbar_action.borrow_mut().take();
                     session_footer.set_visible(false);
-                    restore_library_header(&heading, &explanation);
+                    restore_library_header(&heading, &explanation, &session_header);
                     paste_job.borrow_mut().take();
                     pending_resize.set(None);
                     logout.set_position(145, 335);
@@ -1662,12 +2264,19 @@ mod windows_ui {
                     delete.set_visible(false);
                     verify.set_visible(false);
                     duplicate.set_visible(false);
+                    pin.set_visible(false);
+                    export_settings.set_visible(false);
+                    import_settings.set_visible(false);
+                    group_rename.set_visible(false);
+                    idle_stage.set_visible(false);
+                    import_job.borrow_mut().take();
                     release_mouse(&mouse_mask);
                     modifiers.set(0);
                     altgr.set(false);
                     control_keys.borrow_mut().clear();
                     image.set_bitmap(None);
                     image.set_visible(false);
+                    sidebar_background.set_visible(false);
                     remote_input.set_text("");
                     remote_input.set_visible(false);
                     disconnect.set_visible(false);
@@ -1772,10 +2381,7 @@ mod windows_ui {
                 let Some((index, id, keyboard)) = context_clicked.borrow_mut().take() else {
                     return;
                 };
-                if !expires.get().is_some_and(|end| Instant::now() < end)
-                    || active.borrow().is_some()
-                    || editor.is_visible()
-                {
+                if !expires.get().is_some_and(|end| Instant::now() < end) || editor.is_visible() {
                     return;
                 }
                 if ids.borrow().get(index) != Some(&id) {
@@ -1785,7 +2391,15 @@ mod windows_ui {
                 update_library_actions(
                     &connections,
                     &ids,
-                    [&connect, &edit, &delete, &verify, &duplicate],
+                    [
+                        &connect,
+                        &edit,
+                        &delete,
+                        &verify,
+                        &duplicate,
+                        &export_settings,
+                        &pin,
+                    ],
                 );
                 let anchor = if keyboard {
                     let Some(point) = list_context_anchor(&connections, index) else {
@@ -1795,27 +2409,48 @@ mod windows_ui {
                 } else {
                     None
                 };
-                let Some(choice) = connection_context_menu(&event_window, anchor) else {
+                let source = active
+                    .borrow()
+                    .as_ref()
+                    .map(|session| session.connection_id.clone());
+                let Some(opened) = store.borrow().as_ref().cloned() else {
+                    return;
+                };
+                let pinned = match opened.pinned() {
+                    Ok(pins) => pins.contains(&id),
+                    Err(_) => {
+                        explanation.set_text("無法讀取釘選設定。");
+                        return;
+                    }
+                };
+                let Some(choice) =
+                    connection_context_menu(&event_window, anchor, source.is_some(), pinned)
+                else {
                     return;
                 };
                 if !expires.get().is_some_and(|end| Instant::now() < end)
-                    || active.borrow().is_some()
+                    || active
+                        .borrow()
+                        .as_ref()
+                        .map(|session| session.connection_id.clone())
+                        != source
                     || editor.is_visible()
+                    || (source.is_some() && ((1..=4).contains(&choice) || choice == 6))
                 {
                     return;
                 }
-                let button = [&connect, &edit, &duplicate, &verify, &delete][choice];
+                let button = [
+                    &connect,
+                    &edit,
+                    &duplicate,
+                    &verify,
+                    &delete,
+                    &pin,
+                    &export_settings,
+                ][choice];
                 if let Some(hwnd) = button.handle.hwnd() {
-                    *pending_context.borrow_mut() = Some((button.handle, id));
-                    if unsafe {
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
-                            hwnd.cast(),
-                            0x00f5,
-                            0,
-                            0,
-                        )
-                    } == 0
-                    {
+                    *pending_context.borrow_mut() = Some((button.handle, id, source));
+                    if !post_context_action(&event_window, hwnd.cast()) {
                         pending_context.borrow_mut().take();
                         explanation.set_text("無法執行選單操作，請重試。");
                     }
@@ -1868,7 +2503,15 @@ mod windows_ui {
                             update_library_actions(
                                 &connections,
                                 &ids,
-                                [&connect, &edit, &delete, &verify, &duplicate],
+                                [
+                                    &connect,
+                                    &edit,
+                                    &delete,
+                                    &verify,
+                                    &duplicate,
+                                    &export_settings,
+                                    &pin,
+                                ],
                             );
                         }
                     }
@@ -1903,9 +2546,7 @@ mod windows_ui {
                             }
                         }
                     }
-                    nwg::Event::OnTreeViewRightClick
-                        if active.borrow().is_none() && !editor.is_visible() =>
-                    {
+                    nwg::Event::OnTreeViewRightClick if !editor.is_visible() => {
                         let (x, y) = nwg::GlobalCursor::local_position(group_tree.handle, None);
                         let Some(item) = tree_item_at(&group_tree, x, y) else {
                             return;
@@ -1937,13 +2578,42 @@ mod windows_ui {
                         update_library_actions(
                             &connections,
                             &ids,
-                            [&connect, &edit, &delete, &verify, &duplicate],
+                            [
+                                &connect,
+                                &edit,
+                                &delete,
+                                &verify,
+                                &duplicate,
+                                &export_settings,
+                                &pin,
+                            ],
                         );
-                        let Some(choice) = connection_context_menu(&event_window, None) else {
+                        let source = active
+                            .borrow()
+                            .as_ref()
+                            .map(|session| session.connection_id.clone());
+                        let Some(opened) = store.borrow().as_ref().cloned() else {
+                            return;
+                        };
+                        let pinned = match opened.pinned() {
+                            Ok(pins) => pins.contains(&id),
+                            Err(_) => {
+                                explanation.set_text("無法讀取釘選設定。");
+                                return;
+                            }
+                        };
+                        let Some(choice) =
+                            connection_context_menu(&event_window, None, source.is_some(), pinned)
+                        else {
                             return;
                         };
                         if !expires.get().is_some_and(|end| Instant::now() < end)
-                            || active.borrow().is_some()
+                            || active
+                                .borrow()
+                                .as_ref()
+                                .map(|session| session.connection_id.clone())
+                                != source
+                            || (source.is_some() && ((1..=4).contains(&choice) || choice == 6))
                             || editor.is_visible()
                             || connections
                                 .selection()
@@ -1953,18 +2623,18 @@ mod windows_ui {
                         {
                             return;
                         }
-                        let button = [&connect, &edit, &duplicate, &verify, &delete][choice];
+                        let button = [
+                            &connect,
+                            &edit,
+                            &duplicate,
+                            &verify,
+                            &delete,
+                            &pin,
+                            &export_settings,
+                        ][choice];
                         if let Some(hwnd) = button.handle.hwnd() {
-                            *pending_context.borrow_mut() = Some((button.handle, id));
-                            if unsafe {
-                                windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
-                                    hwnd.cast(),
-                                    0x00f5,
-                                    0,
-                                    0,
-                                )
-                            } == 0
-                            {
+                            *pending_context.borrow_mut() = Some((button.handle, id, source));
+                            if !post_context_action(&event_window, hwnd.cast()) {
                                 pending_context.borrow_mut().take();
                                 explanation.set_text("無法執行選單操作，請重試。");
                             }
@@ -2019,7 +2689,15 @@ mod windows_ui {
                 update_library_actions(
                     &connections,
                     &ids,
-                    [&connect, &edit, &delete, &verify, &duplicate],
+                    [
+                        &connect,
+                        &edit,
+                        &delete,
+                        &verify,
+                        &duplicate,
+                        &export_settings,
+                        &pin,
+                    ],
                 );
             } else if ((event == nwg::Event::OnButtonClick
                 && (handle == connect.handle || handle == recent_button.handle))
@@ -2030,7 +2708,8 @@ mod windows_ui {
                 && expires.get().is_some_and(|end| Instant::now() < end)
                 && (active.borrow().is_none()
                     || handle == connections.handle
-                    || handle == recent_button.handle)
+                    || handle == recent_button.handle
+                    || context_connect)
                 && (handle != recent_button.handle || active.borrow().is_some())
                 && !editor.is_visible()
             {
@@ -2138,17 +2817,23 @@ mod windows_ui {
                 probing.borrow_mut().take();
                 sidebar_visible.set(true);
                 heading.set_visible(false);
+                session_header.set_text("正在連線");
                 let (width, height) = layout_session(
                     &event_window,
                     &image,
-                    (&remote_input, &session_footer, &explanation),
+                    (
+                        &remote_input,
+                        &session_footer,
+                        &explanation,
+                        &session_header,
+                    ),
                     &connections,
                     (
                         &search,
                         &group_picker,
                         [&collapse_group, &expand_groups, &tree_toggle],
                     ),
-                    true,
+                    (true, &pin, (&sidebar_background, &group_tree)),
                     [
                         &logout,
                         &disconnect,
@@ -2158,6 +2843,7 @@ mod windows_ui {
                         &sidebar_toggle,
                         &recent_button,
                         &recent_menu,
+                        &session_more,
                     ],
                 );
                 let (input, receiver) = mpsc::channel(64);
@@ -2202,6 +2888,12 @@ mod windows_ui {
                         connection.name.clone(),
                         connection.protocol.clone(),
                         encoding,
+                        ["host-key", "server-cert-sha256"].iter().any(|key| {
+                            connection
+                                .params
+                                .get(*key)
+                                .is_some_and(|value| !value.is_empty())
+                        }),
                     )));
                     let paste_allowed = !read_only
                         && !connection
@@ -2224,6 +2916,8 @@ mod windows_ui {
                     )
                     .await
                 });
+                pending_sidebar_close.borrow_mut().take();
+                sidebar_epoch.set(sidebar_epoch.get().wrapping_add(1));
                 *active.borrow_mut() = Some(Active {
                     connection_id,
                     cancel,
@@ -2239,6 +2933,7 @@ mod windows_ui {
                     task,
                 });
                 pending_recent.borrow_mut().take();
+                pending_toolbar_action.borrow_mut().take();
                 if !is_transient {
                     statuses
                         .borrow_mut()
@@ -2258,6 +2953,12 @@ mod windows_ui {
                 delete.set_visible(false);
                 verify.set_visible(false);
                 duplicate.set_visible(false);
+                pin.set_visible(true);
+                export_settings.set_visible(false);
+                import_settings.set_visible(false);
+                group_rename.set_visible(false);
+                idle_stage.set_visible(false);
+                import_job.borrow_mut().take();
                 image.set_visible(true);
                 remote_input.set_visible(true);
                 remote_input.set_enabled(false);
@@ -2269,13 +2970,708 @@ mod windows_ui {
                 fullscreen.set_visible(true);
                 sidebar_toggle.set_text("收折側欄");
                 sidebar_toggle.set_visible(true);
-                recent_button.set_visible(true);
+                recent_button.set_visible(event_window.size().0 >= 1200);
                 recent_button.set_enabled(false);
-                recent_menu.set_visible(true);
+                recent_menu.set_visible(event_window.size().0 >= 1200);
                 recent_menu.set_enabled(false);
                 session_footer.set_text("等待連線");
                 session_footer.set_visible(true);
                 explanation.set_text("正在連線；點選遠端畫面後可輸入。");
+            } else if event == nwg::Event::OnButtonClick
+                && handle == pin.handle
+                && expires.get().is_some_and(|end| Instant::now() < end)
+                && !editor.is_visible()
+            {
+                let Some(id) = connections
+                    .selection()
+                    .and_then(|index| ids.borrow().get(index).cloned())
+                else {
+                    explanation.set_text("請先選擇要釘選的連線。");
+                    return;
+                };
+                let Some(opened) = store.borrow().as_ref().cloned() else {
+                    return;
+                };
+                let entries = match runtime.block_on(opened.list()) {
+                    Ok(entries) => entries,
+                    Err(_) => {
+                        explanation.set_text("無法讀取連線設定。");
+                        return;
+                    }
+                };
+                if !entries.iter().any(|entry| entry.id == id) {
+                    explanation.set_text("找不到連線，請重新載入。");
+                    return;
+                }
+                let pins = match opened.pinned() {
+                    Ok(pins) => pins,
+                    Err(_) => {
+                        explanation.set_text("無法讀取釘選設定，請檢查資料目錄權限。");
+                        return;
+                    }
+                };
+                let new_pin = !pins.contains(&id);
+                if opened.set_pinned(&id, new_pin).is_err() {
+                    explanation.set_text("無法儲存釘選設定，請檢查資料目錄權限。");
+                    return;
+                }
+                tree_signature.borrow_mut().take();
+                refresh_connections(
+                    &runtime,
+                    &opened,
+                    &connections,
+                    (&explanation, false),
+                    (&ids, &statuses),
+                    (&search.text(), &collapsed_groups.borrow()),
+                    (&group_picker, &group_ids),
+                );
+                update_library_actions(
+                    &connections,
+                    &ids,
+                    [
+                        &connect,
+                        &edit,
+                        &delete,
+                        &verify,
+                        &duplicate,
+                        &export_settings,
+                        &pin,
+                    ],
+                );
+                explanation.set_text(if new_pin {
+                    "已釘選連線。"
+                } else {
+                    "已取消釘選。"
+                });
+                if tree_mode.get() {
+                    group_tree.set_focus();
+                } else {
+                    connections.set_focus();
+                }
+            } else if event == nwg::Event::OnButtonClick
+                && handle == group_rename.handle
+                && expires.get().is_some_and(|end| Instant::now() < end)
+                && active.borrow().is_none()
+                && !editor.is_visible()
+                && import_current.borrow().is_none()
+                && rename_group_current.borrow().is_none()
+            {
+                let group = group_picker
+                    .selection()
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|index| group_ids.borrow().get(index).cloned())
+                    .flatten();
+                let Some(group) = group else {
+                    explanation.set_text("請先在群組清單選擇具名群組。");
+                    return;
+                };
+                import_job.borrow_mut().take();
+                connections.set_visible(false);
+                group_tree.set_visible(false);
+                search.set_visible(false);
+                group_picker.set_visible(false);
+                collapse_group.set_visible(false);
+                expand_groups.set_visible(false);
+                tree_toggle.set_visible(false);
+                refresh.set_visible(false);
+                logout.set_visible(false);
+                connect.set_visible(false);
+                add.set_visible(false);
+                edit.set_visible(false);
+                delete.set_visible(false);
+                verify.set_visible(false);
+                duplicate.set_visible(false);
+                pin.set_visible(false);
+                export_settings.set_visible(false);
+                import_settings.set_visible(false);
+                group_rename.set_visible(false);
+                idle_stage.set_visible(false);
+                rename_input.set_text(&group);
+                *rename_group_current.borrow_mut() = Some(group);
+                rename_input.set_visible(true);
+                rename_save.set_visible(true);
+                rename_cancel.set_visible(true);
+                rename_input.set_focus();
+                rename_input.set_selection(0..u32::MAX);
+                explanation.set_text("輸入新群組名稱；留空則將連線移至未分類。");
+            } else if ((event == nwg::Event::OnButtonClick
+                && (handle == rename_save.handle || handle == rename_cancel.handle))
+                || (event == nwg::Event::OnKeyPress
+                    && handle == rename_input.handle
+                    && matches!(data, nwg::EventData::OnKey(0x0d | 0x1b))))
+                && expires.get().is_some_and(|end| Instant::now() < end)
+                && rename_group_current.borrow().is_some()
+            {
+                let save = handle == rename_save.handle
+                    || (handle == rename_input.handle
+                        && matches!(data, nwg::EventData::OnKey(0x0d)));
+                let old = rename_group_current.borrow().clone().unwrap();
+                let new = rename_input.text().trim().to_string();
+                if save {
+                    let choice = nwg::modal_message(
+                        &event_window.handle,
+                        &nwg::MessageParams {
+                            title: "重新命名群組",
+                            content: if new.is_empty() {
+                                "將群組內所有連線移至未分類，不會刪除連線。要繼續嗎？"
+                            } else {
+                                "將更新群組內所有連線名稱；若新名稱已存在，群組將合併。要繼續嗎？"
+                            },
+                            buttons: nwg::MessageButtons::YesNo,
+                            icons: nwg::MessageIcons::Question,
+                        },
+                    );
+                    if choice != nwg::MessageChoice::Yes
+                        || !expires.get().is_some_and(|end| Instant::now() < end)
+                        || rename_group_current.borrow().as_deref() != Some(old.as_str())
+                    {
+                        return;
+                    }
+                    let Some(opened) = store.borrow().as_ref().cloned() else {
+                        return;
+                    };
+                    match runtime.block_on(opened.rename_group(&old, &new)) {
+                        Ok(0) => {
+                            explanation.set_text("找不到群組，請取消後重新載入。");
+                            return;
+                        }
+                        Ok(_) => {
+                            let target_exists = group_ids
+                                .borrow()
+                                .iter()
+                                .any(|group| group.as_deref() == Some(new.as_str()));
+                            let mut collapsed = collapsed_groups.borrow_mut();
+                            if old != new
+                                && collapsed.remove(&Some(old.clone()))
+                                && !target_exists
+                                && !new.is_empty()
+                            {
+                                collapsed.insert(Some(new.clone()));
+                            }
+                            tree_signature.borrow_mut().take();
+                        }
+                        Err(SaveError::Invalid(error)) => {
+                            explanation.set_text(error.message);
+                            return;
+                        }
+                        Err(SaveError::Io(_)) => {
+                            explanation.set_text("無法儲存群組名稱，請檢查資料目錄權限。");
+                            return;
+                        }
+                    }
+                }
+                rename_group_current.borrow_mut().take();
+                rename_input.set_text("");
+                rename_input.set_visible(false);
+                rename_save.set_visible(false);
+                rename_cancel.set_visible(false);
+                connections.set_visible(true);
+                search.set_visible(true);
+                group_picker.set_visible(true);
+                collapse_group.set_visible(true);
+                expand_groups.set_visible(true);
+                tree_toggle.set_visible(true);
+                refresh.set_visible(true);
+                logout.set_visible(true);
+                connect.set_visible(true);
+                add.set_visible(true);
+                edit.set_visible(true);
+                delete.set_visible(true);
+                verify.set_visible(true);
+                duplicate.set_visible(true);
+                pin.set_visible(true);
+                export_settings.set_visible(true);
+                import_settings.set_visible(true);
+                group_rename.set_visible(true);
+                layout_idle_workspace(
+                    &event_window,
+                    &idle_stage,
+                    &group_rename,
+                    &export_settings,
+                    &import_settings,
+                );
+                layout_library(
+                    &event_window,
+                    &connections,
+                    (
+                        &search,
+                        &group_picker,
+                        [&collapse_group, &expand_groups, &tree_toggle],
+                    ),
+                    [
+                        &refresh, &logout, &connect, &add, &edit, &delete, &verify, &duplicate,
+                        &pin,
+                    ],
+                );
+                if let Some(opened) = store.borrow().as_ref() {
+                    refresh_connections(
+                        &runtime,
+                        opened,
+                        &connections,
+                        (&explanation, false),
+                        (&ids, &statuses),
+                        (&search.text(), &collapsed_groups.borrow()),
+                        (&group_picker, &group_ids),
+                    );
+                    update_library_actions(
+                        &connections,
+                        &ids,
+                        [
+                            &connect,
+                            &edit,
+                            &delete,
+                            &verify,
+                            &duplicate,
+                            &export_settings,
+                            &pin,
+                        ],
+                    );
+                }
+                explanation.set_text(if save && new.is_empty() {
+                    "已將群組內連線移至未分類。"
+                } else if save {
+                    "已重新命名群組。"
+                } else {
+                    "已取消群組更名。"
+                });
+                group_picker.set_focus();
+            } else if event == nwg::Event::OnButtonClick
+                && handle == export_settings.handle
+                && expires.get().is_some_and(|end| Instant::now() < end)
+                && active.borrow().is_none()
+                && !editor.is_visible()
+            {
+                let Some(id) = connections
+                    .selection()
+                    .and_then(|index| ids.borrow().get(index).cloned())
+                else {
+                    explanation.set_text("請先選擇要複製設定的連線。");
+                    return;
+                };
+                let Some(opened) = store.borrow().as_ref().cloned() else {
+                    return;
+                };
+                let entries = match runtime.block_on(opened.list()) {
+                    Ok(entries) => entries,
+                    Err(_) => {
+                        explanation.set_text("無法讀取連線設定。");
+                        return;
+                    }
+                };
+                let choice = nwg::modal_message(&event_window.handle, &nwg::MessageParams {
+                    title: "複製公開連線設定",
+                    content: "選擇「是」複製全部連線，選擇「否」僅複製目前選取的連線；取消則不複製。密碼、私鑰與密語不會複製，其他文字欄位仍可能包含敏感內容，分享前請檢查。",
+                    buttons: nwg::MessageButtons::YesNoCancel,
+                    icons: nwg::MessageIcons::Question,
+                });
+                if choice == nwg::MessageChoice::Cancel
+                    || !expires.get().is_some_and(|end| Instant::now() < end)
+                    || active.borrow().is_some()
+                    || editor.is_visible()
+                    || connections
+                        .selection()
+                        .and_then(|index| ids.borrow().get(index).cloned())
+                        .as_deref()
+                        != Some(id.as_str())
+                {
+                    return;
+                }
+                let selected: Vec<_> = match choice {
+                    nwg::MessageChoice::Yes if entries.len() > 100 => {
+                        let visible_ids = ids.borrow().clone();
+                        if visible_ids.is_empty() || visible_ids.len() > 100 {
+                            explanation.set_text("全部連線超過 100 筆；請先搜尋或收折群組，讓清單顯示 1 至 100 筆，再複製設定。");
+                            return;
+                        }
+                        let confirm = nwg::modal_message(&event_window.handle, &nwg::MessageParams {
+                            title: "分批複製連線設定",
+                            content: &format!("全部連線超過 100 筆。是否改為複製目前清單中顯示的 {} 筆？未顯示的連線不會包含在本批。", visible_ids.len()),
+                            buttons: nwg::MessageButtons::YesNo,
+                            icons: nwg::MessageIcons::Question,
+                        });
+                        if confirm != nwg::MessageChoice::Yes
+                            || !expires.get().is_some_and(|end| Instant::now() < end)
+                            || active.borrow().is_some()
+                            || editor.is_visible()
+                            || *ids.borrow() != visible_ids
+                        {
+                            return;
+                        }
+                        let visible: BTreeSet<_> = visible_ids.into_iter().collect();
+                        entries
+                            .into_iter()
+                            .filter(|entry| visible.contains(&entry.id))
+                            .collect()
+                    }
+                    nwg::MessageChoice::Yes => entries,
+                    nwg::MessageChoice::No => {
+                        entries.into_iter().filter(|entry| entry.id == id).collect()
+                    }
+                    _ => return,
+                };
+                let format = nwg::modal_message(&event_window.handle, &nwg::MessageParams {
+                    title: "選擇交換格式",
+                    content: "選擇「是」複製完整公開設定 JSON；選擇「否」複製端點 URI（只包含協定、主機、連接埠、帳號與 RDP 網域）；取消則不複製。",
+                    buttons: nwg::MessageButtons::YesNoCancel,
+                    icons: nwg::MessageIcons::Question,
+                });
+                if !expires.get().is_some_and(|end| Instant::now() < end)
+                    || active.borrow().is_some()
+                    || editor.is_visible()
+                    || connections
+                        .selection()
+                        .and_then(|index| ids.borrow().get(index).cloned())
+                        .as_deref()
+                        != Some(id.as_str())
+                {
+                    return;
+                }
+                let result = match format {
+                    nwg::MessageChoice::Yes => cracamole_store::portable::export(&selected),
+                    nwg::MessageChoice::No => cracamole_store::portable::export_uris(&selected),
+                    _ => return,
+                };
+                let content = match result {
+                    Ok(content) => content,
+                    Err(_) => {
+                        explanation.set_text(
+                            "無法產生交換資料；請確認連線不超過 100 筆且資料大小符合限制。",
+                        );
+                        return;
+                    }
+                };
+                probing.borrow_mut().take();
+                connections.set_visible(false);
+                search.set_visible(false);
+                group_picker.set_visible(false);
+                collapse_group.set_visible(false);
+                expand_groups.set_visible(false);
+                tree_toggle.set_visible(false);
+                group_tree.set_visible(false);
+                for button in [
+                    &refresh,
+                    &logout,
+                    &connect,
+                    &add,
+                    &edit,
+                    &delete,
+                    &verify,
+                    &duplicate,
+                    &pin,
+                    &export_settings,
+                    &import_settings,
+                    &group_rename,
+                ] {
+                    button.set_visible(false);
+                }
+                idle_stage.set_visible(false);
+                import_job.borrow_mut().take();
+                let (width, height) = event_window.size();
+                import_preview.set_size(
+                    width.saturating_sub(48).max(96),
+                    height.saturating_sub(200).max(80),
+                );
+                import_accept.set_position(24, height.saturating_sub(56) as i32);
+                import_cancel.set_position(240, height.saturating_sub(56) as i32);
+                import_preview.set_text_unix2dos(&content);
+                *export_preview.borrow_mut() = Some(content);
+                import_bulk_mode.set(false);
+                import_preview.set_visible(true);
+                import_accept.set_text("複製到剪貼簿");
+                import_accept.set_visible(true);
+                import_skip.set_visible(false);
+                import_cancel.set_text("取消匯出");
+                import_cancel.set_visible(true);
+                import_preview.set_focus();
+                explanation.set_text("請捲動檢查完整公開設定，再決定是否複製到剪貼簿。");
+            } else if event == nwg::Event::OnButtonClick
+                && handle == import_settings.handle
+                && expires.get().is_some_and(|end| Instant::now() < end)
+                && active.borrow().is_none()
+                && !editor.is_visible()
+            {
+                let pending_count = import_queue.borrow().len();
+                let bulk = if pending_count > 1 {
+                    let choice = nwg::modal_message(&event_window.handle, &nwg::MessageParams {
+                        title: "選擇匯入方式",
+                        content: &format!("共有 {pending_count} 筆待匯入。選擇「是」預覽並新增全部，選擇「否」逐筆檢查；取消則保留待匯入清單。"),
+                        buttons: nwg::MessageButtons::YesNoCancel,
+                        icons: nwg::MessageIcons::Question,
+                    });
+                    if !expires.get().is_some_and(|end| Instant::now() < end)
+                        || active.borrow().is_some()
+                        || editor.is_visible()
+                        || import_queue.borrow().len() != pending_count
+                        || choice == nwg::MessageChoice::Cancel
+                    {
+                        return;
+                    }
+                    choice == nwg::MessageChoice::Yes
+                } else {
+                    false
+                };
+                let next = import_queue.borrow_mut().pop_front();
+                if let Some(draft) = next {
+                    let preview = if bulk {
+                        let queue = import_queue.borrow();
+                        let entries: Vec<_> = std::iter::once(&draft).chain(queue.iter()).collect();
+                        serde_json::to_string_pretty(&entries)
+                    } else {
+                        serde_json::to_string_pretty(&draft)
+                    };
+                    let preview = match preview {
+                        Ok(preview) => preview,
+                        Err(_) => {
+                            explanation.set_text("無法顯示匯入設定。");
+                            return;
+                        }
+                    };
+                    import_settings.set_text(if import_queue.borrow().is_empty() {
+                        "匯入設定"
+                    } else {
+                        "下一筆匯入"
+                    });
+                    probing.borrow_mut().take();
+                    connections.set_visible(false);
+                    search.set_visible(false);
+                    group_picker.set_visible(false);
+                    collapse_group.set_visible(false);
+                    expand_groups.set_visible(false);
+                    tree_toggle.set_visible(false);
+                    group_tree.set_visible(false);
+                    refresh.set_visible(false);
+                    logout.set_visible(false);
+                    connect.set_visible(false);
+                    add.set_visible(false);
+                    edit.set_visible(false);
+                    delete.set_visible(false);
+                    verify.set_visible(false);
+                    duplicate.set_visible(false);
+                    pin.set_visible(false);
+                    export_settings.set_visible(false);
+                    import_settings.set_visible(false);
+                    group_rename.set_visible(false);
+                    idle_stage.set_visible(false);
+                    import_job.borrow_mut().take();
+                    *import_current.borrow_mut() = Some(draft);
+                    import_bulk_mode.set(bulk);
+                    let (width, height) = event_window.size();
+                    import_preview.set_size(
+                        width.saturating_sub(48).max(96),
+                        height.saturating_sub(200).max(80),
+                    );
+                    import_accept.set_position(24, height.saturating_sub(56) as i32);
+                    import_skip.set_position(132, height.saturating_sub(56) as i32);
+                    import_cancel.set_position(240, height.saturating_sub(56) as i32);
+                    import_preview.set_text_unix2dos(&preview);
+                    import_preview.set_visible(true);
+                    import_accept.set_text(if bulk {
+                        "新增全部"
+                    } else {
+                        "檢查並新增"
+                    });
+                    import_accept.set_visible(true);
+                    import_skip.set_visible(!bulk);
+                    import_cancel.set_text("取消匯入");
+                    import_cancel.set_visible(true);
+                    import_preview.set_focus();
+                    explanation.set_text(if bulk {
+                        "請捲動核對全部設定；確認後一次新增，不覆寫既有連線。"
+                    } else {
+                        "請捲動核對完整設定，包含主機身分及安全選項。"
+                    });
+                } else if import_job.borrow().is_none() {
+                    let Ok(permit) = import_limit.clone().try_acquire_owned() else {
+                        explanation.set_text("剪貼簿讀取仍在進行，請稍候。");
+                        return;
+                    };
+                    let id = import_id.get().wrapping_add(1);
+                    import_id.set(id);
+                    match import_reader.start(id, permit) {
+                        Ok(job) => {
+                            *import_job.borrow_mut() = Some(job);
+                            explanation.set_text("正在讀取剪貼簿設定…");
+                        }
+                        Err(error) => explanation.set_text(error),
+                    }
+                }
+            } else if event == nwg::Event::OnButtonClick
+                && (handle == import_accept.handle
+                    || handle == import_skip.handle
+                    || handle == import_cancel.handle)
+                && expires.get().is_some_and(|end| Instant::now() < end)
+                && active.borrow().is_none()
+            {
+                let exporting = export_preview.borrow().is_some();
+                if exporting && handle == import_skip.handle {
+                    return;
+                }
+                if exporting && handle == import_accept.handle {
+                    let content = export_preview.borrow();
+                    let result = event_window.handle.hwnd().and_then(|window| {
+                        content
+                            .as_deref()
+                            .map(|text| crate::windows_clipboard::write_text(window.cast(), text))
+                    });
+                    if !matches!(result, Some(Ok(()))) {
+                        explanation.set_text("無法複製設定，請檢查剪貼簿及資料大小。");
+                        return;
+                    }
+                }
+                let bulk = import_bulk_mode.get();
+                if bulk && handle == import_accept.handle {
+                    let count = 1 + import_queue.borrow().len();
+                    let choice = nwg::modal_message(&event_window.handle, &nwg::MessageParams {
+                        title: "新增全部匯入設定",
+                        content: &format!("將新增 {count} 筆連線，保留預覽中的公開身分與安全選項，不會覆寫既有連線。要繼續嗎？"),
+                        buttons: nwg::MessageButtons::YesNo,
+                        icons: nwg::MessageIcons::Question,
+                    });
+                    if choice != nwg::MessageChoice::Yes
+                        || !expires.get().is_some_and(|end| Instant::now() < end)
+                        || active.borrow().is_some()
+                        || !import_bulk_mode.get()
+                        || import_current.borrow().is_none()
+                        || 1 + import_queue.borrow().len() != count
+                    {
+                        return;
+                    }
+                    let drafts = {
+                        let current = import_current.borrow();
+                        let queue = import_queue.borrow();
+                        current
+                            .iter()
+                            .chain(queue.iter())
+                            .map(|draft| Draft {
+                                name: draft.name.clone(),
+                                protocol: draft.protocol.clone(),
+                                params: draft.params.clone(),
+                            })
+                            .collect()
+                    };
+                    let Some(opened) = store.borrow().as_ref().cloned() else {
+                        return;
+                    };
+                    match runtime.block_on(opened.import_new(drafts)) {
+                        Ok(_) => import_queue.borrow_mut().clear(),
+                        Err(SaveError::Invalid(error)) => {
+                            explanation.set_text(error.message);
+                            return;
+                        }
+                        Err(SaveError::Io(_)) => {
+                            explanation.set_text("無法匯入設定，請檢查資料目錄權限。");
+                            return;
+                        }
+                    }
+                    import_settings.set_text("匯入設定");
+                }
+                let draft = if exporting {
+                    None
+                } else {
+                    import_current.borrow_mut().take()
+                };
+                if !exporting && draft.is_none() {
+                    return;
+                }
+                export_preview.borrow_mut().take();
+                import_bulk_mode.set(false);
+                import_preview.set_text("");
+                import_preview.set_visible(false);
+                import_accept.set_visible(false);
+                import_skip.set_visible(false);
+                import_cancel.set_visible(false);
+                if handle == import_cancel.handle && !exporting {
+                    import_queue.borrow_mut().clear();
+                    import_settings.set_text("匯入設定");
+                }
+                if handle == import_accept.handle && !bulk && !exporting {
+                    let draft = draft.expect("import preview was checked above");
+                    editor.begin_import(PublicConnection {
+                        id: String::new(),
+                        name: draft.name,
+                        protocol: draft.protocol,
+                        params: draft.params,
+                        configured_secrets: Vec::new(),
+                    });
+                    explanation.set_text("請再次核對設定；儲存後會新增連線，不會覆寫既有連線。");
+                } else {
+                    connections.set_visible(true);
+                    search.set_visible(true);
+                    group_picker.set_visible(true);
+                    collapse_group.set_visible(true);
+                    expand_groups.set_visible(true);
+                    tree_toggle.set_visible(true);
+                    refresh.set_visible(true);
+                    logout.set_visible(true);
+                    connect.set_visible(true);
+                    add.set_visible(true);
+                    edit.set_visible(true);
+                    delete.set_visible(true);
+                    verify.set_visible(true);
+                    duplicate.set_visible(true);
+                    pin.set_visible(true);
+                    export_settings.set_visible(true);
+                    import_settings.set_visible(true);
+                    group_rename.set_visible(true);
+                    layout_idle_workspace(
+                        &event_window,
+                        &idle_stage,
+                        &group_rename,
+                        &export_settings,
+                        &import_settings,
+                    );
+                    layout_library(
+                        &event_window,
+                        &connections,
+                        (
+                            &search,
+                            &group_picker,
+                            [&collapse_group, &expand_groups, &tree_toggle],
+                        ),
+                        [
+                            &refresh, &logout, &connect, &add, &edit, &delete, &verify, &duplicate,
+                            &pin,
+                        ],
+                    );
+                    if bulk && handle == import_accept.handle {
+                        if let Some(opened) = store.borrow().as_ref() {
+                            refresh_connections(
+                                &runtime,
+                                opened,
+                                &connections,
+                                (&explanation, false),
+                                (&ids, &statuses),
+                                (&search.text(), &collapsed_groups.borrow()),
+                                (&group_picker, &group_ids),
+                            );
+                            update_library_actions(
+                                &connections,
+                                &ids,
+                                [
+                                    &connect,
+                                    &edit,
+                                    &delete,
+                                    &verify,
+                                    &duplicate,
+                                    &export_settings,
+                                    &pin,
+                                ],
+                            );
+                        }
+                    }
+                    explanation.set_text(if exporting && handle == import_accept.handle {
+                        "已複製公開設定。"
+                    } else if exporting {
+                        "已取消複製設定。"
+                    } else if bulk && handle == import_accept.handle {
+                        "已新增全部匯入設定。"
+                    } else if handle == import_cancel.handle {
+                        "已取消剩餘匯入設定。"
+                    } else {
+                        "已略過這筆設定。"
+                    });
+                    connections.set_focus();
+                }
             } else if event == nwg::Event::OnButtonClick && handle == disconnect.handle {
                 if let Some(session) = active.borrow_mut().take() {
                     if !session.transient {
@@ -2290,11 +3686,13 @@ mod windows_ui {
                 fullscreen.set_text("全螢幕");
                 fullscreen.set_visible(false);
                 sidebar_toggle.set_visible(false);
+                session_more.set_visible(false);
                 recent_button.set_visible(false);
                 recent_menu.set_visible(false);
                 pending_recent.borrow_mut().take();
+                pending_toolbar_action.borrow_mut().take();
                 session_footer.set_visible(false);
-                restore_library_header(&heading, &explanation);
+                restore_library_header(&heading, &explanation, &session_header);
                 paste_job.borrow_mut().take();
                 pending_resize.set(None);
                 logout.set_position(145, 335);
@@ -2304,6 +3702,7 @@ mod windows_ui {
                 control_keys.borrow_mut().clear();
                 image.set_bitmap(None);
                 image.set_visible(false);
+                sidebar_background.set_visible(false);
                 remote_input.set_text("");
                 remote_input.set_visible(false);
                 disconnect.set_visible(false);
@@ -2322,6 +3721,17 @@ mod windows_ui {
                 delete.set_visible(true);
                 verify.set_visible(true);
                 duplicate.set_visible(true);
+                pin.set_visible(true);
+                export_settings.set_visible(true);
+                import_settings.set_visible(true);
+                group_rename.set_visible(true);
+                layout_idle_workspace(
+                    &event_window,
+                    &idle_stage,
+                    &group_rename,
+                    &export_settings,
+                    &import_settings,
+                );
                 layout_library(
                     &event_window,
                     &connections,
@@ -2332,6 +3742,7 @@ mod windows_ui {
                     ),
                     [
                         &refresh, &logout, &connect, &add, &edit, &delete, &verify, &duplicate,
+                        &pin,
                     ],
                 );
                 explanation.set_text("連線已結束。");
@@ -2428,6 +3839,7 @@ mod windows_ui {
                             });
                             if !posted {
                                 pending_recent.borrow_mut().take();
+                                pending_toolbar_action.borrow_mut().take();
                                 explanation.set_text("無法啟動切換，請重試。");
                             }
                             return;
@@ -2493,6 +3905,15 @@ mod windows_ui {
                     explanation.set_text("找不到連線。");
                     return;
                 }
+                let selected_group = if handle == add.handle && quick.is_none() {
+                    group_picker
+                        .selection()
+                        .and_then(|index| index.checked_sub(1))
+                        .and_then(|index| group_ids.borrow().get(index).cloned())
+                        .flatten()
+                } else {
+                    None
+                };
                 probing.borrow_mut().take();
                 connections.set_visible(false);
                 search.set_visible(false);
@@ -2509,6 +3930,12 @@ mod windows_ui {
                 delete.set_visible(false);
                 verify.set_visible(false);
                 duplicate.set_visible(false);
+                pin.set_visible(false);
+                export_settings.set_visible(false);
+                import_settings.set_visible(false);
+                group_rename.set_visible(false);
+                idle_stage.set_visible(false);
+                import_job.borrow_mut().take();
                 endpoint_pasted.borrow_mut().take();
                 endpoint_blurred.borrow_mut().take();
                 if let Some(request) = quick {
@@ -2520,9 +3947,58 @@ mod windows_ui {
                 } else if handle == duplicate.handle {
                     editor.begin_duplicate(base.expect("已檢查來源連線"));
                     explanation.set_text("複製公開設定；密碼與私鑰須重新輸入。");
+                } else if let Some(group) = selected_group {
+                    editor.begin_in_group(&group);
+                    explanation.set_text("已帶入所選群組；請輸入連線名稱及目的地。");
                 } else {
                     editor.begin(base);
                     explanation.set_text("留空機密會保留原值；SSH 私鑰請填入檔案路徑。");
+                }
+            } else if event == nwg::Event::OnButtonClick
+                && handle == editor.choose_group.handle
+                && editor.is_visible()
+                && expires.get().is_some_and(|end| Instant::now() < end)
+            {
+                let groups: Vec<String> = group_ids
+                    .borrow()
+                    .iter()
+                    .flatten()
+                    .filter(|name| {
+                        name.chars().count() <= 116 && !name.chars().any(char::is_control)
+                    })
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                if groups.len() > 4095 {
+                    explanation.set_text("群組數量過多，請直接輸入群組名稱。");
+                    return;
+                }
+                let generation = editor.generation();
+                let previous = editor.group_text();
+                let Some(choice) = show_group_menu(&event_window, &editor.choose_group, &groups)
+                else {
+                    return;
+                };
+                if !expires.get().is_some_and(|end| Instant::now() < end)
+                    || !editor.is_visible()
+                    || editor.generation() != generation
+                    || editor.group_text() != previous
+                {
+                    return;
+                }
+                if choice == 0 {
+                    editor.set_group("");
+                } else if let Some(group) = groups.get(choice - 1) {
+                    if group_ids
+                        .borrow()
+                        .iter()
+                        .any(|current| current.as_deref() == Some(group.as_str()))
+                    {
+                        editor.set_group(group);
+                    } else {
+                        explanation.set_text("群組已變更，請重新選擇。");
+                    }
                 }
             } else if event == nwg::Event::OnButtonClick
                 && handle == editor.browse_key.handle
@@ -2726,6 +4202,17 @@ mod windows_ui {
                 delete.set_visible(true);
                 verify.set_visible(true);
                 duplicate.set_visible(true);
+                pin.set_visible(true);
+                export_settings.set_visible(true);
+                import_settings.set_visible(true);
+                group_rename.set_visible(true);
+                layout_idle_workspace(
+                    &event_window,
+                    &idle_stage,
+                    &group_rename,
+                    &export_settings,
+                    &import_settings,
+                );
                 layout_library(
                     &event_window,
                     &connections,
@@ -2736,6 +4223,7 @@ mod windows_ui {
                     ),
                     [
                         &refresh, &logout, &connect, &add, &edit, &delete, &verify, &duplicate,
+                        &pin,
                     ],
                 );
                 refresh_connections(
@@ -2750,7 +4238,15 @@ mod windows_ui {
                 update_library_actions(
                     &connections,
                     &ids,
-                    [&connect, &edit, &delete, &verify, &duplicate],
+                    [
+                        &connect,
+                        &edit,
+                        &delete,
+                        &verify,
+                        &duplicate,
+                        &export_settings,
+                        &pin,
+                    ],
                 );
                 if connect_after_save {
                     let index = saved_id
@@ -2848,7 +4344,15 @@ mod windows_ui {
                             update_library_actions(
                                 &connections,
                                 &ids,
-                                [&connect, &edit, &delete, &verify, &duplicate],
+                                [
+                                    &connect,
+                                    &edit,
+                                    &delete,
+                                    &verify,
+                                    &duplicate,
+                                    &export_settings,
+                                    &pin,
+                                ],
                             );
                         }
                         _ => explanation.set_text("無法刪除連線。"),
@@ -2902,6 +4406,14 @@ mod windows_ui {
                         (0xffe3, false),
                     ] {
                         send_key(&active, key, pressed);
+                    }
+                    if active
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|session| !session.cancel.is_cancelled())
+                    {
+                        explanation.set_text("已送出 Ctrl+Alt+Del。");
+                        remote_input.set_focus();
                     }
                 }
             } else if event == nwg::Event::OnButtonClick
@@ -2966,9 +4478,51 @@ mod windows_ui {
                 update_library_actions(
                     &connections,
                     &ids,
-                    [&connect, &edit, &delete, &verify, &duplicate],
+                    [
+                        &connect,
+                        &edit,
+                        &delete,
+                        &verify,
+                        &duplicate,
+                        &export_settings,
+                        &pin,
+                    ],
                 );
                 explanation.set_text(&message);
+            } else if event == nwg::Event::OnButtonClick
+                && handle == session_more.handle
+                && expires.get().is_some_and(|end| Instant::now() < end)
+            {
+                let Some(source) = active
+                    .borrow()
+                    .as_ref()
+                    .filter(|session| session.shown_frame)
+                    .map(|session| session.connection_id.clone())
+                else {
+                    return;
+                };
+                let options = [&recent_button, &recent_menu, &secure_attention];
+                let enabled = options.map(|button| button.enabled());
+                let Some(choice) = show_session_more_menu(&event_window, &session_more, enabled)
+                else {
+                    return;
+                };
+                if !expires.get().is_some_and(|end| Instant::now() < end)
+                    || active.borrow().as_ref().is_none_or(|session| {
+                        session.connection_id != source || !session.shown_frame
+                    })
+                    || !options[choice].enabled()
+                {
+                    return;
+                }
+                let button = options[choice];
+                if let Some(hwnd) = button.handle.hwnd() {
+                    *pending_toolbar_action.borrow_mut() = Some((button.handle, source));
+                    if !post_context_action(&event_window, hwnd.cast()) {
+                        pending_toolbar_action.borrow_mut().take();
+                        explanation.set_text("無法執行選單操作，請重試。");
+                    }
+                }
             } else if event == nwg::Event::OnButtonClick
                 && handle == recent_menu.handle
                 && expires.get().is_some_and(|end| Instant::now() < end)
@@ -3005,7 +4559,12 @@ mod windows_ui {
                     return;
                 }
                 let labels: Vec<String> = options.iter().map(|(_, label)| label.clone()).collect();
-                let Some(index) = show_recent_menu(&event_window, &recent_menu, &labels) else {
+                let anchor = if event_window.size().0 < 1200 {
+                    &session_more
+                } else {
+                    &recent_menu
+                };
+                let Some(index) = show_recent_menu(&event_window, anchor, &labels) else {
                     return;
                 };
                 if !expires.get().is_some_and(|end| Instant::now() < end)
@@ -3029,6 +4588,7 @@ mod windows_ui {
                     ) != 0
                 }) {
                     pending_recent.borrow_mut().take();
+                    pending_toolbar_action.borrow_mut().take();
                     explanation.set_text("無法切換最近連線，請重試。");
                 }
             } else if event == nwg::Event::OnButtonClick
@@ -3036,6 +4596,11 @@ mod windows_ui {
                 && active.borrow().is_some()
                 && expires.get().is_some_and(|end| Instant::now() < end)
             {
+                if let Some(epoch) = pending_sidebar_close.borrow_mut().take() {
+                    if epoch != sidebar_epoch.get() || !sidebar_visible.get() {
+                        return;
+                    }
+                }
                 let visible = !sidebar_visible.get();
                 sidebar_visible.set(visible);
                 connections.set_visible(visible);
@@ -3044,23 +4609,40 @@ mod windows_ui {
                 collapse_group.set_visible(visible);
                 expand_groups.set_visible(visible);
                 tree_toggle.set_visible(visible);
+                pin.set_visible(visible);
                 group_tree.set_visible(visible && tree_mode.get());
                 sidebar_toggle.set_text(if visible {
                     "收折側欄"
                 } else {
                     "展開側欄"
                 });
-                let (width, height) = layout_session(
+                if !visible
+                    && active.borrow().as_ref().is_some_and(|session| {
+                        session.shown_frame
+                            && session
+                                .input_policy
+                                .borrow()
+                                .is_some_and(|(read_only, _, _)| !read_only)
+                    })
+                {
+                    remote_input.set_focus();
+                }
+                layout_session(
                     &event_window,
                     &image,
-                    (&remote_input, &session_footer, &explanation),
+                    (
+                        &remote_input,
+                        &session_footer,
+                        &explanation,
+                        &session_header,
+                    ),
                     &connections,
                     (
                         &search,
                         &group_picker,
                         [&collapse_group, &expand_groups, &tree_toggle],
                     ),
-                    visible,
+                    (visible, &pin, (&sidebar_background, &group_tree)),
                     [
                         &logout,
                         &disconnect,
@@ -3070,9 +4652,18 @@ mod windows_ui {
                         &sidebar_toggle,
                         &recent_button,
                         &recent_menu,
+                        &session_more,
                     ],
                 );
-                pending_resize.set(Some((width, height, Instant::now())));
+                if let Some(hwnd) = image.handle.hwnd() {
+                    unsafe {
+                        windows_sys::Win32::Graphics::Gdi::InvalidateRect(
+                            hwnd.cast(),
+                            std::ptr::null(),
+                            0,
+                        );
+                    }
+                }
             } else if event == nwg::Event::OnButtonClick
                 && handle == fullscreen.handle
                 && active.borrow().is_some()
@@ -3089,10 +4680,30 @@ mod windows_ui {
                 }
             } else if event == nwg::Event::OnResize
                 && handle == event_window.handle
+                && (import_current.borrow().is_some() || export_preview.borrow().is_some())
+            {
+                let (width, height) = event_window.size();
+                import_preview.set_size(
+                    width.saturating_sub(48).max(96),
+                    height.saturating_sub(200).max(80),
+                );
+                import_accept.set_position(24, height.saturating_sub(56) as i32);
+                import_skip.set_position(132, height.saturating_sub(56) as i32);
+                import_cancel.set_position(240, height.saturating_sub(56) as i32);
+            } else if event == nwg::Event::OnResize
+                && handle == event_window.handle
                 && active.borrow().is_none()
                 && store.borrow().is_some()
                 && !editor.is_visible()
+                && rename_group_current.borrow().is_none()
             {
+                layout_idle_workspace(
+                    &event_window,
+                    &idle_stage,
+                    &group_rename,
+                    &export_settings,
+                    &import_settings,
+                );
                 layout_library(
                     &event_window,
                     &connections,
@@ -3103,6 +4714,7 @@ mod windows_ui {
                     ),
                     [
                         &refresh, &logout, &connect, &add, &edit, &delete, &verify, &duplicate,
+                        &pin,
                     ],
                 );
             } else if event == nwg::Event::OnResize
@@ -3112,14 +4724,23 @@ mod windows_ui {
                 let (width, height) = layout_session(
                     &event_window,
                     &image,
-                    (&remote_input, &session_footer, &explanation),
+                    (
+                        &remote_input,
+                        &session_footer,
+                        &explanation,
+                        &session_header,
+                    ),
                     &connections,
                     (
                         &search,
                         &group_picker,
                         [&collapse_group, &expand_groups, &tree_toggle],
                     ),
-                    sidebar_visible.get(),
+                    (
+                        sidebar_visible.get(),
+                        &pin,
+                        (&sidebar_background, &group_tree),
+                    ),
                     [
                         &logout,
                         &disconnect,
@@ -3129,6 +4750,7 @@ mod windows_ui {
                         &sidebar_toggle,
                         &recent_button,
                         &recent_menu,
+                        &session_more,
                     ],
                 );
                 pending_resize.set(Some((width, height, Instant::now())));
@@ -3149,14 +4771,26 @@ mod windows_ui {
                                 let selected = connections
                                     .selection()
                                     .and_then(|index| ids.borrow().get(index).cloned());
-                                let model =
-                                    library_groups(entries, &search.text(), &BTreeSet::new());
+                                let pinned = match opened.pinned() {
+                                    Ok(pinned) => pinned,
+                                    Err(_) => {
+                                        explanation.set_text("無法讀取釘選設定。");
+                                        return;
+                                    }
+                                };
+                                let model = library_groups(
+                                    entries,
+                                    &search.text(),
+                                    &BTreeSet::new(),
+                                    &pinned,
+                                );
                                 tree_rebuilding.set(true);
                                 let (groups, entries) = fill_group_tree(
                                     &group_tree,
                                     model,
                                     &collapsed_groups.borrow(),
                                     !search.text().trim().is_empty(),
+                                    &pinned,
                                     &statuses.borrow(),
                                     selected.as_deref(),
                                 );
@@ -3177,6 +4811,46 @@ mod windows_ui {
                     }
                 } else if control_has_visible_style(group_tree.handle) {
                     group_tree.set_visible(false);
+                }
+                if import_job
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|job| Instant::now() >= job.deadline)
+                {
+                    import_job.borrow_mut().take();
+                    explanation.set_text("讀取剪貼簿逾時，請稍後再試。");
+                }
+                while let Some(result) = import_reader.try_recv() {
+                    let matches = import_job
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|job| job.id == result.id);
+                    if !matches {
+                        continue;
+                    }
+                    import_job.borrow_mut().take();
+                    if !expires.get().is_some_and(|end| Instant::now() < end)
+                        || active.borrow().is_some()
+                        || editor.is_visible()
+                    {
+                        continue;
+                    }
+                    match result.text {
+                        Ok(text) => match cracamole_store::portable::import(&text) {
+                            Ok(drafts) => {
+                                let count = drafts.len();
+                                *import_queue.borrow_mut() = drafts.into();
+                                import_settings.set_text("下一筆匯入");
+                                explanation.set_text(&format!(
+                                    "已驗證 {count} 筆；按下一筆匯入，可選擇逐筆或整批核對。"
+                                ));
+                            }
+                            Err(_) => {
+                                explanation.set_text("交換資料格式無效、包含機密或超過限制。")
+                            }
+                        },
+                        Err(error) => explanation.set_text(error),
+                    }
                 }
                 let blurred = endpoint_blurred.borrow_mut().take();
                 if let Some(blurred) = blurred.filter(|_| editor.is_visible()) {
@@ -3423,7 +5097,15 @@ mod windows_ui {
                                             update_library_actions(
                                                 &connections,
                                                 &ids,
-                                                [&connect, &edit, &delete, &verify, &duplicate],
+                                                [
+                                                    &connect,
+                                                    &edit,
+                                                    &delete,
+                                                    &verify,
+                                                    &duplicate,
+                                                    &export_settings,
+                                                    &pin,
+                                                ],
                                             );
                                         } else {
                                             explanation.set_text("無法儲存主機身分。");
@@ -3449,8 +5131,8 @@ mod windows_ui {
                 let mut state = active.borrow_mut();
                 if let Some(session) = state.as_mut() {
                     let caption = session.metadata.borrow().clone();
-                    let (name, protocol, encoding) =
-                        caption.unwrap_or_else(|| ("連線中".into(), String::new(), None));
+                    let (name, protocol, encoding, pinned_identity) =
+                        caption.unwrap_or_else(|| ("連線中".into(), String::new(), None, false));
                     let dimensions = session.displayed_size.map_or_else(
                         || "等待畫面".into(),
                         |(width, height)| format!("{width}×{height}"),
@@ -3459,8 +5141,36 @@ mod windows_ui {
                         end.saturating_duration_since(Instant::now()).as_secs()
                     });
                     let encoding = encoding.map_or_else(String::new, |value| format!(" · {value}"));
+                    let policy = *session.input_policy.borrow();
+                    let connection_state = if session.shown_frame {
+                        "已連線"
+                    } else {
+                        "正在連線"
+                    };
+                    let restrictions = match policy {
+                        Some((true, _, _)) => " · 唯讀",
+                        Some((false, false, _)) => " · 禁止貼上",
+                        _ => "",
+                    };
+                    let transport = match protocol.as_str() {
+                        "ssh" => " · 加密",
+                        "telnet" => " · 未加密",
+                        _ => "",
+                    };
+                    let identity = if pinned_identity {
+                        " · 已設定身分"
+                    } else {
+                        ""
+                    };
+                    let header_text = format!(
+                        "{connection_state} · {}{transport}{identity}{restrictions} · {name}",
+                        protocol.to_uppercase()
+                    );
+                    if session_header.text() != header_text {
+                        session_header.set_text(&header_text);
+                    }
                     let text = format!(
-                        "{name} · {}{encoding} · 畫面 {dimensions} · 剩餘 {:02}:{:02}:{:02}",
+                        "{connection_state} · {name} · {}{encoding}{restrictions} · 畫面 {dimensions} · 剩餘 {:02}:{:02}:{:02}",
                         protocol.to_uppercase(),
                         remaining / 3600,
                         remaining / 60 % 60,
@@ -3469,10 +5179,11 @@ mod windows_ui {
                     if session_footer.text() != text {
                         session_footer.set_text(&text);
                     }
-                    let policy = *session.input_policy.borrow();
                     paste.set_enabled(policy.is_some_and(|(_, allowed, _)| allowed));
                     remote_input.set_enabled(policy.is_some_and(|(read_only, _, _)| !read_only));
-                    secure_attention.set_visible(policy.is_some_and(|(_, _, rdp)| rdp));
+                    secure_attention.set_visible(
+                        event_window.size().0 >= 1200 && policy.is_some_and(|(_, _, rdp)| rdp),
+                    );
                     secure_attention.set_enabled(
                         session.shown_frame
                             && policy.is_some_and(|(read_only, _, rdp)| rdp && !read_only),
@@ -3485,6 +5196,7 @@ mod windows_ui {
                                 .any(|id| id != &session.connection_id),
                     );
                     recent_menu.set_enabled(recent_button.enabled());
+                    session_more.set_enabled(recent_button.enabled() || secure_attention.enabled());
                     if let Some((width, height, changed)) = pending_resize.get() {
                         if changed.elapsed() >= Duration::from_millis(200) {
                             match session.input.try_send(Input::Resize { width, height }) {
@@ -3518,14 +5230,23 @@ mod windows_ui {
                                 layout_session(
                                     &event_window,
                                     &image,
-                                    (&remote_input, &session_footer, &explanation),
+                                    (
+                                        &remote_input,
+                                        &session_footer,
+                                        &explanation,
+                                        &session_header,
+                                    ),
                                     &connections,
                                     (
                                         &search,
                                         &group_picker,
                                         [&collapse_group, &expand_groups, &tree_toggle],
                                     ),
-                                    sidebar_visible.get(),
+                                    (
+                                        sidebar_visible.get(),
+                                        &pin,
+                                        (&sidebar_background, &group_tree),
+                                    ),
                                     [
                                         &logout,
                                         &disconnect,
@@ -3535,10 +5256,12 @@ mod windows_ui {
                                         &sidebar_toggle,
                                         &recent_button,
                                         &recent_menu,
+                                        &session_more,
                                     ],
                                 );
                                 if !session.shown_frame {
                                     session.shown_frame = true;
+                                    let mut recent_failed = false;
                                     if !session.transient {
                                         statuses.borrow_mut().insert(
                                             session.connection_id.clone(),
@@ -3551,8 +5274,19 @@ mod windows_ui {
                                         if history.len() > 20 {
                                             history.remove(0);
                                         }
+                                        if let Some(opened) = store.borrow().as_ref() {
+                                            if opened.record_recent(&session.connection_id).is_err()
+                                            {
+                                                recent_failed = true;
+                                            }
+                                        }
                                     }
-                                    if policy.is_some_and(|(read_only, _, _)| read_only) {
+                                    if recent_failed {
+                                        explanation.set_text("已連線，但無法保存最近連線排序。");
+                                        if !policy.is_some_and(|(read_only, _, _)| read_only) {
+                                            remote_input.set_focus();
+                                        }
+                                    } else if policy.is_some_and(|(read_only, _, _)| read_only) {
                                         explanation.set_text("已連線（唯讀）；遠端輸入已停用。");
                                     } else {
                                         explanation.set_text("已連線；點選遠端畫面後可輸入。");
@@ -3606,11 +5340,13 @@ mod windows_ui {
                         fullscreen.set_text("全螢幕");
                         fullscreen.set_visible(false);
                         sidebar_toggle.set_visible(false);
+                        session_more.set_visible(false);
                         recent_button.set_visible(false);
                         recent_menu.set_visible(false);
                         pending_recent.borrow_mut().take();
+                        pending_toolbar_action.borrow_mut().take();
                         session_footer.set_visible(false);
-                        restore_library_header(&heading, &explanation);
+                        restore_library_header(&heading, &explanation, &session_header);
                         paste_job.borrow_mut().take();
                         pending_resize.set(None);
                         release_mouse(&mouse_mask);
@@ -3619,6 +5355,7 @@ mod windows_ui {
                         control_keys.borrow_mut().clear();
                         image.set_bitmap(None);
                         image.set_visible(false);
+                        sidebar_background.set_visible(false);
                         remote_input.set_text("");
                         remote_input.set_visible(false);
                         disconnect.set_visible(false);
@@ -3638,6 +5375,17 @@ mod windows_ui {
                         delete.set_visible(true);
                         verify.set_visible(true);
                         duplicate.set_visible(true);
+                        pin.set_visible(true);
+                        export_settings.set_visible(true);
+                        import_settings.set_visible(true);
+                        group_rename.set_visible(true);
+                        layout_idle_workspace(
+                            &event_window,
+                            &idle_stage,
+                            &group_rename,
+                            &export_settings,
+                            &import_settings,
+                        );
                         layout_library(
                             &event_window,
                             &connections,
@@ -3648,7 +5396,7 @@ mod windows_ui {
                             ),
                             [
                                 &refresh, &logout, &connect, &add, &edit, &delete, &verify,
-                                &duplicate,
+                                &duplicate, &pin,
                             ],
                         );
                         explanation.set_text("連線已結束或失敗。");
@@ -3691,6 +5439,22 @@ mod windows_ui {
                 && (event == nwg::Event::OnMouseMove
                     || matches!(event, nwg::Event::OnMousePress(_)))
             {
+                if sidebar_visible.get()
+                    && matches!(
+                        event,
+                        nwg::Event::OnMousePress(
+                            nwg::MousePressEvent::MousePressLeftDown
+                                | nwg::MousePressEvent::MousePressRightDown
+                        )
+                    )
+                    && active.borrow().is_some()
+                {
+                    queue_sidebar_close(
+                        sidebar_button_handle,
+                        &pending_sidebar_close,
+                        sidebar_epoch.get(),
+                    );
+                }
                 if let Some(session) = active.borrow().as_ref() {
                     if session
                         .input_policy
@@ -3823,7 +5587,15 @@ mod windows_ui {
                     update_library_actions(
                         &connections,
                         &ids,
-                        [&connect, &edit, &delete, &verify, &duplicate],
+                        [
+                            &connect,
+                            &edit,
+                            &delete,
+                            &verify,
+                            &duplicate,
+                            &export_settings,
+                            &pin,
+                        ],
                     );
                 }
             } else if handle == remote_input.handle && event == nwg::Event::OnTextInput {
@@ -3983,7 +5755,8 @@ mod windows_ui {
             &tree_handle,
             0x12001,
             move |tree_hwnd, message, key, _| {
-                if message == 0x0100 && matches!(key, 0x0d | 0x2e | 0x71) {
+                let duplicate_key = message == 0x0100 && duplicate_shortcut(key);
+                if message == 0x0100 && (matches!(key, 0x0d | 0x2e | 0x71) || duplicate_key) {
                     let selected = unsafe {
                         windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
                             tree_hwnd.cast(),
@@ -4044,6 +5817,34 @@ mod windows_ui {
                             let source =
                                 active.as_ref().map(|session| session.connection_id.clone());
                             drop(active);
+                            if duplicate_key {
+                                if source.is_some() || !control_has_visible_style(duplicate_handle)
+                                {
+                                    return Some(0);
+                                }
+                                let Ok(mut pending) = raw_duplicate_pending.try_borrow_mut() else {
+                                    return Some(0);
+                                };
+                                if pending.is_some() {
+                                    return Some(0);
+                                }
+                                *pending = Some((duplicate_handle, id, None));
+                                let posted = tree_window_handle
+                                    .hwnd()
+                                    .zip(duplicate_handle.hwnd())
+                                    .is_some_and(|(window, button)| {
+                                        PostMessageW(
+                                            window.cast(),
+                                            WM_COMMAND,
+                                            GetDlgCtrlID(button.cast()) as usize,
+                                            button as isize,
+                                        ) != 0
+                                    });
+                                if !posted {
+                                    pending.take();
+                                }
+                                return Some(0);
+                            }
                             let Ok(mut pending) = raw_pending_tree.try_borrow_mut() else {
                                 return Some(0);
                             };
@@ -4072,6 +5873,80 @@ mod windows_ui {
                 None
             },
         )?;
+        let list_duplicate_handler = nwg::bind_raw_event_handler(
+            &search_list_handle,
+            0x12002,
+            move |list, message, key, _| {
+                if message != 0x0100 || !duplicate_shortcut(key) {
+                    return None;
+                }
+                if !control_has_visible_style(duplicate_handle)
+                    || !raw_list_duplicate_active
+                        .try_borrow()
+                        .is_ok_and(|active| active.is_none())
+                {
+                    return Some(0);
+                }
+                unsafe {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::{
+                        GetDlgCtrlID, PostMessageW, SendMessageW, LB_GETCURSEL, WM_COMMAND,
+                    };
+                    let index = SendMessageW(list.cast(), LB_GETCURSEL, 0, 0);
+                    let id = usize::try_from(index).ok().and_then(|index| {
+                        raw_list_duplicate_ids
+                            .try_borrow()
+                            .ok()?
+                            .get(index)
+                            .cloned()
+                    });
+                    let (Some(id), Ok(mut pending)) =
+                        (id, raw_list_duplicate_pending.try_borrow_mut())
+                    else {
+                        return Some(0);
+                    };
+                    if pending.is_some() {
+                        return Some(0);
+                    }
+                    *pending = Some((duplicate_handle, id, None));
+                    let posted = tree_window_handle
+                        .hwnd()
+                        .zip(duplicate_handle.hwnd())
+                        .is_some_and(|(window, button)| {
+                            PostMessageW(
+                                window.cast(),
+                                WM_COMMAND,
+                                GetDlgCtrlID(button.cast()) as usize,
+                                button as isize,
+                            ) != 0
+                        });
+                    if !posted {
+                        pending.take();
+                    }
+                }
+                Some(0)
+            },
+        )?;
+        let mut sidebar_key_handlers = Vec::new();
+        for (index, handle) in sidebar_key_handles.iter().enumerate() {
+            let active = Rc::clone(&raw_sidebar_active);
+            let epoch = Rc::clone(&raw_sidebar_epoch);
+            let pending = Rc::clone(&raw_pending_sidebar_close);
+            sidebar_key_handlers.push(nwg::bind_raw_event_handler(
+                handle,
+                0x13000 + index,
+                move |_, message, key, _| {
+                    if message == 0x0100
+                        && key == 0x1b
+                        && control_has_visible_style(search_list_handle)
+                        && active.try_borrow().is_ok_and(|active| active.is_some())
+                    {
+                        queue_sidebar_close(sidebar_button_handle, &pending, epoch.get());
+                        return Some(0);
+                    }
+                    None
+                },
+            )?);
+        }
         for (index, handle) in editor_text_handles.iter().enumerate() {
             let cancel = editor_cancel_handle.hwnd().ok_or("找不到取消按鈕")? as isize;
             let endpoint_blurred = Rc::clone(&raw_endpoint_blurred);
@@ -4081,6 +5956,7 @@ mod windows_ui {
                 editor_text_handles[2],
                 editor_text_handles[3],
                 editor_protocol_handle,
+                editor_text_handles[7],
             ];
             let handler = nwg::bind_raw_event_handler(
                 handle,
@@ -4100,22 +5976,27 @@ mod windows_ui {
                             ) -> isize;
                         }
                         let result = unsafe { DefSubclassProc(hwnd.cast(), message, key, param) };
-                        let [host, port, user, protocol] =
+                        let [host, port, user, protocol, domain] =
                             endpoint_handles.map(control_text_for_endpoint);
                         *endpoint_pasted.borrow_mut() = host
                             .filter(|host| before.as_ref() != Some(host))
                             .zip(port)
                             .zip(user)
                             .zip(protocol)
-                            .map(|(((host, port), user), protocol)| (host, port, user, protocol));
+                            .zip(domain)
+                            .map(|((((host, port), user), protocol), domain)| {
+                                (host, port, user, protocol, domain)
+                            });
                         return Some(result);
                     }
                     if index == 1 && message == 0x0008 {
-                        let [host, port, user, protocol] =
+                        let [host, port, user, protocol, domain] =
                             endpoint_handles.map(control_text_for_endpoint);
                         *endpoint_blurred.borrow_mut() =
-                            host.zip(port).zip(user).zip(protocol).map(
-                                |(((host, port), user), protocol)| (host, port, user, protocol),
+                            host.zip(port).zip(user).zip(protocol).zip(domain).map(
+                                |((((host, port), user), protocol), domain)| {
+                                    (host, port, user, protocol, domain)
+                                },
                             );
                     }
                     if message == 0x0100 && key == 0x1b {
@@ -4134,6 +6015,29 @@ mod windows_ui {
             )?;
             editor_key_handlers.push(handler);
         }
+        let import_escape_handler = nwg::bind_raw_event_handler(
+            &import_preview_handle,
+            0x14000,
+            move |_, message, key, _| {
+                if message == 0x0100
+                    && key == 0x1b
+                    && control_has_visible_style(import_preview_handle)
+                {
+                    if let Some(button) = import_cancel_handle.hwnd() {
+                        unsafe {
+                            windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
+                                button.cast(),
+                                0x00f5,
+                                0,
+                                0,
+                            );
+                        }
+                    }
+                    return Some(0);
+                }
+                None
+            },
+        )?;
         let capture_handler =
             nwg::bind_raw_event_handler(&image_handle, 0x10001, move |_, message, _, _| {
                 if message == 0x0215 {
@@ -4152,9 +6056,14 @@ mod windows_ui {
         for handler in editor_key_handlers {
             nwg::unbind_raw_event_handler(&handler)?;
         }
+        for handler in sidebar_key_handlers {
+            nwg::unbind_raw_event_handler(&handler)?;
+        }
         nwg::unbind_raw_event_handler(&search_key_handler)?;
         nwg::unbind_raw_event_handler(&tree_key_handler)?;
+        nwg::unbind_raw_event_handler(&list_duplicate_handler)?;
         nwg::unbind_raw_event_handler(&capture_handler)?;
+        nwg::unbind_raw_event_handler(&import_escape_handler)?;
         nwg::unbind_raw_event_handler(&raw_handler)?;
         nwg::unbind_event_handler(&handler);
         Ok(())
@@ -4163,6 +6072,23 @@ mod windows_ui {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn import_preview_retains_long_text_and_is_read_only() {
+            nwg::init().unwrap();
+            let mut window = nwg::Window::default();
+            nwg::Window::builder()
+                .size((400, 550))
+                .flags(nwg::WindowFlags::WINDOW)
+                .build(&mut window)
+                .unwrap();
+            let preview = build_import_preview(&window).unwrap();
+            let input = format!("{}\n最後一行", "完整設定\n".repeat(6000));
+            preview.set_text_unix2dos(&input);
+            assert!(preview.readonly());
+            assert_eq!(preview.text().replace("\r\n", "\n"), input);
+            assert!(preview.flags() & nwg::TextBoxFlags::VSCROLL.bits() != 0);
+        }
 
         #[test]
         fn connection_label_shows_endpoint_trust_and_read_only() {
@@ -4257,7 +6183,7 @@ mod windows_ui {
                 ]
             };
             let folded = BTreeSet::from([Some("機房".to_string())]);
-            let groups = library_groups(entries(), "", &folded);
+            let groups = library_groups(entries(), "", &folded, &BTreeSet::new());
             let room = groups
                 .iter()
                 .find(|group| group.key.as_deref() == Some("機房"))
@@ -4269,7 +6195,7 @@ mod windows_ui {
             assert!(groups
                 .iter()
                 .any(|group| group.key.as_deref() == Some("未分類") && group.visible.len() == 1));
-            let groups = library_groups(entries(), "alpha", &folded);
+            let groups = library_groups(entries(), "alpha", &folded, &BTreeSet::new());
             let room = groups
                 .iter()
                 .find(|group| group.key.as_deref() == Some("機房"))
@@ -4281,7 +6207,7 @@ mod windows_ui {
                     .collect::<Vec<_>>(),
                 ["4"]
             );
-            let groups = library_groups(entries(), "機房", &folded);
+            let groups = library_groups(entries(), "機房", &folded, &BTreeSet::new());
             let room = groups
                 .iter()
                 .find(|group| group.key.as_deref() == Some("機房"))
@@ -4442,9 +6368,9 @@ mod windows_ui {
             };
             use windows_sys::Win32::System::Threading::GetCurrentThreadId;
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                DestroyMenu, GetGUIThreadInfo, GetMenuItemCount, GetMenuItemID, GetMenuStringW,
-                PostMessageW, GUITHREADINFO, GUI_INMENUMODE, GUI_POPUPMENUMODE, MF_BYPOSITION,
-                WM_CANCELMODE,
+                DestroyMenu, GetGUIThreadInfo, GetMenuItemCount, GetMenuItemID, GetMenuState,
+                GetMenuStringW, PostMessageW, GUITHREADINFO, GUI_INMENUMODE, GUI_POPUPMENUMODE,
+                MF_BYPOSITION, MF_GRAYED, WM_CANCELMODE,
             };
             unsafe {
                 let name: Vec<u16> = format!("cracamole-menu-{}", std::process::id())
@@ -4467,11 +6393,20 @@ mod windows_ui {
                     return;
                 }
                 assert_ne!(SetThreadDesktop(desktop), 0);
-                let menu = build_connection_context_menu().expect("cannot build context menu");
-                assert_eq!(GetMenuItemCount(menu), 5);
-                for (index, expected) in ["連線", "編輯", "複製", "核對身分", "刪除"]
-                    .into_iter()
-                    .enumerate()
+                let menu =
+                    build_connection_context_menu(false, false).expect("cannot build context menu");
+                assert_eq!(GetMenuItemCount(menu), 7);
+                for (index, expected) in [
+                    "連線",
+                    "編輯",
+                    "複製",
+                    "核對身分",
+                    "刪除",
+                    "釘選",
+                    "複製設定",
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     assert_eq!(GetMenuItemID(menu, index as i32), (index + 1) as u32);
                     let mut text = [0u16; 32];
@@ -4485,6 +6420,33 @@ mod windows_ui {
                     assert_eq!(String::from_utf16_lossy(&text[..len as usize]), expected);
                 }
                 assert_ne!(DestroyMenu(menu), 0);
+                let active_menu = build_connection_context_menu(true, true)
+                    .expect("cannot build active context menu");
+                for index in [1, 2, 3, 4, 6] {
+                    assert_ne!(
+                        GetMenuState(active_menu, index, MF_BYPOSITION) & MF_GRAYED,
+                        0
+                    );
+                }
+                for index in [0, 5] {
+                    assert_eq!(
+                        GetMenuState(active_menu, index, MF_BYPOSITION) & MF_GRAYED,
+                        0
+                    );
+                }
+                let mut pin_label = [0u16; 32];
+                let length = GetMenuStringW(
+                    active_menu,
+                    5,
+                    pin_label.as_mut_ptr(),
+                    pin_label.len() as i32,
+                    MF_BYPOSITION,
+                );
+                assert_eq!(
+                    String::from_utf16_lossy(&pin_label[..length as usize]),
+                    "取消釘選"
+                );
+                assert_ne!(DestroyMenu(active_menu), 0);
                 nwg::init().unwrap();
                 let mut window = nwg::Window::default();
                 nwg::Window::builder()
@@ -4509,7 +6471,7 @@ mod windows_ui {
                     PostMessageW(hwnd as _, WM_CANCELMODE, 0, 0);
                     false
                 });
-                let result = connection_context_menu(&window, Some((10, 10)));
+                let result = connection_context_menu(&window, Some((10, 10)), false, false);
                 if !watcher.join().unwrap() {
                     eprintln!("SKIP: inactive isolated desktop cannot enter popup menu mode");
                 }
