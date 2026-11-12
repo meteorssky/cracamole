@@ -155,3 +155,30 @@ test('pasting again invalidates the previous reviewed import', async ({ page, re
   await expect(dialog.getByRole('button', { name: '檢查並新增 新資料' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: '新增全部' })).toBeVisible();
 });
+
+test('export search and paging retain selections and replace them only on request', async ({ page, request }) => {
+  await ready(request);
+  await login(page);
+  await page.evaluate(async () => {
+    const { state } = await import('/assets/js/state.js');
+    state.set('connections', Array.from({ length: 103 }, (_, index) => ({
+      id: `fixture-${index}`, name: `主機 ${String(index).padStart(3, '0')}`,
+      protocol: 'ssh', params: { hostname: `host-${index}.example`, username: 'tester' },
+    })));
+  });
+  await page.getByRole('button', { name: '匯出設定' }).click();
+  const dialog = page.locator('#portable-dialog');
+  await expect(dialog.locator('#portable-page-count')).toHaveText('第 1 / 2 頁（符合 103 筆）');
+  await dialog.getByRole('button', { name: '只選取本頁' }).click();
+  await expect(dialog.locator('#portable-results input:checked')).toHaveCount(100);
+  await dialog.getByRole('button', { name: '下一頁' }).click();
+  await expect(dialog.locator('#portable-selection-count')).toContainText('其中 100 筆不在本頁');
+  await dialog.getByRole('button', { name: '只選取本頁' }).click();
+  await expect(dialog.locator('#portable-results input:checked')).toHaveCount(3);
+  await dialog.getByLabel('搜尋匯出清單').fill('host-102.example');
+  await expect(dialog.locator('#portable-page-count')).toHaveText('第 1 / 1 頁（符合 1 筆）');
+  await expect(dialog.locator('#portable-selection-count')).toContainText('其中 2 筆不在本頁');
+  await dialog.getByRole('button', { name: '只選取本頁' }).click();
+  await expect(dialog.locator('#portable-results input:checked')).toHaveCount(1);
+  await expect(dialog.locator('#portable-results input:checked').locator('..')).toContainText('主機 102');
+});
