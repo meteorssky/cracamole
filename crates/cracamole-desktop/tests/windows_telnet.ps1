@@ -189,8 +189,10 @@ try {
         $change = [IntPtr]([TelnetGui]::GetDlgCtrlID($combos[0]) -bor (1 -shl 16))
         [void][TelnetGui]::SendMessageInt($window, 0x0111, $change, $combos[0])
         Set-Text $inputs[4] '127.0.0.1'; Set-Text $inputs[5] ([string]$SwitchPort)
+        Set-Text $inputs[7] 'fixture-group-secret'
         Click (Button '儲存')
         $beforeRename = (Get-Content -Raw -Encoding utf8 (Join-Path $testDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.params.port -eq [string]$SwitchPort }
+        if ($beforeRename.params.password -ne 'fixture-group-secret') { throw '更名前未保存測試機密' }
         foreach ($names in @(@('機房', '機房暫存'), @('機房暫存', '機房'))) {
             if ([TelnetGui]::SendMessage($combos[3], 0x014D, [IntPtr](-1), ('群組：' + $names[0])) -eq [IntPtr](-1)) { throw '找不到待更名群組' }
             Click (Button '群組更名')
@@ -546,9 +548,10 @@ try {
         Wait-For { @((0..([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32() - 1)) | Where-Object { [TelnetGui]::ListText($list, $_).Contains('目前工作階段（已連線）') -and [TelnetGui]::ListText($list, $_).Contains('Telnet fixture') }).Count -eq 1 } '返回主機尚未完成連線'
         Click (Button '中斷連線')
         Wait-For { ([TelnetGui]::GetWindowLong($heading[0], -16) -band 0x10000000) -ne 0 } '中斷後未返回連線庫'
-        Wait-For { [TelnetGui]::ListText($list, 0).Contains('Telnet fixture') } '最近使用的連線未排序在前'
-        if (-not [TelnetGui]::ListText($list, 0).Contains('已中斷')) { throw '手動中斷狀態未保留' }
+        $rows = [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+        if (@((0..($rows - 1)) | Where-Object { [TelnetGui]::ListText($list, $_).Contains('Telnet fixture') -and [TelnetGui]::ListText($list, $_).Contains('已中斷') }).Count -ne 1) { throw '手動中斷狀態未保留' }
         Click (Button '重新載入')
+        Wait-For { [TelnetGui]::ListText($list, 0).Contains('Telnet fixture') } '重新載入後最近使用的連線未排序在前'
         if (-not [TelnetGui]::ListText($list, 0).Contains('已中斷')) { throw '重新載入後手動中斷狀態消失' }
         if (-not [IO.File]::Exists((Join-Path $testDir 'recent-connections.json'))) { throw '最近連線資料未保存' }
         Click (Button '登出')
