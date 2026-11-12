@@ -182,3 +182,27 @@ test('export search and paging retain selections and replace them only on reques
   await expect(dialog.locator('#portable-results input:checked')).toHaveCount(1);
   await expect(dialog.locator('#portable-results input:checked').locator('..')).toContainText('主機 102');
 });
+
+test('bulk import requires confirmation and creates all reviewed connections', async ({ page, request }, info) => {
+  await ready(request);
+  await login(page);
+  const tag = `${info.project.name}-${Date.now()}`;
+  const names = [`匯入甲 ${tag}`, `匯入乙 ${tag}`];
+  const content = JSON.stringify({ format: 'cracamole-connections', version: 1,
+    connections: names.map((name, index) => ({ name, protocol: 'ssh', params: { hostname: `host${index}.example` } })) });
+  await page.getByRole('button', { name: '匯入設定' }).click();
+  const dialog = page.locator('#portable-dialog');
+  await dialog.getByLabel('交換資料').fill(content);
+  await dialog.getByRole('button', { name: '驗證並預覽' }).click();
+  await expect(dialog.getByRole('status')).toContainText('已驗證 2 筆');
+  await dialog.getByRole('button', { name: '新增全部' }).click();
+  const confirm = page.getByRole('dialog', { name: '新增全部匯入設定？' });
+  await confirm.getByRole('button', { name: '取消' }).click();
+  let list = await (await page.request.get('api/connections')).json();
+  expect(list.filter(item => names.includes(item.name))).toHaveLength(0);
+  await dialog.getByRole('button', { name: '新增全部' }).click();
+  await confirm.getByRole('button', { name: '新增全部' }).click();
+  await expect(dialog.getByRole('status')).toContainText('已新增 2 筆');
+  list = await (await page.request.get('api/connections')).json();
+  expect(list.filter(item => names.includes(item.name))).toHaveLength(2);
+});

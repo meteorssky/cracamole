@@ -256,6 +256,8 @@ Windows x64 本機測試：Chromium、Firefox、WebKit 已驗證匯出搜尋與�
 
 Windows x64 的 Chromium、Firefox、WebKit 亦已驗證 Web 群組合併後兩側連線 ID 與公開參數保留、介面群組數更新及 API 不回傳密碼；此瀏覽器測試不讀取保存的機密值。
 
+Windows x64 的 Chromium、Firefox、WebKit 已驗證手動貼入交換資料後，整批匯入的取消不新增、確認後新增全部；測試未讀寫系統剪貼簿。
+
 具名群組內的卡片顯示 `/` 後的主機簡稱，完整名稱仍供搜尋及輔助技術使用；釘選區保留完整名稱，以免不同群組的同名主機難以區分。Windows x64 的 Chromium、Firefox、WebKit 已驗證名稱與釘選切換。
 
 連線狀態更新及釘選造成清單重繪時，以連線 ID 保留卡片操作焦點，群組標題與新增按鈕則以群組識別保留焦點；若目標不再可見則回到搜尋框，避免同名主機造成焦點錯置。Windows x64 的 Chromium、Firefox、WebKit 已驗證同名主機及群組操作的狀態更新焦點。
