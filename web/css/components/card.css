@@ -170,7 +170,7 @@
 
 .card:hover,
 .card:focus-within {
-  z-index: 3;
+  z-index: 6;
 }
 
 .card:hover .card__actions,

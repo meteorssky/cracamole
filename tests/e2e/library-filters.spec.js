@@ -220,3 +220,21 @@ test('group header and actions remain available while scrolling its hosts', asyn
   await add.click();
   await expect(page.getByRole('dialog', { name: '新增連線' }).getByLabel('所屬群組（選填）')).toHaveValue(group);
 });
+
+test('card actions remain clickable beside the next group header', async ({ page, request }, info) => {
+  await ready(request);
+  await login(page, { fresh: true });
+  const suffix = `${info.project.name} ${Date.now()}`;
+  const name = `遮擋檢查 ${suffix}`;
+  for (const title of [name, `遮擋群組 ${suffix} / 主機`]) {
+    const response = await page.request.post('api/connections', {
+      headers: { Origin: new URL(page.url()).origin },
+      data: { name: title, protocol: 'ssh', params: { hostname: 'example.test' } },
+    });
+    expect(response.status()).toBe(201);
+  }
+  await page.reload();
+  await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
+  await page.getByRole('button', { name: `編輯 ${name}`, exact: true }).click({ timeout: 5000 });
+  await expect(page.getByRole('dialog', { name: '編輯連線' })).toBeVisible();
+});
