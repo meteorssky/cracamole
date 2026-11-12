@@ -227,6 +227,26 @@ try {
                 Set-Text $inputs[14] ''
             }
         }
+        if ([TelnetGui]::SendMessage($combos[3], 0x014D, [IntPtr](-1), '群組：機房') -eq [IntPtr](-1)) { throw '找不到待移至未分類的群組' }
+        Click (Button '群組更名')
+        Set-Text $inputs[16] ''
+        [void][TelnetGui]::PostMessage((Button '確認更名'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '移至未分類確認未顯示'
+        [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]6, [IntPtr]::Zero)
+        Wait-For { ([TelnetGui]::GetWindowLong($inputs[16], -16) -band 0x10000000) -eq 0 } '移至未分類未完成'
+        $ungrouped = (Get-Content -Raw -Encoding utf8 (Join-Path $testDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.id -eq $beforeRename.id }
+        if ($ungrouped.name -ne '切換目標' -or (ConvertTo-Json $ungrouped.params -Compress) -ne (ConvertTo-Json $beforeRename.params -Compress)) { throw '移至未分類改變連線設定或機密' }
+        Set-Text $inputs[14] '切換目標'
+        Wait-For { [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]1 } '找不到已移至未分類的連線'
+        [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
+        Click (Button '編輯')
+        Wait-For { ([TelnetGui]::GetWindowLong($inputs[13], -16) -band 0x10000000) -ne 0 } '編輯器未顯示群組欄位'
+        Set-Text $inputs[13] '機房'
+        Click (Button '儲存')
+        Wait-For { ([TelnetGui]::GetWindowLong($inputs[13], -16) -band 0x10000000) -eq 0 } '還原群組未完成'
+        $restored = (Get-Content -Raw -Encoding utf8 (Join-Path $testDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.id -eq $beforeRename.id }
+        if ($restored.name -ne '機房 / 切換目標' -or (ConvertTo-Json $restored.params -Compress) -ne (ConvertTo-Json $beforeRename.params -Compress)) { throw '還原群組改變連線設定或機密' }
+        Set-Text $inputs[14] ''
         [void][TelnetGui]::SendMessageInt($combos[3], 0x014E, [IntPtr]::Zero, [IntPtr]::Zero)
     }
     Click (Button '新增')
