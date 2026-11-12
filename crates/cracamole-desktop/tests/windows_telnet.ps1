@@ -1,4 +1,5 @@
 ﻿param([string]$Binary, [int]$Port, [string]$SyncDir, [int]$SwitchPort, [switch]$RemoteClose, [switch]$Expire)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
@@ -372,8 +373,10 @@ try {
         [void][TelnetGui]::SendMessageInt($tree, 0x110B, [IntPtr]9, $root)
         [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]0x28, [IntPtr]::Zero)
         if ([TelnetGui]::SendMessageInt($tree, 0x110A, [IntPtr]9, [IntPtr]::Zero) -ne $child) { throw '搜尋框方向鍵未選取樹狀主機節點' }
-        Wait-For { [TelnetGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero } '樹節點選取未同步連線清單'
-        if (-not [TelnetGui]::ListText($list, 0).Contains('切換目標')) { throw '樹狀節點未指向切換目標' }
+        Wait-For {
+            $selected = [TelnetGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+            $selected -ge 0 -and [TelnetGui]::ListText($list, $selected).Contains('切換目標')
+        } '樹節點選取未同步至切換目標'
         [void][TelnetGui]::SendMessageInt($tree, 0x0100, [IntPtr]13, [IntPtr]::Zero)
         Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '樹節點切換未顯示確認'
         [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]7, [IntPtr]::Zero)
