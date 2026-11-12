@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod credentials;
+pub mod portable;
 
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, path::PathBuf};
@@ -18,7 +19,7 @@ pub struct Connection {
     pub params: BTreeMap<String, String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Draft {
     pub name: String,
     pub protocol: String,
@@ -329,6 +330,101 @@ impl Store {
         Ok(Some(public))
     }
 
+    /// 原子新增一批已驗證且不含機密的交換草稿。
+    pub async fn import_new(
+        &self,
+        drafts: Vec<Draft>,
+    ) -> io::Result<Result<Vec<PublicConnection>, Invalid>> {
+        if drafts.is_empty() || drafts.len() > 100 {
+            return Ok(Err(invalid("connections", "匯入須包含 1 至 100 筆連線。")));
+        }
+        for draft in &drafts {
+            if draft
+                .params
+                .keys()
+                .any(|key| SECRETS.contains(&key.as_str()))
+            {
+                return Ok(Err(invalid("params", "匯入資料不可包含機密欄位。")));
+            }
+            if let Err(error) = validate(draft) {
+                return Ok(Err(error));
+            }
+        }
+        let mut entries = self.entries.lock().await;
+        let mut next = entries.clone();
+        let mut created = Vec::with_capacity(drafts.len());
+        for draft in drafts {
+            let id = loop {
+                let candidate = Uuid::new_v4().to_string();
+                if !next.contains_key(&candidate) {
+                    break candidate;
+                }
+            };
+            let connection = Connection {
+                id: id.clone(),
+                name: draft.name.trim().to_owned(),
+                protocol: draft.protocol,
+                params: draft.params,
+            };
+            created.push(connection.public());
+            next.insert(id, connection);
+        }
+        self.persist(&next).await?;
+        *entries = next;
+        Ok(Ok(created))
+    }
+    /// 原子重新命名具名群組；新名稱為空時移至未分類，保留 ID 與機密。
+    pub async fn rename_group(&self, old: &str, new: &str) -> io::Result<Result<usize, Invalid>> {
+        let old = old.trim();
+        let new = new.trim();
+        if old.is_empty()
+            || old.contains('/')
+            || new.contains('/')
+            || new.chars().any(char::is_control)
+            || new.chars().count() > 116
+        {
+            return Ok(Err(invalid(
+                "group",
+                "群組名稱不可超過 116 個字元，也不可含斜線或控制字元。",
+            )));
+        }
+        let mut entries = self.entries.lock().await;
+        let mut next = entries.clone();
+        let mut count = 0;
+        for entry in next.values_mut() {
+            let Some((group, member)) = entry.name.split_once('/') else {
+                continue;
+            };
+            if group.trim() != old {
+                continue;
+            }
+            let member = member.trim();
+            let name = if new.is_empty() {
+                if member.is_empty() || member.contains('/') {
+                    return Ok(Err(invalid(
+                        "group",
+                        "部分連線名稱為空或含斜線，請先逐筆修改後再移至未分類。",
+                    )));
+                }
+                member.to_string()
+            } else {
+                format!("{new} / {member}")
+            };
+            if name.chars().count() > 120 {
+                return Ok(Err(invalid(
+                    "group",
+                    "新群組名稱會使部分連線名稱超過 120 個字元。",
+                )));
+            }
+            entry.name = name;
+            count += 1;
+        }
+        if count > 0 && old != new {
+            self.persist(&next).await?;
+            *entries = next;
+        }
+        Ok(Ok(count))
+    }
     pub async fn delete(&self, id: &str) -> io::Result<bool> {
         let mut entries = self.entries.lock().await;
         let mut next = entries.clone();
@@ -402,6 +498,28 @@ mod tests {
             .unwrap()
             .params
             .contains_key("password"));
+    }
+
+    #[tokio::test]
+    async fn ungroup_preserves_identity_and_rejects_ambiguous_names_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().into()).await.unwrap();
+        let mut draft = rdp(&[("password", "secret")]);
+        draft.name = "機房 / 主機".into();
+        let saved = store.save(None, draft).await.unwrap().unwrap();
+        assert_eq!(store.rename_group("機房", "").await.unwrap().unwrap(), 1);
+        let connection = store.get(&saved.id).await.unwrap();
+        assert_eq!(connection.name, "主機");
+        assert_eq!(connection.params["password"], "secret");
+
+        let mut valid = rdp(&[]);
+        valid.name = "另一組 / 正常".into();
+        let valid = store.save(None, valid).await.unwrap().unwrap();
+        let mut ambiguous = rdp(&[]);
+        ambiguous.name = "另一組 / 子群 / 主機".into();
+        store.save(None, ambiguous).await.unwrap().unwrap();
+        assert!(store.rename_group("另一組", "").await.unwrap().is_err());
+        assert_eq!(store.get(&valid.id).await.unwrap().name, "另一組 / 正常");
     }
 
     #[test]
