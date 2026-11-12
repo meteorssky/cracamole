@@ -271,6 +271,15 @@ try {
         [void][TelnetGui]::SendMessageInt($inputs[4], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     } else { Click (Button '儲存') }
     if (-not $SwitchPort -and -not $env:CRACAMOLE_TEST_SAVE_CONNECT -and -not $env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
+        Click (Button '釘選／取消')
+        Wait-For { [TelnetGui]::ListText($list, 0).Contains('★ ') } '釘選後清單未顯示標記'
+        if (-not [IO.File]::Exists((Join-Path $testDir 'pinned-connections.json'))) { throw '釘選資料未保存' }
+        Click (Button '重新載入')
+        Wait-For { [TelnetGui]::ListText($list, 0).Contains('★ ') } '重新載入後釘選未保留'
+        Click (Button '釘選／取消')
+        Wait-For { -not [TelnetGui]::ListText($list, 0).Contains('★ ') } '取消釘選後標記仍顯示'
+        Click (Button '重新載入')
+        Wait-For { -not [TelnetGui]::ListText($list, 0).Contains('★ ') } '重新載入後已取消的釘選又出現'
         if (-not [TelnetGui]::IsWindowEnabled((Button '複製設定'))) { throw '選取連線時複製設定未啟用' }
         [void][TelnetGui]::PostMessage((Button '複製設定'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
         Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '複製設定確認未顯示'
