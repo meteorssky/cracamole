@@ -190,6 +190,20 @@ try {
         [void][TelnetGui]::SendMessageInt($window, 0x0111, $change, $combos[0])
         Set-Text $inputs[4] '127.0.0.1'; Set-Text $inputs[5] ([string]$SwitchPort)
         Click (Button '儲存')
+        $beforeRename = (Get-Content -Raw -Encoding utf8 (Join-Path $testDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.params.port -eq [string]$SwitchPort }
+        foreach ($names in @(@('機房', '機房暫存'), @('機房暫存', '機房'))) {
+            if ([TelnetGui]::SendMessage($combos[3], 0x014D, [IntPtr](-1), ('群組：' + $names[0])) -eq [IntPtr](-1)) { throw '找不到待更名群組' }
+            Click (Button '群組更名')
+            Wait-For { [TelnetGui]::EditText($inputs[16]) -eq $names[0] } '群組更名未載入原名稱'
+            Set-Text $inputs[16] $names[1]
+            [void][TelnetGui]::PostMessage((Button '確認更名'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+            Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } '群組更名確認未顯示'
+            [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]6, [IntPtr]::Zero)
+            Wait-For { ([TelnetGui]::GetWindowLong($inputs[16], -16) -band 0x10000000) -eq 0 } '群組更名未完成'
+            $renamed = (Get-Content -Raw -Encoding utf8 (Join-Path $testDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.params.port -eq [string]$SwitchPort }
+            if ($renamed.id -ne $beforeRename.id -or $renamed.name -ne ($names[1] + ' / 切換目標') -or (ConvertTo-Json $renamed.params -Compress) -ne (ConvertTo-Json $beforeRename.params -Compress)) { throw '群組更名改變連線 ID 或設定' }
+        }
+        [void][TelnetGui]::SendMessageInt($combos[3], 0x014E, [IntPtr]::Zero, [IntPtr]::Zero)
     }
     Click (Button '新增')
     if ($env:CRACAMOLE_TEST_CONNECT_ONCE -eq '1') {
