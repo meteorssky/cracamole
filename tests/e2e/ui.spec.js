@@ -124,8 +124,7 @@ test('ui: group field edits the compatible name prefix', async ({ page }) => {
   await expect(editor.getByLabel('連線名稱')).toHaveValue('主機');
   const group = editor.getByLabel('所屬群組（選填）');
   await expect(group).toHaveValue(original.split(' / ')[0]);
-  expect(await editor.locator('#editor-group-options option').evaluateAll(options => options.map(option => option.value)))
-    .toContain(original.split(' / ')[0]);
+  await expect(editor.locator(`#editor-group-options option[value=${JSON.stringify(original.split(' / ')[0])}]`)).toHaveCount(1);
   await group.fill('新群組');
   const request = page.waitForRequest(req => req.method() === 'PUT' && req.url().includes('/api/connections/'));
   await editor.getByRole('button', { name: '儲存連線', exact: true }).click();
