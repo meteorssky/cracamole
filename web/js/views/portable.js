@@ -24,14 +24,28 @@ export function initPortable({ onImported }) {
   const filter = $('portable-filter');
   let mode = '';
   let revision = 0;
+  let page = 0;
   const invalidate = () => { revision++; preview.disabled = false; importAll.hidden = true; };
   const updateSelection = () => {
     const boxes = [...results.querySelectorAll('input[type="checkbox"]')];
     const count = boxes.filter(box => box.checked).length;
     const hiddenCount = boxes.filter(box => box.checked && box.parentElement.hidden).length;
-    $('portable-selection-count').textContent = `已選取 ${count} 筆${hiddenCount ? `（其中 ${hiddenCount} 筆不符合搜尋）` : ''}，每次最多 100 筆`;
+    $('portable-selection-count').textContent = `已選取 ${count} 筆${hiddenCount ? `（其中 ${hiddenCount} 筆不在本頁）` : ''}，每次最多 100 筆`;
     $('portable-select-first').disabled = !boxes.some(box => !box.parentElement.hidden);
     preview.disabled = count === 0 || count > 100;
+  };
+  const updatePage = () => {
+    const query = filter.value.trim().toLowerCase();
+    const labels = [...results.querySelectorAll('label[data-search]')];
+    const matches = labels.filter(label => label.dataset.search.includes(query));
+    const pages = Math.ceil(matches.length / 100);
+    page = Math.max(0, Math.min(page, pages - 1));
+    const visible = new Set(matches.slice(page * 100, (page + 1) * 100));
+    for (const label of labels) label.hidden = !visible.has(label);
+    $('portable-page-previous').disabled = page === 0;
+    $('portable-page-next').disabled = page + 1 >= pages;
+    $('portable-page-count').textContent = pages ? `第 ${page + 1} / ${pages} 頁（符合 ${matches.length} 筆）` : '沒有符合的連線';
+    updateSelection();
   };
   const selectionChanged = () => {
     invalidate();
@@ -81,6 +95,7 @@ export function initPortable({ onImported }) {
     mode = 'export';
     selection.hidden = false;
     filter.value = '';
+    page = 0;
     importAll.hidden = true;
     document.getElementById('portable-format-field').hidden = false;
     copy.hidden = false;
@@ -100,7 +115,7 @@ export function initPortable({ onImported }) {
       document.createTextNode(' ' + connection.name + ' (' + connection.protocol.toUpperCase() + ')'),
       el('br', {}),
     )));
-    updateSelection();
+    updatePage();
     if (!connections.length) status.textContent = '目前沒有可匯出的連線。';
     openDialog(dialog, preview.disabled ? (connections.length ? $('portable-select-first') : $('portable-close')) : preview);
   };
@@ -110,12 +125,11 @@ export function initPortable({ onImported }) {
     if (mode === 'export') selectionChanged();
   });
   filter.addEventListener('input', () => {
-    const query = filter.value.trim().toLowerCase();
-    for (const label of results.querySelectorAll('label[data-search]')) {
-      label.hidden = !label.dataset.search.includes(query);
-    }
-    updateSelection();
+    page = 0;
+    updatePage();
   });
+  $('portable-page-previous').addEventListener('click', () => { page--; updatePage(); });
+  $('portable-page-next').addEventListener('click', () => { page++; updatePage(); });
   $('portable-select-first').addEventListener('click', () => {
     let selected = 0;
     for (const box of results.querySelectorAll('input[type="checkbox"]')) {

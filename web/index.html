@@ -332,7 +332,10 @@
         <div id="portable-selection" class="library-filters" hidden>
           <label class="field__label" for="portable-filter">搜尋匯出清單</label>
           <input id="portable-filter" class="input" type="search" autocomplete="off" placeholder="名稱、協定、主機或帳號">
-          <button id="portable-select-first" class="btn btn--small" type="button">選取符合的前 100 筆</button>
+          <button id="portable-page-previous" class="btn btn--small" type="button">上一頁</button>
+          <button id="portable-page-next" class="btn btn--small" type="button">下一頁</button>
+          <span id="portable-page-count" aria-live="polite"></span>
+          <button id="portable-select-first" class="btn btn--small" type="button">只選取本頁</button>
           <button id="portable-clear-selection" class="btn btn--small" type="button">清除選取</button>
           <span id="portable-selection-count" aria-live="polite"></span>
         </div>
