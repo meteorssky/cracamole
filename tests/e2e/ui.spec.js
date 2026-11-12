@@ -147,6 +147,37 @@ test('ui: move a group to ungrouped without deleting its connections', async ({ 
   for (const member of members) await expect(page.getByRole('button', { name: `連線 ${member}`, exact: true })).toBeVisible();
 });
 
+test('ui: merging groups preserves both connection identities and settings', async ({ page }) => {
+  await login(page);
+  const tag = String(Date.now());
+  const source = `來源 ${tag}`;
+  const target = `目標 ${tag}`;
+  const ids = [];
+  for (const [group, host] of [[source, 'source.example'], [target, 'target.example']]) {
+    const response = await page.request.post('api/connections', {
+      headers: { Origin: origin(page) },
+      data: { name: `${group} / 主機`, protocol: 'ssh', params: { hostname: host, username: 'alice', password: 'fixture-merge-secret' } },
+    });
+    expect(response.status()).toBe(201);
+    ids.push((await response.json()).id);
+  }
+  const before = await Promise.all(ids.map(async id => (await page.request.get(`api/connections/${id}`)).json()));
+  await page.reload();
+  await page.getByRole('button', { name: `重新命名群組 ${source}` }).click();
+  const dialog = page.getByRole('dialog', { name: '重新命名群組' });
+  await dialog.getByLabel('新群組名稱').fill(target);
+  const response = page.waitForResponse(item => item.url().endsWith('/api/connections/rename-group'));
+  await dialog.getByRole('button', { name: '重新命名', exact: true }).click();
+  expect((await response).status()).toBe(200);
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText(`${target}（2）`, { exact: true })).toBeVisible();
+  const after = await Promise.all(ids.map(async id => (await page.request.get(`api/connections/${id}`)).json()));
+  expect(after.map(item => item.id)).toEqual(ids);
+  expect(after.map(item => item.name)).toEqual([`${target} / 主機`, `${target} / 主機`]);
+  expect(after.map(item => item.params)).toEqual(before.map(item => item.params));
+  expect(after.every(item => !('password' in item.params))).toBe(true);
+});
+
 test('ui: reserved group names remain separate and legacy collapsed state is migrated', async ({ page }) => {
   await login(page);
   const tag = String(Date.now());
