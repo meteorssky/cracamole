@@ -112,6 +112,7 @@ try {
         $process.Refresh(); if ($process.ExitCode -ne 0) { throw '桌面程式異常結束' }
         return
     }
+    Wait-For { ([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -ne 0 -and -not [TelnetGui]::IsWindowEnabled((Button '連線')) } '登入後空連線庫未完成初始化'
     foreach ($label in @('連線', '編輯', '刪除', '核對身分', '複製', '複製設定')) {
         if ([TelnetGui]::IsWindowEnabled((Button $label))) { throw "無連線時操作仍啟用：$label" }
     }
@@ -154,6 +155,16 @@ try {
                 throw "寬視窗管理按鈕未位於右側工作區：$label"
             }
         }
+        if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 700, 700, 0x0006)) { throw '無法切換窄工作台' }
+        Wait-For {
+            ([TelnetGui]::GetWindowLong($stage[0], -16) -band 0x10000000) -eq 0 -and
+            [TelnetGui]::GetWindowRect($list, [ref]$after) -and ($after.Right - $after.Left) -gt 260
+        } '窄視窗未切換至單欄清單'
+        if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 900, 700, 0x0006)) { throw '無法切回寬工作台' }
+        Wait-For {
+            ([TelnetGui]::GetWindowLong($stage[0], -16) -band 0x10000000) -ne 0 -and
+            [TelnetGui]::GetWindowRect($list, [ref]$after) -and ($after.Right - $after.Left) -eq 260
+        } '重新放大後未還原雙欄工作台'
     }
     if ($env:CRACAMOLE_TEST_SAVE_CONNECT -eq '1') {
         Set-Text $inputs[14] 'alice@127.0.0.1:2222'
