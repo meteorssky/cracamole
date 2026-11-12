@@ -276,6 +276,22 @@ try {
         if (-not [IO.File]::Exists((Join-Path $testDir 'pinned-connections.json'))) { throw '釘選資料未保存' }
         Click (Button '重新載入')
         Wait-For { [TelnetGui]::ListText($list, 0).Contains('★ ') } '重新載入後釘選未保留'
+        if (-not $RemoteClose -and -not $Expire) {
+            Click (Button '登出')
+            Wait-For { ([TelnetGui]::GetWindowLong($inputs[1], -16) -band 0x10000000) -ne 0 } '登出後登入欄位未顯示'
+            Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
+            Click (Button '登入')
+            Wait-For { [TelnetGui]::ListText($list, 0).Contains('★ ') } '重新登入後釘選未保留'
+            $tree = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'SysTreeView32' })[0]
+            Click (Button '樹狀檢視')
+            Wait-For { [TelnetGui]::SendMessageInt($tree, 0x1105, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]4 } '釘選樹狀清單未顯示常用與原群組'
+            $root = [TelnetGui]::SendMessageInt($tree, 0x110A, [IntPtr]0, [IntPtr]::Zero)
+            $child = [TelnetGui]::SendMessageInt($tree, 0x110A, [IntPtr]4, $root)
+            if ($child -eq [IntPtr]::Zero) { throw '常用樹狀群組沒有連線' }
+            [void][TelnetGui]::SendMessageInt($tree, 0x110B, [IntPtr]9, $child)
+            Wait-For { [TelnetGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero } '常用樹狀節點未同步清單選取'
+            Click (Button '清單檢視')
+        }
         Click (Button '釘選／取消')
         Wait-For { -not [TelnetGui]::ListText($list, 0).Contains('★ ') } '取消釘選後標記仍顯示'
         Click (Button '重新載入')
