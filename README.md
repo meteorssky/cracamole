@@ -123,6 +123,22 @@ cargo build -p cracamole-desktop --release --locked
 
 啟動執行檔前同樣須在該程序環境中設定管理員密碼。Windows x64 本機已以 release 執行檔測試錯誤設定、登入與連線管理、Telnet，以及 loopback fixture 的 RDP TLS／NLA；這不代表已完成真實遠端服務或實體輸入的驗收。
 
+若已用 `cargo build -p cracamole-desktop --locked` 建置除錯版，想在 PowerShell 中輸入密碼而不將字元顯示在畫面上，可在 repository 根目錄執行下列指令。程式關閉後會還原原本的程序環境變數；程式運行時仍會透過環境變數取得明文密碼。
+
+```powershell
+$desktopPassword = Read-Host '請輸入管理員密碼（至少 12 字元）' -AsSecureString
+$desktopPreviousPassword = [Environment]::GetEnvironmentVariable('CRACAMOLE_ADMIN_PASSWORD', 'Process')
+$desktopPasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($desktopPassword)
+try {
+    $env:CRACAMOLE_ADMIN_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($desktopPasswordPtr)
+    & '.\target\debug\cracamole-desktop.exe'
+} finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($desktopPasswordPtr)
+    [Environment]::SetEnvironmentVariable('CRACAMOLE_ADMIN_PASSWORD', $desktopPreviousPassword, 'Process')
+    $desktopPassword.Dispose()
+}
+```
+
 目前的 MSVC release 執行檔動態依賴 Windows 系統程式庫、通用 C runtime 與 `VCRUNTIME140.dll`。目標電腦須具備版本不舊於建置工具的 [Microsoft Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)；不要單獨從非官方來源下載 DLL。尚未在全新安裝的 Windows 上驗證部署。
 
 若要另行建置靜態連結 CRT 的 Windows x64 版本，可使用獨立目錄，避免覆蓋上述執行檔：
