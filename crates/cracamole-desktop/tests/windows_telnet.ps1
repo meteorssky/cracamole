@@ -529,12 +529,26 @@ try {
         Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } 'recent connection confirmation missing'
         [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]6, [IntPtr]::Zero)
         Wait-For { [IO.File]::Exists((Join-Path $SyncDir 'second-closed')) -and [IO.File]::Exists((Join-Path $SyncDir 'returned-connected')) } 'recent connection did not return to first server'
+        Wait-For { @((0..([TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32() - 1)) | Where-Object { [TelnetGui]::ListText($list, $_).Contains('目前工作階段（已連線）') -and [TelnetGui]::ListText($list, $_).Contains('Telnet fixture') }).Count -eq 1 } '返回主機尚未完成連線'
         Click (Button '中斷連線')
         Wait-For { ([TelnetGui]::GetWindowLong($heading[0], -16) -band 0x10000000) -ne 0 } '中斷後未返回連線庫'
-        Set-Text $inputs[14] 'Telnet fixture'
+        Wait-For { [TelnetGui]::ListText($list, 0).Contains('Telnet fixture') } '最近使用的連線未排序在前'
         if (-not [TelnetGui]::ListText($list, 0).Contains('已中斷')) { throw '手動中斷狀態未保留' }
         Click (Button '重新載入')
         if (-not [TelnetGui]::ListText($list, 0).Contains('已中斷')) { throw '重新載入後手動中斷狀態消失' }
+        if (-not [IO.File]::Exists((Join-Path $testDir 'recent-connections.json'))) { throw '最近連線資料未保存' }
+        Click (Button '登出')
+        Wait-For { ([TelnetGui]::GetWindowLong($inputs[1], -16) -band 0x10000000) -ne 0 } '最近連線測試登出後未顯示登入欄位'
+        Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
+        Click (Button '登入')
+        try {
+            Wait-For { [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]2 -and [TelnetGui]::ListText($list, 0).Contains('Telnet fixture') } '重新登入後最近連線排序未保留'
+        } catch {
+            $count = [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+            $row = if ($count -gt 0) { [TelnetGui]::ListText($list, 0) } else { '' }
+            throw "重新登入後最近連線排序未保留：筆數=$count、首列=$row、搜尋=$([TelnetGui]::EditText($inputs[14]))"
+        }
+        Set-Text $inputs[14] 'Telnet fixture'
         Set-Text $inputs[14] '切換目標'
         [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
         [void][TelnetGui]::PostMessage((Button '刪除'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
