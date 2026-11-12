@@ -21,14 +21,16 @@ export function initPortable({ onImported }) {
   const paste = $('portable-paste');
   const importAll = $('portable-import-all');
   const selection = $('portable-selection');
+  const filter = $('portable-filter');
   let mode = '';
   let revision = 0;
   const invalidate = () => { revision++; preview.disabled = false; importAll.hidden = true; };
   const updateSelection = () => {
     const boxes = [...results.querySelectorAll('input[type="checkbox"]')];
     const count = boxes.filter(box => box.checked).length;
-    $('portable-selection-count').textContent = `已選取 ${count} 筆（每次最多 100 筆）`;
-    $('portable-select-first').disabled = boxes.length === 0;
+    const hiddenCount = boxes.filter(box => box.checked && box.parentElement.hidden).length;
+    $('portable-selection-count').textContent = `已選取 ${count} 筆${hiddenCount ? `（其中 ${hiddenCount} 筆不符合搜尋）` : ''}，每次最多 100 筆`;
+    $('portable-select-first').disabled = !boxes.some(box => !box.parentElement.hidden);
     preview.disabled = count === 0 || count > 100;
   };
   const selectionChanged = () => {
@@ -78,6 +80,7 @@ export function initPortable({ onImported }) {
     invalidate();
     mode = 'export';
     selection.hidden = false;
+    filter.value = '';
     importAll.hidden = true;
     document.getElementById('portable-format-field').hidden = false;
     copy.hidden = false;
@@ -92,7 +95,7 @@ export function initPortable({ onImported }) {
     preview.disabled = false;
     preview.textContent = '產生交換資料';
     const connections = state.get('connections') || [];
-    results.replaceChildren(...connections.map(connection => el('label', {},
+    results.replaceChildren(...connections.map(connection => el('label', { 'data-search': [connection.name, connection.protocol, connection.params?.hostname, connection.params?.username].join(' ').toLowerCase() },
       el('input', { type: 'checkbox', value: connection.id, checked: selectedId ? connection.id === selectedId : connections.length <= 100 }),
       document.createTextNode(' ' + connection.name + ' (' + connection.protocol.toUpperCase() + ')'),
       el('br', {}),
@@ -106,8 +109,18 @@ export function initPortable({ onImported }) {
   results.addEventListener('change', () => {
     if (mode === 'export') selectionChanged();
   });
+  filter.addEventListener('input', () => {
+    const query = filter.value.trim().toLowerCase();
+    for (const label of results.querySelectorAll('label[data-search]')) {
+      label.hidden = !label.dataset.search.includes(query);
+    }
+    updateSelection();
+  });
   $('portable-select-first').addEventListener('click', () => {
-    [...results.querySelectorAll('input[type="checkbox"]')].forEach((box, index) => { box.checked = index < 100; });
+    let selected = 0;
+    for (const box of results.querySelectorAll('input[type="checkbox"]')) {
+      box.checked = !box.parentElement.hidden && selected++ < 100;
+    }
     selectionChanged();
   });
   $('portable-clear-selection').addEventListener('click', () => {
