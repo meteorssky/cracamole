@@ -46,8 +46,10 @@ public static class RdpFullGui {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(Point point);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr h);
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr h, IntPtr dc);
     [DllImport("gdi32.dll")] private static extern uint GetPixel(IntPtr dc, int x, int y);
+    public static string PixelDiagnostic = "not sampled";
     public static bool VisibleFixturePixels(IntPtr frame, uint pid, uint color1, uint color2) {
         Rect rect;
         if (!GetWindowRect(frame, out rect)) return false;
@@ -59,9 +61,9 @@ public static class RdpFullGui {
                     Point point = new Point { X = (rect.Left + rect.Right) / 2 + dx, Y = (rect.Top + rect.Bottom) / 2 + dy };
                     uint owner;
                     GetWindowThreadProcessId(WindowFromPoint(point), out owner);
-                    if (owner != pid) return false;
+                    if (owner != pid) { PixelDiagnostic = "sample point is not owned by the fixture"; return false; }
                     uint color = GetPixel(dc, point.X, point.Y);
-                    if (color != color1 && color != color2) return false;
+                    if (color != color1 && color != color2) { PixelDiagnostic = String.Format("fixture pixel {0:X8}, point ({1},{2}), virtual screen ({3},{4},{5},{6})", color, point.X, point.Y, GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79)); return false; }
                 }
             }
             return true;
@@ -88,7 +90,11 @@ function Check-VisibleFrame([IntPtr]$Window, [IntPtr]$Frame, [uint32]$ProcessId,
     try {
         [void][RdpFullGui]::ShowWindow($Window, 4) # SW_SHOWNOACTIVATE
         if (-not [RdpFullGui]::SetWindowPos($Window, [IntPtr](-1), 0, 0, 0, 0, 0x0011)) { throw 'cannot place test window above other windows' }
-        Wait-For { [RdpFullGui]::VisibleFixturePixels($Frame, $ProcessId, $Color1, $Color2) } 'visible fixture pixels not detected' 5
+        try {
+            Wait-For { [RdpFullGui]::VisibleFixturePixels($Frame, $ProcessId, $Color1, $Color2) } 'visible fixture pixels not detected' 5
+        } catch {
+            throw "visible fixture pixels not detected: $([RdpFullGui]::PixelDiagnostic)"
+        }
     } finally {
         [void][RdpFullGui]::ShowWindow($Window, 0) # SW_HIDE
     }
