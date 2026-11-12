@@ -103,14 +103,49 @@ test('ui: add a host from a collapsed group without changing its expansion state
   await expect(details).not.toHaveAttribute('open', '');
   await page.getByRole('button', { name: `新增至群組 ${group}` }).click();
   const editor = page.getByRole('dialog', { name: '新增連線' });
-  await expect(editor.getByLabel('連線名稱')).toHaveValue(`${group} / `);
+  await expect(editor.getByLabel('所屬群組（選填）')).toHaveValue(group);
+  await expect(editor.getByLabel('連線名稱')).toHaveValue('');
   await expect(editor.getByLabel('連線名稱')).toBeFocused();
-  await editor.getByLabel('連線名稱').fill(`${group} / node-02`);
+  await editor.getByLabel('連線名稱').fill('node-02');
   await editor.getByLabel('主機名稱或 IP').fill('other.invalid');
   await editor.getByRole('button', { name: '儲存連線', exact: true }).click();
   await expect(editor).toBeHidden();
   await expect(page.getByText(`${group}（2）`, { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: `連線 ${group} / node-02` })).toBeHidden();
+});
+
+test('ui: group field edits the compatible name prefix', async ({ page }) => {
+  await login(page);
+  const original = `舊群組 ${Date.now()} / 主機`;
+  await addConnection(page, original, 'ssh', 'example.invalid');
+  await page.getByRole('button', { name: `連線 ${original}`, exact: true }).focus();
+  await page.getByRole('button', { name: `編輯 ${original}`, exact: true }).click();
+  const editor = page.getByRole('dialog', { name: '編輯連線' });
+  await expect(editor.getByLabel('連線名稱')).toHaveValue('主機');
+  const group = editor.getByLabel('所屬群組（選填）');
+  await expect(group).toHaveValue(original.split(' / ')[0]);
+  expect(await editor.locator('#editor-group-options option').evaluateAll(options => options.map(option => option.value)))
+    .toContain(original.split(' / ')[0]);
+  await group.fill('新群組');
+  const request = page.waitForRequest(req => req.method() === 'PUT' && req.url().includes('/api/connections/'));
+  await editor.getByRole('button', { name: '儲存連線', exact: true }).click();
+  expect((await request).postDataJSON().name).toBe('新群組 / 主機');
+  await expect(editor).toBeHidden();
+});
+
+test('ui: move a group to ungrouped without deleting its connections', async ({ page }) => {
+  await login(page);
+  const group = `待移動 ${Date.now()}`;
+  const members = [`${group} 甲`, `${group} 乙`];
+  const names = members.map(member => `${group} / ${member}`);
+  for (const name of names) await addConnection(page, name, 'ssh', 'example.invalid');
+  await page.getByRole('button', { name: `重新命名群組 ${group}` }).click();
+  const dialog = page.getByRole('dialog', { name: '重新命名群組' });
+  const request = page.waitForResponse(response => response.url().endsWith('/api/connections/rename-group'));
+  await dialog.getByRole('button', { name: '移至未分類' }).click();
+  expect((await request).status()).toBe(200);
+  await expect(dialog).toBeHidden();
+  for (const member of members) await expect(page.getByRole('button', { name: `連線 ${member}`, exact: true })).toBeVisible();
 });
 
 test('ui: reserved group names remain separate and legacy collapsed state is migrated', async ({ page }) => {
@@ -149,7 +184,8 @@ test('ui: reserved group names remain separate and legacy collapsed state is mig
   await expect(page.getByRole('button', { name: `連線 ${names[0]}`, exact: true })).toBeHidden();
   await page.getByRole('button', { name: '新增至群組 未分類', exact: true }).click();
   const editor = page.getByRole('dialog', { name: '新增連線' });
-  await expect(editor.getByLabel('連線名稱')).toHaveValue('未分類 / ');
+  await expect(editor.getByLabel('所屬群組（選填）')).toHaveValue('未分類');
+  await expect(editor.getByLabel('連線名稱')).toHaveValue('');
   await editor.getByRole('button', { name: '取消' }).click();
   for (const id of ids) {
     await page.request.delete(`api/connections/${id}`, { headers: { Origin: origin(page) } });
@@ -279,11 +315,38 @@ test('ui: host paste splits address and a blank name is generated without readin
   await expect(hostname).toHaveValue('10.0.1.5');
   await expect(form.getByLabel('帳號', { exact: true })).toHaveValue('ubuntu');
   await expect(form.getByLabel('連接埠')).toHaveValue('2222');
+  await form.getByLabel('密碼', { exact: true }).fill('未保存的 SSH 密碼');
+  await form.getByLabel('私鑰（可選）').fill('未保存的私鑰');
+  await form.getByLabel('私鑰密語').fill('未保存的密語');
   await paste('rdp://Alice@[2001:db8::4]:3390');
   await expect(form.getByRole('radio', { name: 'RDP', exact: true })).toBeChecked();
+  await expect(form.getByLabel('密碼', { exact: true })).toHaveValue('');
+  await expect(form.getByLabel('私鑰（可選）')).toHaveValue('');
+  await expect(form.getByLabel('私鑰密語')).toHaveValue('');
+  await form.getByLabel('密碼', { exact: true }).fill('未保存的 RDP 密碼');
+  await selectProtocol(form, 'ssh');
+  await expect(form.getByLabel('密碼', { exact: true })).toHaveValue('');
+  await selectProtocol(form, 'rdp');
   await expect(hostname).toHaveValue('2001:db8::4');
   await expect(form.getByLabel('帳號', { exact: true })).toHaveValue('Alice');
   await expect(form.getByLabel('連接埠')).toHaveValue('3390');
+  await paste('rdp://CORP\\alice@server.example:3391');
+  await expect(form.getByLabel('網域')).toHaveValue('CORP');
+  await expect(form.getByLabel('帳號', { exact: true })).toHaveValue('alice');
+  await expect(hostname).toHaveValue('server.example');
+  await paste('other\\bob@new.example:3392');
+  await expect(form.getByLabel('網域')).toHaveValue('other');
+  await expect(form.getByLabel('帳號', { exact: true })).toHaveValue('bob');
+  await expect(hostname).toHaveValue('new.example');
+  await paste('rdp://blank.example');
+  await expect(form.getByLabel('網域')).toHaveValue('');
+  await expect(form.getByLabel('帳號', { exact: true })).toHaveValue('');
+  await expect(form.getByLabel('連接埠')).toHaveValue('');
+  await paste('rdp://alice%3Asecret@other.example');
+  await expect(hostname).toHaveValue('blank.example');
+  await expect(form.getByText('連線位址不可包含密碼，請在密碼欄位輸入。')).toBeVisible();
+  await paste('rdp://Alice@[2001:db8::4]:3390');
+  await expect(form.getByLabel('網域')).toHaveValue('');
   await paste('rdp://Alice:secret@other.example');
   await expect(hostname).toHaveValue('2001:db8::4');
   await expect(form.getByText('連線位址不可包含密碼，請在密碼欄位輸入。')).toBeVisible();
@@ -317,6 +380,17 @@ test('ui: duplicating a host omits secrets and drops trust only when its destina
   await page.keyboard.press('Control+d');
   await expect(page.getByRole('dialog', { name: '複製連線' })).toBeVisible();
   await page.getByRole('dialog', { name: '複製連線' }).getByRole('button', { name: '取消' }).click();
+  await page.getByRole('button', { name: `釘選 ${name}`, exact: true }).focus();
+  await page.keyboard.press('Alt+d');
+  await expect(page.getByRole('dialog', { name: '複製連線' })).toBeVisible();
+  await page.getByRole('dialog', { name: '複製連線' }).getByRole('button', { name: '取消' }).click();
+  const intercepted = await page.getByRole('button', { name: `釘選 ${name}`, exact: true }).evaluate(button => {
+    const event = new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+    button.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(intercepted).toBe(false);
+  await expect(page.getByRole('dialog', { name: '複製連線' })).toBeHidden();
   for (const changed of [false, true]) {
     await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
     await page.getByRole('button', { name: `複製 ${name}`, exact: true }).click();

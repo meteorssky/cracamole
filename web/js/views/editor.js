@@ -1,4 +1,5 @@
 import { api, ApiError } from '../api.js';
+import { state } from '../state.js';
 import { $ } from '../util/dom.js';
 import { openDialog } from '../ui/dialog.js';
 import { initEditorIdentity, refreshEditorIdentity } from './editor-identity.js';
@@ -15,6 +16,7 @@ import {
 const SECRET_FIELDS = ['password', 'private-key', 'passphrase'];
 const FIELD_ERROR_IDS = {
   name: 'error-name',
+  group: 'error-group',
   protocol: 'error-protocol',
   port: 'error-port',
   hostname: 'error-hostname',
@@ -38,13 +40,49 @@ const FORM_PARAMS = [
 let editing = null;
 let cloneSource = null;
 let connectAfterSave = false;
+let appliedProtocol = null;
 let onSaved = async () => {};
 
 const form = () => $('connection-form');
 
+function splitGroup(name) {
+  const index = name.indexOf('/');
+  const group = index > 0 ? name.slice(0, index).trim() : '';
+  const member = index > 0 ? name.slice(index + 1).trim() : '';
+  return group && member ? { group, name: member } : { group: '', name };
+}
+
+function fullName(f) {
+  const group = f.elements.group.value.trim();
+  const name = f.elements.name.value.trim();
+  return group ? `${group} / ${name}` : name;
+}
+
+function updateGroupSuggestions() {
+  const groups = new Set();
+  for (const connection of state.get('connections') || []) {
+    const index = connection.name.indexOf('/');
+    const group = index > 0 ? connection.name.slice(0, index).trim() : '';
+    if (group && Array.from(group).length <= 116 && !/[\u0000-\u001f\u007f]/u.test(group)) groups.add(group);
+  }
+  $('editor-group-options').replaceChildren(...[...groups]
+    .sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+    .map(group => {
+      const option = document.createElement('option');
+      option.value = group;
+      return option;
+    }));
+}
+
 function applyProtocol() {
   const f = form();
   const protocol = f.elements.protocol.value;
+  if (appliedProtocol !== null && appliedProtocol !== protocol) {
+    for (const key of SECRET_FIELDS) f.elements[key].value = '';
+    f.elements['clear-secrets'].checked = false;
+    fillSecretHints(editing?.protocol === protocol ? editing : null);
+  }
+  appliedProtocol = protocol;
   for (const group of f.querySelectorAll('[data-protocols]')) {
     group.hidden = !group.dataset.protocols.split(' ').includes(protocol);
   }
@@ -84,7 +122,12 @@ function showError(field, message) {
 // Same rules as the server, so people get feedback without a round trip.
 function validate(f) {
   const name = f.elements.name.value.trim();
-  if (!name || name.length > 120) return ['name', '請輸入 1 到 120 個字元的連線名稱。'];
+  const group = f.elements.group.value.trim();
+  if (group.includes('/') || /[\u0000-\u001f\u007f]/u.test(group)) {
+    return ['group', '群組名稱不可包含斜線或控制字元。'];
+  }
+  if (!name) return ['name', '請輸入 1 到 120 個字元的連線名稱。'];
+  if (Array.from(fullName(f)).length > 120) return ['name', '連線名稱加上群組不可超過 120 個字元。'];
   if (!f.elements.hostname.value.trim()) return ['hostname', '請填寫主機名稱或 IP（最長 255 字元）。'];
   const port = f.elements.port.value.trim();
   if (port && !(/^[0-9]+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)) {
@@ -139,13 +182,17 @@ function fillSecretHints(connection) {
 export function openEditor(connection = null, protocol = null) {
   cloneSource = null;
   editing = connection;
+  appliedProtocol = null;
   const f = form();
   f.reset();
+  updateGroupSuggestions();
   clearErrors();
   $('editor-title').textContent = connection ? '編輯連線' : '新增連線';
   $('duplicate-connection').hidden = !connection;
   if (connection) {
-    f.elements.name.value = connection.name;
+    const parts = splitGroup(connection.name);
+    f.elements.name.value = parts.name;
+    f.elements.group.value = parts.group;
     f.elements.protocol.value = connection.protocol;
   } else if (protocol) {
     f.elements.protocol.value = protocol;
@@ -169,6 +216,7 @@ export function openQuickEditor(target) {
   f.elements.hostname.value = target.hostname;
   f.elements.port.value = target.port;
   f.elements.username.value = target.username;
+  f.elements.domain.value = target.domain || '';
   f.elements.name.value = (target.username ? target.username + '@' : '')
     .concat(target.hostname).slice(0, 120);
   f.elements.password.focus();
@@ -177,9 +225,8 @@ export function openQuickEditor(target) {
 export function openGroupEditor(group) {
   openEditor();
   const name = form().elements.name;
-  name.value = group + ' / ';
+  form().elements.group.value = group;
   name.focus();
-  name.setSelectionRange(name.value.length, name.value.length);
 }
 
 function duplicateName(name) {
@@ -200,10 +247,21 @@ export function duplicateConnection(connection) {
   refreshEditorIdentity();
   $('editor-title').textContent = '複製連線';
   $('duplicate-connection').hidden = true;
-  form().elements.name.value = duplicateName(connection.name);
+  form().elements.name.value = splitGroup(duplicateName(connection.name)).name;
   fillSecretHints(null);
   form().elements.hostname.focus();
   form().elements.hostname.select();
+}
+
+export function openImportedEditor(connection) {
+  const source = { ...connection, configured_secrets: [] };
+  openEditor(source);
+  editing = null;
+  cloneSource = source;
+  refreshEditorIdentity();
+  $('editor-title').textContent = '檢查並新增匯入連線';
+  $('duplicate-connection').hidden = true;
+  fillSecretHints(null);
 }
 
 export function initEditor({ saved }) {
@@ -235,6 +293,7 @@ export function initEditor({ saved }) {
     editing = null;
     cloneSource = null;
     connectAfterSave = false;
+    appliedProtocol = null;
     form().reset();
   });
   form().addEventListener('change', event => {
@@ -242,12 +301,12 @@ export function initEditor({ saved }) {
   });
   form().elements.hostname.addEventListener('paste', event => {
     const text = event.clipboardData?.getData('text/plain') || '';
-    if (/^(?:[a-z][a-z0-9+.-]*:\/\/)?[^@/\s]*:[^@/\s]*@/i.test(text.trim())) {
+    if (/^(?:[a-z][a-z0-9+.-]*:\/\/)?[^@/\s]*(?::|%3a)[^@/\s]*@/i.test(text.trim())) {
       event.preventDefault();
       showError('hostname', '連線位址不可包含密碼，請在密碼欄位輸入。');
       return;
     }
-    const address = quickAddress(text);
+    const address = quickAddress(text, form().elements.protocol.value);
     if (!address?.explicit) return;
     event.preventDefault();
     const f = form();
@@ -256,8 +315,11 @@ export function initEditor({ saved }) {
       applyProtocol();
     }
     f.elements.hostname.value = address.hostname;
-    if (address.username) f.elements.username.value = address.username;
-    if (address.port) f.elements.port.value = address.port;
+    if (address.protocolExplicit || address.username) f.elements.username.value = address.username;
+    if (address.protocolExplicit || address.port) f.elements.port.value = address.port;
+    if (address.protocolExplicit || (address.protocol === 'rdp' && address.username)) {
+      f.elements.domain.value = address.domain;
+    }
     clearErrors();
     f.elements.hostname.dispatchEvent(new Event('input', { bubbles: true }));
   });
@@ -286,7 +348,7 @@ export function initEditor({ saved }) {
     try {
       const params = buildParams(f, protocol);
       readOptions(f, protocol, params);
-      const body = { name: f.elements.name.value.trim(), protocol, params };
+      const body = { name: fullName(f), protocol, params };
       const savedConn = await api('/connections' + (editing ? '/' + editing.id : ''), {
         method: editing ? 'PUT' : 'POST',
         body,

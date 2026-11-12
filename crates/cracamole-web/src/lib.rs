@@ -129,6 +129,16 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
         .route("/api/session", get(session))
         .route("/api/protocols", get(protocols::list))
         .route("/api/connections", get(list).post(create))
+        .route("/api/connections/rename-group", post(rename_group))
+        .route(
+            "/api/connections/import",
+            post(import_connections).layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route("/api/connections/export", post(export_connections))
+        .route(
+            "/api/connections/import-preview",
+            post(import_preview).layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
         .route(
             "/api/connections/{id}",
             get(detail).put(update).delete(remove),
@@ -146,18 +156,45 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
         .with_state(app))
 }
 
-async fn asset(Path(path): Path<String>) -> Result<Response, ApiError> {
+async fn asset(Path(path): Path<String>, headers: HeaderMap) -> Result<Response, ApiError> {
     let asset =
         assets::find(&path).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "找不到檔案"))?;
-    Ok(([(header::CONTENT_TYPE, asset.mime)], asset.body).into_response())
+    let etag = asset.etag();
+    let matched = headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|value| {
+            let value = value.trim();
+            value == "*" || value.strip_prefix("W/").unwrap_or(value) == etag
+        });
+    let mut response = if matched {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        ([(header::CONTENT_TYPE, asset.mime)], asset.body).into_response()
+    };
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(etag).expect("static digest is a valid header"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-cache"),
+    );
+    Ok(response)
 }
 
 async fn security_headers(request: axum::extract::Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     for (name,value) in [
-        ("cache-control","no-store"), ("x-content-type-options","nosniff"), ("referrer-policy","no-referrer"),
+        ("x-content-type-options","nosniff"), ("referrer-policy","no-referrer"),
         ("content-security-policy","default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
     ] {response.headers_mut().insert(name,HeaderValue::from_static(value));}
+    response
+        .headers_mut()
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     response
 }
 
@@ -228,6 +265,120 @@ async fn list(
 ) -> Result<Json<Vec<store::PublicConnection>>, ApiError> {
     app.auth.authorize(&headers).await?;
     Ok(Json(app.store.list().await))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportRequest {
+    ids: Vec<String>,
+    format: Option<String>,
+}
+
+async fn export_connections(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(request): Json<ExportRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    app.auth.authorize(&headers).await?;
+    auth::same_origin(&headers)?;
+    if request.ids.is_empty() || request.ids.len() > 100 {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "請選擇 1 至 100 筆連線",
+        ));
+    }
+    let mut ids = std::collections::HashSet::new();
+    if request.ids.iter().any(|id| !ids.insert(id)) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "連線不可重複選取"));
+    }
+    let connections = app.store.list().await;
+    let selected: Vec<_> = connections
+        .into_iter()
+        .filter(|c| ids.contains(&c.id))
+        .collect();
+    if selected.len() != ids.len() {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "找不到連線，請重新整理",
+        ));
+    }
+    let result = match request.format.as_deref().unwrap_or("json") {
+        "json" => store::portable::export(&selected),
+        "uri" => store::portable::export_uris(&selected),
+        _ => return Err(ApiError::new(StatusCode::BAD_REQUEST, "不支援的交換格式")),
+    };
+    let content = result
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "無法匯出設定，請檢查內容與大小"))?;
+    Ok(Json(json!({"content": content})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportRequest {
+    content: String,
+}
+
+async fn import_preview(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(request): Json<ImportRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    app.auth.authorize(&headers).await?;
+    auth::same_origin(&headers)?;
+    let connections = store::portable::import(&request.content).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "交換資料格式無效、包含機密或超過限制",
+        )
+    })?;
+    Ok(Json(json!({"connections": connections})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenameGroupRequest {
+    old: String,
+    new: String,
+}
+
+async fn rename_group(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(request): Json<RenameGroupRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    app.auth.authorize(&headers).await?;
+    auth::same_origin(&headers)?;
+    let count = app
+        .store
+        .rename_group(&request.old, &request.new)
+        .await
+        .map_err(storage_error)??;
+    if count == 0 {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "找不到群組，請重新整理",
+        ));
+    }
+    Ok(Json(json!({"count": count})))
+}
+async fn import_connections(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(request): Json<ImportRequest>,
+) -> Result<Response, ApiError> {
+    app.auth.authorize(&headers).await?;
+    auth::same_origin(&headers)?;
+    let drafts = store::portable::import(&request.content).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "交換資料格式無效、包含機密或超過限制",
+        )
+    })?;
+    let created = app
+        .store
+        .import_new(drafts)
+        .await
+        .map_err(storage_error)??;
+    Ok((StatusCode::CREATED, Json(json!({"count": created.len()}))).into_response())
 }
 async fn detail(
     State(app): State<Arc<App>>,

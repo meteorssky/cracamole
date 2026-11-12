@@ -36,6 +36,10 @@ test('connection cards show policy and retain failure until logout', async ({ pa
   const policyBox = await longCard.getByText('唯讀', { exact: true }).boundingBox();
   expect(policyBox.x + policyBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
   await expect(card).toContainText('未連線');
+  await card.hover();
+  await expect(card.locator('.card__status')).toBeVisible();
+  await card.getByRole('button', { name: `複製 ${name}` }).focus();
+  await expect(card.locator('.card__status')).toBeVisible();
   await card.getByRole('button', { name: `連線 ${name}`, exact: true }).click();
   await expect(page.getByRole('alert')).toBeVisible();
   const failure = await page.locator('#terminal-status').textContent();
@@ -76,4 +80,73 @@ test('updating connection status preserves keyboard focus on the same card', asy
   await expect(open).toBeFocused();
   await card.getByRole('button', { name: `釘選 ${name}` }).click();
   await expect(card.getByRole('button', { name: `取消釘選 ${name}` })).toBeFocused();
+});
+
+test('updating connection status preserves group control focus', async ({ page, request }, info) => {
+  await ready(request);
+  await login(page);
+  const group = `群組焦點 ${info.project.name} ${Date.now()}`;
+  const response = await page.request.post('api/connections', {
+    headers: { Origin: new URL(page.url()).origin },
+    data: { name: `${group} / 主機`, protocol: 'telnet', params: { hostname: '127.0.0.1' } },
+  });
+  expect(response.status()).toBe(201);
+  const id = (await response.json()).id;
+  await page.reload();
+  const summary = page.getByText(`${group}（1）`, { exact: true });
+  await summary.focus();
+  await page.evaluate(async connectionId => {
+    const library = await import('/assets/js/views/library.js');
+    library.setActive(connectionId, 'connecting', '正在連線…');
+  }, id);
+  await expect(summary).toBeFocused();
+  const add = page.getByRole('button', { name: `新增至群組 ${group}` });
+  await add.focus();
+  await page.evaluate(async connectionId => {
+    const library = await import('/assets/js/views/library.js');
+    library.setActive(connectionId, 'connected', '已連線');
+  }, id);
+  await expect(add).toBeFocused();
+});
+
+test('recent and connected filters follow session state and search', async ({ page, request }, info) => {
+  await ready(request);
+  await login(page, { fresh: true });
+  const prefix = `快速篩選 ${info.project.name} ${Date.now()}`;
+  const ids = [];
+  for (const suffix of ['最近', '未使用']) {
+    const response = await page.request.post('api/connections', {
+      headers: { Origin: new URL(page.url()).origin },
+      data: { name: `${prefix} ${suffix}`, protocol: 'telnet', params: { hostname: '127.0.0.1' } },
+    });
+    expect(response.status()).toBe(201);
+    ids.push((await response.json()).id);
+  }
+  await page.reload();
+  await page.getByLabel('搜尋連線').fill(prefix);
+  await page.evaluate(async id => {
+    const library = await import('/assets/js/views/library.js');
+    library.setActive(id, 'connecting', '正在連線…');
+    library.setActive(id, 'connected', '已連線');
+  }, ids[0]);
+  const filters = page.getByRole('group', { name: '篩選連線' });
+  const recent = filters.getByRole('button', { name: '最近', exact: true });
+  const connected = filters.getByRole('button', { name: '已連線', exact: true });
+  await connected.click();
+  await expect(connected).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近` })).toBeVisible();
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 未使用` })).toHaveCount(0);
+  await page.evaluate(async id => {
+    const library = await import('/assets/js/views/library.js');
+    library.setActive(id, 'closed', '連線已結束');
+  }, ids[0]);
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近` })).toHaveCount(0);
+  await recent.click();
+  await expect(recent).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近` })).toBeVisible();
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 未使用` })).toHaveCount(0);
+  await page.reload();
+  await page.getByLabel('搜尋連線').fill(prefix);
+  await page.getByRole('group', { name: '篩選連線' }).getByRole('button', { name: '最近', exact: true }).click();
+  await expect(page.getByRole('button', { name: `連線 ${prefix} 最近` })).toBeVisible();
 });

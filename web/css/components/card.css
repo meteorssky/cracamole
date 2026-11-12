@@ -11,11 +11,29 @@
 
 .conn-group-container {
   position: relative;
+  display: grid;
+}
+
+.conn-group,
+.conn-group__tools {
+  grid-area: 1 / 1;
+}
+
+.conn-group__tools {
+  position: sticky;
+  inset-block-start: 0;
+  align-self: start;
+  block-size: 0;
+  z-index: 5;
 }
 
 .conn-group__title {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 4;
+  background: var(--surface-raised);
   padding-block: var(--space-2);
-  padding-inline-end: var(--space-7);
+  padding-inline-end: calc(var(--tap) * 2);
   min-block-size: var(--tap);
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -31,6 +49,13 @@
   min-block-size: var(--tap);
 }
 
+.conn-group__rename {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: var(--tap);
+  min-inline-size: var(--tap);
+  min-block-size: var(--tap);
+}
 .conn-group__items {
   display: grid;
   gap: var(--space-1);
@@ -127,7 +152,7 @@
 
 .card__actions {
   position: absolute;
-  inset-block: 0;
+  inset-block-start: 100%;
   inset-inline-end: 0;
   z-index: 1;
   display: flex;
@@ -136,8 +161,16 @@
   justify-content: flex-end;
   padding-inline: var(--space-1);
   background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
   opacity: 0;
   pointer-events: none;
+}
+
+.card:hover,
+.card:focus-within {
+  z-index: 3;
 }
 
 .card:hover .card__actions,
@@ -146,24 +179,15 @@
   pointer-events: auto;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  .card:hover .card__title,
-  .card:focus-within .card__title {
-    padding-inline-end: var(--card-actions-width);
-  }
-
-  .card:hover .card__status,
-  .card:focus-within .card__status {
-    display: none;
-  }
-}
-
 @media (hover: none), (pointer: coarse) {
   .card__actions {
     position: relative;
+    inset-block-start: auto;
     opacity: 1;
     pointer-events: auto;
     background: transparent;
+    border: 0;
+    box-shadow: none;
   }
 }
 

@@ -3,11 +3,34 @@
 //! One table instead of one route per file. `every_web_file_is_served` fails when a file is added
 //! under `web/` without being listed here.
 
+use sha2::{Digest, Sha256};
+use std::{collections::BTreeMap, fmt::Write, sync::OnceLock};
+
 pub struct Asset {
     /// Path below `/assets/`.
     pub path: &'static str,
     pub mime: &'static str,
     pub body: &'static [u8],
+}
+
+impl Asset {
+    pub fn etag(&self) -> &str {
+        static ETAGS: OnceLock<BTreeMap<&'static str, String>> = OnceLock::new();
+        &ETAGS.get_or_init(|| {
+            ASSETS
+                .iter()
+                .map(|asset| {
+                    let mut tag = String::with_capacity(66);
+                    tag.push('"');
+                    for byte in Sha256::digest(asset.body) {
+                        write!(tag, "{byte:02x}").expect("writing to String cannot fail");
+                    }
+                    tag.push('"');
+                    (asset.path, tag)
+                })
+                .collect()
+        })[self.path]
+    }
 }
 
 macro_rules! asset {
@@ -80,6 +103,7 @@ pub static ASSETS: &[Asset] = &[
     asset!("js/views/drawer.js", JS, "js/views/drawer.js"),
     asset!("js/views/login.js", JS, "js/views/login.js"),
     asset!("js/views/library.js", JS, "js/views/library.js"),
+    asset!("js/views/portable.js", JS, "js/views/portable.js"),
     asset!("js/views/editor.js", JS, "js/views/editor.js"),
     asset!(
         "js/views/editor-identity.js",

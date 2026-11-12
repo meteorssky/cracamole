@@ -64,9 +64,15 @@
           <label class="field__label visually-hidden" for="library-search">搜尋連線</label>
           <input class="input" id="library-search" type="search" placeholder="搜尋名稱、主機或協定（按 / 聚焦）" autocomplete="off">
         </div>
+        <div class="library-filters" role="group" aria-label="交換連線設定">
+          <button id="export-connections" class="btn btn--small" type="button">匯出設定</button>
+          <button id="import-connections" class="btn btn--small" type="button">匯入設定</button>
+        </div>
         <div id="library-filters" class="library-filters" role="group" aria-label="篩選連線">
           <button class="btn btn--small" type="button" data-filter="all" aria-pressed="true">全部</button>
           <button class="btn btn--small" type="button" data-filter="pinned" aria-pressed="false">★ 釘選</button>
+          <button class="btn btn--small" type="button" data-filter="recent" aria-pressed="false">最近</button>
+          <button class="btn btn--small" type="button" data-filter="connected" aria-pressed="false">已連線</button>
           <button class="btn btn--small" type="button" data-filter="ssh" aria-pressed="false">SSH</button>
           <button class="btn btn--small" type="button" data-filter="rdp" aria-pressed="false">RDP</button>
           <button class="btn btn--small" type="button" data-filter="vnc" aria-pressed="false">VNC</button>
@@ -77,6 +83,7 @@
         <button id="quick-connect" class="btn btn--small" type="button" hidden></button>
         <div id="connections-list" class="card-list"></div>
         <p id="no-match" class="muted small" hidden>沒有符合的連線。</p>
+        <button id="clear-library-filter" class="btn btn--quiet btn--small" type="button" hidden>清除搜尋與篩選</button>
       </aside>
 
       <main id="main" class="stage" tabindex="-1">
@@ -183,6 +190,12 @@
             <div id="f-protocol" class="protocol-segments"></div>
             <p class="field__error" id="error-protocol" hidden></p>
           </fieldset>
+        </div>
+        <div class="field">
+          <label class="field__label" for="f-group">所屬群組（選填）</label>
+          <input class="input" id="f-group" name="group" list="editor-group-options" maxlength="116" placeholder="選擇既有群組或輸入新群組" aria-describedby="error-group">
+          <datalist id="editor-group-options"></datalist>
+          <p class="field__error" id="error-group" hidden></p>
         </div>
         <div class="form-grid">
           <div class="field">
@@ -301,6 +314,54 @@
     </form>
   </dialog>
 
+  <dialog id="portable-dialog" class="dialog" aria-labelledby="portable-title">
+    <div class="dialog__form">
+      <div class="dialog__head"><h2 id="portable-title">交換連線設定</h2></div>
+      <div class="dialog__body">
+        <p id="portable-help" class="muted"></p>
+        <div id="portable-format-field" class="field" hidden>
+          <label class="field__label" for="portable-format">匯出格式</label>
+          <select id="portable-format" class="input">
+            <option value="json">完整公開設定 JSON</option>
+            <option value="uri">端點 URI（只含協定、主機、連接埠、帳號及 RDP 網域）</option>
+          </select>
+        </div>
+        <label class="field__label" for="portable-content">交換資料</label>
+        <textarea id="portable-content" class="input" rows="10" spellcheck="false"></textarea>
+        <p id="portable-status" role="status"></p>
+        <div id="portable-selection" class="library-filters" hidden>
+          <button id="portable-select-first" class="btn btn--small" type="button">選取前 100 筆</button>
+          <button id="portable-clear-selection" class="btn btn--small" type="button">清除選取</button>
+          <span id="portable-selection-count" aria-live="polite"></span>
+        </div>
+        <div id="portable-results"></div>
+      </div>
+      <div class="dialog__footer">
+        <button id="portable-close" class="btn" type="button">關閉</button>
+        <button id="portable-copy" class="btn" type="button" hidden disabled>複製到剪貼簿</button>
+        <button id="portable-paste" class="btn" type="button" hidden>從剪貼簿貼上</button>
+        <button id="portable-import-all" class="btn" type="button" hidden>新增全部</button>
+        <button id="portable-preview" class="btn btn--primary" type="button">驗證並預覽</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="rename-group-dialog" class="dialog dialog--confirm" aria-labelledby="rename-group-title">
+    <form id="rename-group-form" class="dialog__form">
+      <div class="dialog__head"><h2 id="rename-group-title">重新命名群組</h2></div>
+      <div class="dialog__body">
+        <p>群組內所有連線都會更名；若新名稱已存在，兩個群組將合併。留空可移至未分類，連線不會刪除。</p>
+        <label class="field__label" for="rename-group-name">新群組名稱</label>
+        <input id="rename-group-name" class="input" maxlength="116" aria-describedby="rename-group-error">
+        <p id="rename-group-error" class="form-error" role="alert" hidden></p>
+      </div>
+      <div class="dialog__footer">
+        <button id="rename-group-cancel" class="btn" type="button">取消</button>
+        <button id="rename-group-ungroup" class="btn" type="button">移至未分類</button>
+        <button id="rename-group-save" class="btn btn--primary" type="submit">重新命名</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="confirm-dialog" class="dialog dialog--confirm" aria-labelledby="confirm-title">
     <form method="dialog" class="dialog__form">
       <div class="dialog__body">

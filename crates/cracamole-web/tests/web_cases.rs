@@ -97,6 +97,53 @@ fn draft() -> Value {
 }
 
 #[tokio::test]
+async fn static_assets_revalidate_but_dynamic_responses_are_not_cached() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        CancellationToken::new(),
+    )
+    .await;
+    let request = |path: &str, tag: Option<&str>| {
+        let mut builder = Request::builder().uri(path);
+        if let Some(tag) = tag {
+            builder = builder.header("if-none-match", tag);
+        }
+        builder.body(Body::empty()).unwrap()
+    };
+    let first = app
+        .clone()
+        .oneshot(request("/assets/js/main.js", None))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(first.headers()["cache-control"], "private, no-cache");
+    let tag = first.headers()["etag"].to_str().unwrap().to_owned();
+    let conditional = app
+        .clone()
+        .oneshot(request("/assets/js/main.js", Some(&format!("W/{tag}"))))
+        .await
+        .unwrap();
+    assert_eq!(conditional.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(conditional.headers()["etag"], tag.as_str());
+    assert!(to_bytes(conditional.into_body(), 1024)
+        .await
+        .unwrap()
+        .is_empty());
+    let other = app
+        .clone()
+        .oneshot(request("/assets/js/state.js", Some(&tag)))
+        .await
+        .unwrap();
+    assert_eq!(other.status(), StatusCode::OK);
+    let index = app.clone().oneshot(request("/", None)).await.unwrap();
+    assert_eq!(index.headers()["cache-control"], "no-store");
+    let api = app.oneshot(request("/api/session", None)).await.unwrap();
+    assert_eq!(api.headers()["cache-control"], "no-store");
+}
+
+#[tokio::test]
 async fn web_auth_rejects_bad_credentials_and_cross_origin_and_revokes_logout() {
     let dir = tempfile::tempdir().unwrap();
     let app = app(
@@ -999,4 +1046,165 @@ async fn web_protocol_catalogue_requires_login_and_describes_every_protocol() {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
     }
+}
+
+#[tokio::test]
+async fn portable_preview_is_authorized_secret_free_and_does_not_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        CancellationToken::new(),
+    )
+    .await;
+    let cookie = login(&app).await;
+    let (_, _, created) = call(
+        &app,
+        "POST",
+        "/api/connections",
+        Some(draft()),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let request = json!({"ids":[id]});
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/connections/export",
+            Some(request.clone()),
+            None,
+            "http://localhost"
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/connections/export",
+            Some(request.clone()),
+            Some(&cookie),
+            "https://attacker.invalid"
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, _, exported) = call(
+        &app,
+        "POST",
+        "/api/connections/export",
+        Some(request),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let content = exported["content"].as_str().unwrap();
+    assert!(
+        !content.contains("backend-password")
+            && !content.contains("private-key")
+            && !content.contains("passphrase")
+    );
+    let (status, _, preview) = call(
+        &app,
+        "POST",
+        "/api/connections/import-preview",
+        Some(json!({"content":content})),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(preview["connections"][0]["name"], "Development");
+    let (_, _, list) = call(
+        &app,
+        "GET",
+        "/api/connections",
+        None,
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    let malicious = content.replace("\"hostname\"", "\"password\":\"secret\",\"hostname\"");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/connections/import-preview",
+            Some(json!({"content":malicious})),
+            Some(&cookie),
+            "http://localhost"
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn portable_uri_export_and_preview_reject_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        CancellationToken::new(),
+    )
+    .await;
+    let cookie = login(&app).await;
+    let (_, _, created) = call(
+        &app,
+        "POST",
+        "/api/connections",
+        Some(draft()),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let (status, _, exported) = call(
+        &app,
+        "POST",
+        "/api/connections/export",
+        Some(json!({"ids":[id],"format":"uri"})),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let content = exported["content"].as_str().unwrap();
+    assert_eq!(content, "ssh://tester@configured.example:22");
+    let (status, _, preview) = call(
+        &app,
+        "POST",
+        "/api/connections/import-preview",
+        Some(json!({"content":content})),
+        Some(&cookie),
+        "http://localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        preview["connections"][0]["params"]["hostname"],
+        "configured.example"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/connections/import-preview",
+            Some(json!({"content":"ssh://tester:secret@configured.example"})),
+            Some(&cookie),
+            "http://localhost"
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
 }

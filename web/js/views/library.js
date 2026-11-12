@@ -71,6 +71,7 @@ function exactConnections(target) {
     connection.protocol === target.protocol &&
     (connection.params.hostname || '').toLowerCase() === target.hostname.toLowerCase() &&
     (connection.params.username || '') === target.username &&
+    (target.protocol !== 'rdp' || (connection.params.domain || '') === target.domain) &&
     (connection.params.port || defaultPort(connection.protocol)) ===
       (target.port || defaultPort(target.protocol)),
   );
@@ -106,8 +107,16 @@ function sorted(list) {
   });
 }
 
+function matchesFilter(connection) {
+  return selectedFilter === 'all' ||
+    (selectedFilter === 'pinned' && pinned.has(connection.id)) ||
+    (selectedFilter === 'recent' && recentUsed.has(connection.id)) ||
+    (selectedFilter === 'connected' && statuses.get(connection.id)?.dot === 'connected') ||
+    connection.protocol === selectedFilter;
+}
+
 function groupKeys() {
-  return new Set(connections.map(connection => {
+  return new Set(connections.filter(matchesFilter).map(connection => {
     if (pinned.has(connection.id)) return PINNED_GROUP;
     const name = groupName(connection);
     return name === null ? UNGROUPED : namedGroup(name);
@@ -150,7 +159,7 @@ function card(connection, inPinnedGroup) {
   const trusted = connection.params['host-key'] || connection.params['server-cert-sha256'];
   return el(
     'article',
-    { class: 'card', 'data-connection-id': connection.id, 'data-active': isCurrent ? 'true' : null },
+    { class: 'card', 'data-connection-id': connection.id, 'data-pinned-group': inPinnedGroup && groupName(connection) ? 'true' : null, 'data-active': isCurrent ? 'true' : null },
     el(
       'div',
       { class: 'card__title' },
@@ -162,12 +171,6 @@ function card(connection, inPinnedGroup) {
           'data-action': 'open',
           type: 'button',
           'aria-label': '連線 ' + connection.name,
-          onkeydown: event => {
-            if ((event.ctrlKey || event.altKey) && event.key.toLowerCase() === 'd') {
-              event.preventDefault();
-              handlers.onDuplicate(connection);
-            }
-          },
           onclick: () => {
             handlers.onOpen(connection);
           },
@@ -202,12 +205,23 @@ function card(connection, inPinnedGroup) {
           else $('library-search').focus({ preventScroll: true });
         },
       }, pinned.has(connection.id) ? '★' : '☆'),
+      inPinnedGroup && groupName(connection) ? el('button', {
+        class: 'btn btn--quiet btn--small', type: 'button', 'data-action': 'rename-group',
+        'aria-label': '重新命名群組 ' + groupName(connection),
+        onclick: () => handlers.onRenameGroup(groupName(connection)),
+      }, '組') : null,
       el('button', {
         class: 'btn btn--quiet btn--small', type: 'button',
         'data-action': 'duplicate',
         'aria-label': '複製 ' + connection.name,
         onclick: () => handlers.onDuplicate(connection),
       }, '⧉'),
+      el('button', {
+        class: 'btn btn--quiet btn--small', type: 'button',
+        'data-action': 'export',
+        'aria-label': '匯出 ' + connection.name + ' 的設定',
+        onclick: () => handlers.onExport(connection),
+      }, '⇧'),
       el(
         'button',
         { class: 'btn btn--quiet btn--small', type: 'button', 'data-action': 'edit', 'aria-label': '編輯 ' + connection.name, onclick: () => handlers.onEdit(connection) },
@@ -229,6 +243,10 @@ export function renderLibrary() {
     ? focused.closest('[data-connection-id]') : null;
   const focusTarget = focusedCard && focused.dataset.action
     ? { id: focusedCard.dataset.connectionId, action: focused.dataset.action } : null;
+  const focusedGroup = !$('library').hidden && list.contains(focused) && focused.dataset.groupAction
+    ? focused.closest('[data-group-key]') : null;
+  const groupFocusTarget = focusedGroup
+    ? { key: focusedGroup.dataset.groupKey, action: focused.dataset.groupAction } : null;
   const searchText = $('library-search').value.trim();
   const query = searchText.toLowerCase();
   const target = quickAddress(searchText);
@@ -236,8 +254,7 @@ export function renderLibrary() {
   const exactIds = new Set(exact.map(connection => connection.id));
   const visible = sorted(connections).filter(connection =>
     (matches(connection, query) || exactIds.has(connection.id)) &&
-    (selectedFilter === 'all' || (selectedFilter === 'pinned'
-      ? pinned.has(connection.id) : connection.protocol === selectedFilter)));
+    matchesFilter(connection));
   const groups = new Map();
   for (const connection of visible) {
     const name = groupName(connection);
@@ -257,7 +274,7 @@ export function renderLibrary() {
     const connected = members.filter(member => statuses.get(member.id)?.dot === 'connected').length;
     const canAdd = key !== PINNED_GROUP && key !== UNGROUPED && name.length <= 116;
     const group = el('details', { class: 'conn-group', open: Boolean(query) || !collapsed.has(key) },
-      el('summary', { class: 'conn-group__title' }, label + '（' + members.length + '）',
+      el('summary', { class: 'conn-group__title', 'data-group-action': 'toggle' }, label + '（' + members.length + '）',
         connected ? el('span', {}, ' · ' + connected + ' 已連線') : null),
       el('div', { class: 'conn-group__items' }, ...members.map(connection =>
         card(connection, key === PINNED_GROUP))));
@@ -268,9 +285,14 @@ export function renderLibrary() {
       saveSet(COLLAPSED_KEY, collapsed);
       updateGroupToggle();
     });
-    return el('div', { class: 'conn-group-container' }, group,
-      canAdd ? el('button', { class: 'btn btn--quiet btn--small conn-group__add', type: 'button',
-        'aria-label': '新增至群組 ' + name, onclick: () => handlers.onAddGroup(name) }, '＋') : null);
+    return el('div', { class: 'conn-group-container', 'data-group-key': key, 'data-named': canAdd ? 'true' : null }, group,
+      canAdd ? el('div', { class: 'conn-group__tools' },
+      el('button', { class: 'btn btn--quiet btn--small conn-group__add', type: 'button',
+        'data-group-action': 'add',
+        'aria-label': '新增至群組 ' + name, onclick: () => handlers.onAddGroup(name) }, '＋'),
+      el('button', { class: 'btn btn--quiet btn--small conn-group__rename', type: 'button',
+        'data-group-action': 'rename',
+        'aria-label': '重新命名群組 ' + name, onclick: () => handlers.onRenameGroup(name) }, '✎')) : null);
   });
   list.replaceChildren(...elements);
   if (focusTarget) {
@@ -280,12 +302,19 @@ export function renderLibrary() {
       .find(item => item.dataset.action === focusTarget.action);
     if (button && button.closest('details')?.open) button.focus({ preventScroll: true });
     else $('library-search').focus({ preventScroll: true });
+  } else if (groupFocusTarget) {
+    const group = [...list.querySelectorAll('[data-group-key]')]
+      .find(item => item.dataset.groupKey === groupFocusTarget.key);
+    const control = group && [...group.querySelectorAll('[data-group-action]')]
+      .find(item => item.dataset.groupAction === groupFocusTarget.action);
+    if (control) control.focus({ preventScroll: true });
+    else $('library-search').focus({ preventScroll: true });
   }
   renderRecent();
   const quick = quickCandidate(searchText, visible);
   $('quick-connect').hidden = !quick;
   $('quick-connect').textContent = quick
-    ? '快速設定 ' + (quick.username ? quick.username + '@' : '') + quick.hostname +
+    ? '快速設定 ' + (quick.username ? (quick.domain ? quick.domain + '\\' : '') + quick.username + '@' : '') + quick.hostname +
       (quick.port ? ':' + quick.port : '')
     : '';
   const hint = $('quick-hint');
@@ -294,7 +323,12 @@ export function renderLibrary() {
     : exact.length === 1 && !visible.some(connection => connection.id === exact[0].id)
       ? '符合的連線已被篩選，請切換至「全部」後選擇。' : '';
   hint.hidden = !hint.textContent;
-  $('no-match').hidden = visible.length > 0 || connections.length === 0;
+  const noMatch = visible.length === 0 && connections.length > 0;
+  const emptyMessage = query ? '沒有符合搜尋的連線。' :
+    ({ pinned: '尚無釘選連線。', recent: '尚無最近連線。', connected: '目前沒有已連線的主機。' }[selectedFilter] || '沒有符合的連線。');
+  $('no-match').textContent = emptyMessage;
+  $('no-match').hidden = !noMatch;
+  $('clear-library-filter').hidden = !noMatch || (!query && selectedFilter === 'all');
   updateGroupToggle();
   return keys.flatMap(key => groups.get(key).members);
 }
@@ -334,6 +368,15 @@ export function initLibrary(callbacks) {
     }
     renderLibrary();
   });
+  $('clear-library-filter').addEventListener('click', () => {
+    selectedFilter = 'all';
+    search.value = '';
+    for (const item of $('library-filters').querySelectorAll('button[data-filter]')) {
+      item.setAttribute('aria-pressed', String(item.dataset.filter === 'all'));
+    }
+    renderLibrary();
+    search.focus();
+  });
   $('toggle-groups').addEventListener('click', () => {
     const groups = groupKeys();
     const shouldCollapse = [...groups].some(key => !collapsed.has(key));
@@ -346,11 +389,12 @@ export function initLibrary(callbacks) {
   });
   search.addEventListener('input', renderLibrary);
   search.addEventListener('keydown', event => {
-    if (event.key === 'ArrowDown') {
-      const first = $('connections-list').querySelector('details[open] .card__open');
-      if (first) {
+    if (['ArrowDown', 'ArrowUp'].includes(event.key) && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      const buttons = [...$('connections-list').querySelectorAll('details[open] .card__open')];
+      const target = event.key === 'ArrowDown' ? buttons[0] : buttons.at(-1);
+      if (target) {
         event.preventDefault();
-        first.focus();
+        target.focus();
       }
       return;
     }
@@ -378,9 +422,21 @@ export function initLibrary(callbacks) {
     if (target) handlers.onQuickConnect(target);
   });
   $('connections-list').addEventListener('keydown', event => {
-    if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+    const duplicateShortcut = event.key.toLowerCase() === 'd' &&
+      (event.ctrlKey !== event.altKey) && !event.shiftKey && !event.metaKey;
+    if (duplicateShortcut) {
+      const card = event.target.closest('[data-connection-id]');
+      const connection = card && connections.find(item => item.id === card.dataset.connectionId);
+      if (connection) {
+        event.preventDefault();
+        handlers.onDuplicate(connection);
+      }
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp'].includes(event.key) || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
     const buttons = [...$('connections-list').querySelectorAll('details[open] .card__open')];
-    const index = buttons.indexOf(document.activeElement);
+    const current = event.target.closest('[data-connection-id]')?.querySelector('.card__open');
+    const index = buttons.indexOf(current);
     if (index < 0) return;
     const next = buttons[index + (event.key === 'ArrowDown' ? 1 : -1)];
     if (next) {
@@ -400,4 +456,19 @@ export function initLibrary(callbacks) {
     setDrawerOpen(true);
     search.focus();
   }, true);
+}
+
+// 沿用已折疊群組的狀態；既有目標群組的狀態優先。
+export function renameGroupState(oldName, newName) {
+  const oldKey = namedGroup(oldName);
+  if (!newName) {
+    collapsed.delete(oldKey);
+    saveSet(COLLAPSED_KEY, collapsed);
+    return;
+  }
+  const newKey = namedGroup(newName);
+  if (oldKey === newKey) return;
+  if (collapsed.has(oldKey) && !connections.some(connection => groupName(connection) === newName)) collapsed.add(newKey);
+  collapsed.delete(oldKey);
+  saveSet(COLLAPSED_KEY, collapsed);
 }

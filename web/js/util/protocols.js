@@ -13,7 +13,7 @@ export async function loadProtocols() {
 export const allProtocols = () => catalogue;
 
 // Parse only connection addresses, never a URI containing a password, path or query.
-export function quickAddress(value) {
+export function quickAddress(value, defaultProtocol = 'ssh') {
   let text = value.trim();
   if (!text || text.length > 320) return null;
   // This is an address convenience, not a shell parser: accept only the explicit
@@ -26,12 +26,27 @@ export function quickAddress(value) {
   }
   const match = text.match(/^(?:([a-z][a-z0-9+.-]*):\/\/)?(?:([^@:\s/?#]+)@)?(\[[0-9a-fA-F:.]+\]|[^:\s/?#@]+)(?::([0-9]{1,5}))?$/i);
   if (!match) return null;
-  const protocol = (match[1] || 'ssh').toLowerCase();
+  const protocol = (match[1] || defaultProtocol).toLowerCase();
   if (!find(protocol) || (match[4] && (Number(match[4]) < 1 || Number(match[4]) > 65535))) return null;
   const hostname = match[3].startsWith('[') ? match[3].slice(1, -1) : match[3];
-  if (!hostname || hostname.length > 255) return null;
+  if (!hostname || hostname.length > 255 || hostname.includes('\\')) return null;
+  let username = match[2] || '';
+  if (match[1] && username.includes('%')) {
+    try {
+      username = decodeURIComponent(username);
+    } catch {
+      return null;
+    }
+  }
+  if (username.includes(':') || /[\u0000-\u001f\u007f]/.test(username)) return null;
+  let domain = '';
+  if (protocol === 'rdp' && username.includes('\\')) {
+    const parts = username.split('\\');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+    [domain, username] = parts;
+  }
   return {
-    protocol, username: match[2] || '', hostname, port: match[4] || '',
+    protocol, username, domain, hostname, port: match[4] || '',
     explicit: Boolean(match[1] || match[2] || match[4]),
     protocolExplicit: Boolean(match[1]),
   };
