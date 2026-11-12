@@ -426,6 +426,15 @@ try {
     $marked = @((0..($rows - 1)) | Where-Object { [TelnetGui]::ListText($list, $_).Contains('目前工作階段') })
     if ($marked.Count -ne 1 -or -not [TelnetGui]::ListText($list, $marked[0]).Contains('127.0.0.1')) { throw '目前工作階段標記錯誤' }
     $sessionFrame = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Static' -and [TelnetGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero })[0]
+    if (-not $RemoteClose -and -not $Expire -and -not $SwitchPort -and -not $env:CRACAMOLE_TEST_CONNECT_ONCE -and -not $env:CRACAMOLE_TEST_SAVE_CONNECT -and -not $env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
+        [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]$marked[0], [IntPtr]::Zero)
+        Click (Button '釘選／取消')
+        Wait-For { [TelnetGui]::ListText($list, 0).Contains('★ ') -and [TelnetGui]::ListText($list, 0).Contains('目前工作階段（已連線）') } '連線中釘選未保留工作階段狀態'
+        if ([IO.File]::Exists((Join-Path $SyncDir 'closed')) -or [TelnetGui]::SendMessageInt($sessionFrame, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero) { throw '連線中釘選中斷了工作階段或清除畫布' }
+        Click (Button '釘選／取消')
+        Wait-For { -not [TelnetGui]::ListText($list, 0).Contains('★ ') -and [TelnetGui]::ListText($list, 0).Contains('目前工作階段（已連線）') } '連線中取消釘選未保留工作階段狀態'
+        if ([IO.File]::Exists((Join-Path $SyncDir 'closed'))) { throw '連線中取消釘選中斷了工作階段' }
+    }
     $originalWindow = New-Object TelnetGui+Rect
     $smallWindow = New-Object TelnetGui+Rect
     if (-not [TelnetGui]::GetWindowRect($window, [ref]$originalWindow) -or -not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 1400, 700, 0x0006)) { throw '無法調整工作階段寬視窗' }
