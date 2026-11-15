@@ -142,6 +142,18 @@ try {
     Wait-For { [IO.File]::Exists((Join-Path $SyncDir 'continue-after-once')) } 'coordinator did not continue saved SSH'
     Click (Button '中斷連線')
     Click (Button '新增')
+    Set-Text $inputs[4] '127.0.0.1'; Set-Text $inputs[5] ([string]$Port)
+    [void][SshGui]::PostMessage((Button '移除此主機的一次性信任'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+    Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } '未顯示信任移除確認'
+    if (([SshGui]::SendMessageInt([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0400, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -band 0xffff) -ne 7) { throw '信任移除確認未預設取消' }
+    [void][SshGui]::PostMessage([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0111, [IntPtr]7, [IntPtr]::Zero)
+    Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -eq [IntPtr]::Zero } '取消信任移除後對話框未關閉'
+    if (-not [IO.File]::ReadAllText((Join-Path $desktopDir 'ssh-identities.json')).Contains($PublicKey)) { throw '取消後信任遭移除' }
+    [void][SshGui]::PostMessage((Button '移除此主機的一次性信任'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+    Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } '未顯示第二次信任移除確認'
+    [void][SshGui]::PostMessage([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0111, [IntPtr]6, [IntPtr]::Zero)
+    Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '已移除此目的地的一次性 SSH 信任；其他信任來源不受影響。' }).Count -eq 1 } '未完成信任移除'
+    if ([IO.File]::ReadAllText((Join-Path $desktopDir 'ssh-identities.json')).Contains($PublicKey)) { throw '信任未移除' }
     if ($env:CRACAMOLE_TEST_FILE_DIALOG -eq '1') {
         Set-Text $inputs[8] 'C:\fixture\unchanged-key'
         [void][SshGui]::PostMessage((Button '瀏覽…'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)

@@ -50,6 +50,7 @@ pub struct Editor {
     pub save: nwg::Button,
     pub save_connect: nwg::Button,
     pub connect_once: nwg::Button,
+    pub remove_once_trust: nwg::Button,
     pub cancel: nwg::Button,
     base: RefCell<Option<PublicConnection>>,
     visible: Cell<bool>,
@@ -109,6 +110,7 @@ impl Editor {
         let mut save = nwg::Button::default();
         let mut save_connect = nwg::Button::default();
         let mut connect_once = nwg::Button::default();
+        let mut remove_once_trust = nwg::Button::default();
         let mut cancel = nwg::Button::default();
         nwg::TextInput::builder()
             .position((95, 126))
@@ -267,6 +269,12 @@ impl Editor {
             .size((120, 32))
             .parent(window)
             .build(&mut connect_once)?;
+        nwg::Button::builder()
+            .text("移除此主機的一次性信任")
+            .position((320, 316))
+            .size((270, 32))
+            .parent(window)
+            .build(&mut remove_once_trust)?;
         nwg::Label::builder()
             .text("群組")
             .position((24, 402))
@@ -315,6 +323,7 @@ impl Editor {
             save,
             save_connect,
             connect_once,
+            remove_once_trust,
             cancel,
             base: RefCell::new(None),
             visible: Cell::new(false),
@@ -373,9 +382,25 @@ impl Editor {
             }
     }
 
+    pub fn once_ssh_endpoint(&self) -> Option<(String, u16)> {
+        let host = self.hostname.text().trim().to_string();
+        let port_text = self.port.text();
+        let port = if port_text.is_empty() {
+            22
+        } else {
+            port_text.parse().ok()?
+        };
+        if host.is_empty() || port == 0 || !self.matches_once_ssh(&host, port) {
+            return None;
+        }
+        Some((host, port))
+    }
+
     fn show_protocol_fields(&self, visible: bool) {
         let protocol = self.protocol.selection_string().unwrap_or_default();
         let ssh = visible && protocol == "ssh";
+        self.remove_once_trust
+            .set_visible(ssh && self.base.borrow().is_none() && !self.duplicate.get());
         let rdp = visible && protocol == "rdp";
         let telnet = visible && protocol == "telnet";
         let vnc = visible && protocol == "vnc";

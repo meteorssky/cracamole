@@ -4072,6 +4072,57 @@ mod windows_ui {
                         None => explanation.set_text("無法讀取所選路徑，請手動輸入私鑰路徑。"),
                     }
                 }
+            } else if event == nwg::Event::OnButtonClick
+                && handle == editor.remove_once_trust.handle
+                && editor.is_visible()
+                && active.borrow().is_none()
+                && expires.get().is_some_and(|end| Instant::now() < end)
+            {
+                let Some((host, port)) = editor.once_ssh_endpoint() else {
+                    explanation.set_text("請先輸入 SSH 主機及有效連接埠。");
+                    return;
+                };
+                let Some(opened) = store.borrow().as_ref().cloned() else {
+                    return;
+                };
+                let key = match opened.ssh_identity(&host, port) {
+                    Ok(Some(key)) => key,
+                    Ok(None) => {
+                        explanation.set_text("此目的地沒有獨立保存的一次性 SSH 信任。");
+                        return;
+                    }
+                    Err(_) => {
+                        explanation.set_text("無法讀取一次性 SSH 信任，請檢查資料目錄權限。");
+                        return;
+                    }
+                };
+                let prefix: String = key.chars().take(48).collect();
+                let content = format!("移除 {host}:{port} 的一次性 SSH 信任？\n\n已保存公鑰開頭：{prefix}…\n\n若沒有其他信任來源，下次連線須重新核對。已保存連線及系統 known_hosts 不受影響。");
+                let text: Vec<u16> = content.encode_utf16().chain(Some(0)).collect();
+                let title: Vec<u16> = "移除一次性 SSH 信任"
+                    .encode_utf16()
+                    .chain(Some(0))
+                    .collect();
+                let confirmed = event_window.handle.hwnd().is_some_and(|hwnd| unsafe {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+                    MessageBoxW(
+                        hwnd.cast(),
+                        text.as_ptr(),
+                        title.as_ptr(),
+                        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
+                    ) == IDYES
+                });
+                if confirmed
+                    && active.borrow().is_none()
+                    && expires.get().is_some_and(|end| Instant::now() < end)
+                    && editor.matches_once_ssh(&host, port)
+                {
+                    explanation.set_text(match opened.remove_ssh_identity(&host, port, &key) {
+                        Ok(true) => "已移除此目的地的一次性 SSH 信任；其他信任來源不受影響。",
+                        Ok(false) => "此目的地的一次性 SSH 信任已不存在。",
+                        Err(_) => "無法移除 SSH 信任，資料可能已變更或權限不足。",
+                    });
+                }
             } else if event == nwg::Event::OnComboxBoxSelection {
                 editor.protocol_changed(handle);
             } else if ((event == nwg::Event::OnButtonClick

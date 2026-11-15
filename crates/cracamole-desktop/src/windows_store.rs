@@ -251,6 +251,50 @@ impl WindowsStore {
         verify_private_file(&self.directory.join(TRUST_FILE))
     }
 
+    /// 只刪除確認時看到的金鑰，並維持其他主機的信任。
+    pub fn remove_ssh_identity(&self, host: &str, port: u16, expected: &str) -> io::Result<bool> {
+        let _guard = self
+            .trust_lock
+            .lock()
+            .map_err(|_| io::Error::other("SSH identity lock poisoned"))?;
+        let host = identity_host(host)?;
+        if port == 0 || !valid_public_key(expected) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid SSH identity",
+            ));
+        }
+        let mut identities = self.read_ssh_identities()?;
+        let Some(ports) = identities.get_mut(&host) else {
+            return Ok(false);
+        };
+        let port = port.to_string();
+        match ports.get(&port) {
+            None => return Ok(false),
+            Some(key) if key != expected => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "SSH identity conflict",
+                ))
+            }
+            Some(_) => {}
+        }
+        ports.remove(&port);
+        if ports.is_empty() {
+            identities.remove(&host);
+        }
+        let bytes = serde_json::to_vec(&identities).map_err(io::Error::other)?;
+        let mut temp = tempfile::NamedTempFile::new_in(&self.directory)?;
+        verify_private_file(temp.path())?;
+        temp.write_all(&bytes)?;
+        temp.as_file().sync_all()?;
+        self.verify()?;
+        temp.persist(self.directory.join(TRUST_FILE))
+            .map_err(|error| error.error)?;
+        verify_private_file(&self.directory.join(TRUST_FILE))?;
+        Ok(true)
+    }
+
     /// 只儲存公開連線 ID；損壞或權限不正確時拒絕讀取。
     pub fn pinned(&self) -> io::Result<BTreeSet<String>> {
         let _guard = self
@@ -596,6 +640,29 @@ mod tests {
             store.ssh_identity("HOST.EXAMPLE", 22).unwrap().as_deref(),
             Some(key.as_str())
         );
+        store
+            .save_ssh_identity("other.example", 22, &other)
+            .unwrap();
+        assert_eq!(
+            store
+                .remove_ssh_identity("host.example", 22, &other)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(store.remove_ssh_identity("HOST.EXAMPLE", 22, &key).unwrap());
+        assert!(!store.remove_ssh_identity("host.example", 22, &key).unwrap());
+        assert_eq!(
+            store.ssh_identity("other.example", 22).unwrap().as_deref(),
+            Some(other.as_str())
+        );
+        drop(store);
+        let store = WindowsStore::open(path.clone()).await.unwrap();
+        assert_eq!(store.ssh_identity("host.example", 22).unwrap(), None);
+        assert_eq!(
+            store.ssh_identity("other.example", 22).unwrap().as_deref(),
+            Some(other.as_str())
+        );
         std::fs::write(path.join(TRUST_FILE), b"not valid json").unwrap();
         assert!(store.ssh_identity("host.example", 22).is_err());
         assert!(store.save_ssh_identity("host.example", 22, &key).is_err());
@@ -634,6 +701,13 @@ mod tests {
         assert_eq!(
             store
                 .save_ssh_identity("other.example", 22, &key)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            store
+                .remove_ssh_identity("host.example", 22, &key)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::PermissionDenied
