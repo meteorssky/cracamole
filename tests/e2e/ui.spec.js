@@ -460,6 +460,34 @@ test('ui: duplicating a host omits secrets and drops trust only when its destina
   }
 });
 
+test('ui: RDP clone retains its certificate only for the same destination', async ({ page }) => {
+  await login(page);
+  const name = `rdp-clone-${Date.now()}-01`;
+  const pin = 'ab'.repeat(32);
+  const created = await page.request.post('api/connections', {
+    headers: { Origin: origin(page) },
+    data: { name, protocol: 'rdp', params: { hostname: 'desktop.example', port: '3389',
+      username: 'alice', password: 'fixture-secret', 'server-cert-sha256': pin } },
+  });
+  expect(created.status()).toBe(201);
+  await page.reload();
+  for (const change of ['same', 'host', 'port', 'protocol']) {
+    await page.getByRole('button', { name: `連線 ${name}`, exact: true }).focus();
+    await page.getByRole('button', { name: `複製 ${name}`, exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '複製連線' });
+    if (change === 'host') await dialog.getByLabel('主機名稱或 IP').fill('other.example');
+    if (change === 'port') await dialog.getByLabel('連接埠').fill('3390');
+    if (change === 'protocol') await selectProtocol(dialog, 'ssh');
+    const request = page.waitForRequest(req => req.method() === 'POST' && req.url().endsWith('/api/connections'));
+    await dialog.getByRole('button', { name: '儲存連線', exact: true }).click();
+    const body = (await request).postDataJSON();
+    expect(body.params.password).toBeUndefined();
+    if (change === 'same') expect(body.params['server-cert-sha256']).toBe(pin);
+    else expect(body.params['server-cert-sha256']).toBeUndefined();
+    await expect(dialog).toBeHidden();
+  }
+});
+
 test('ui: the editor shows only the fields of the selected protocol and explains mistakes in place', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: '新增連線', exact: true }).click();
