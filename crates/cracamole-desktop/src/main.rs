@@ -1443,11 +1443,15 @@ mod windows_ui {
         format!("{prefix}{label}")
     }
 
-    fn connection_end_message(status: ConnectionStatus) -> &'static str {
+    fn connection_end_message(status: ConnectionStatus, protocol: Option<&str>) -> &'static str {
         match status {
-            ConnectionStatus::UpstreamError => {
+            ConnectionStatus::UpstreamError if protocol == Some("ssh") => {
                 "遠端連線錯誤。請檢查連線設定；SSH 請使用「核對身分」確認主機金鑰。"
             }
+            ConnectionStatus::UpstreamError if protocol == Some("rdp") => {
+                "遠端連線錯誤。請檢查 RDP 連線設定及伺服器憑證。"
+            }
+            ConnectionStatus::UpstreamError => "遠端連線錯誤。請檢查連線設定及遠端服務。",
             ConnectionStatus::UpstreamUnavailable => {
                 "無法連接遠端服務。請檢查主機位址、連接埠及網路。"
             }
@@ -5383,7 +5387,14 @@ mod windows_ui {
                                 },
                                 Ok(Err(_)) | Err(_) => ConnectionStatus::Failed,
                             };
-                            end_message = connection_end_message(status);
+                            end_message = connection_end_message(
+                                status,
+                                session
+                                    .metadata
+                                    .borrow()
+                                    .as_ref()
+                                    .map(|metadata| metadata.1.as_str()),
+                            );
                             if !session.transient {
                                 statuses
                                     .borrow_mut()
@@ -6127,6 +6138,18 @@ mod windows_ui {
 
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn upstream_error_guidance_matches_the_protocol() {
+            use super::{connection_end_message, ConnectionStatus};
+            let message =
+                |protocol| connection_end_message(ConnectionStatus::UpstreamError, protocol);
+            assert!(message(Some("ssh")).contains("主機金鑰"));
+            assert!(message(Some("rdp")).contains("伺服器憑證"));
+            for protocol in [Some("vnc"), Some("telnet"), None] {
+                assert!(!message(protocol).contains("SSH"));
+                assert!(!message(protocol).contains("RDP"));
+            }
+        }
         use super::*;
 
         #[test]
