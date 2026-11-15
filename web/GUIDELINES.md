@@ -258,7 +258,7 @@ Windows x64 的 Chromium、Firefox、WebKit 亦已驗證 Web 群組合併後兩�
 
 Windows x64 的 Chromium、Firefox、WebKit 已驗證手動貼入交換資料後，整批匯入的取消不新增、確認後新增全部；測試未讀寫系統剪貼簿。
 
-版本化資產上線後，在 Windows x64 以本機服務重跑 `ui.spec.js` 的 `ui:` 案例：Chromium、Firefox、WebKit 各 25 項通過，包含亮／暗主題無障礙掃描。行動版橫向溢位及 44px 觸控目標測試在 Chromium、WebKit 各通過，Firefox 因不支援該行動模擬而略過；實體手機仍待驗收。另以 Chromium 和隔離的本機 SSH fixture 重跑合成終端畫面、輸入、關閉及主機金鑰錯誤流程，1 項通過；未連線真實 SSH 主機或使用系統剪貼簿。
+版本化資產上線及日誌樣式修正後，在 Windows x64 以本機服務重跑 `ui.spec.js` 的 `ui:` 案例：Chromium、Firefox、WebKit 各 26 項通過，包含日誌對話框與亮／暗主題無障礙掃描。行動版橫向溢位及 44px 觸控目標測試在 Chromium、WebKit 各通過，Firefox 因不支援該行動模擬而略過；實體手機仍待驗收。另以 Chromium 和隔離的本機 SSH fixture 重跑合成終端畫面、輸入、關閉及主機金鑰錯誤流程，1 項通過；未連線真實 SSH 主機或使用系統剪貼簿。
 
 具名群組內的卡片顯示 `/` 後的主機簡稱，完整名稱仍供搜尋及輔助技術使用；釘選區保留完整名稱，以免不同群組的同名主機難以區分。Windows x64 的 Chromium、Firefox、WebKit 已驗證名稱與釘選切換。
 
