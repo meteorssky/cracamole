@@ -31,6 +31,25 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('ui: logs dialog is accessible and returns focus when dismissed', async ({ page }) => {
+  await login(page);
+  const button = page.getByRole('button', { name: '系統日誌' });
+  await button.click();
+  const dialog = page.getByRole('dialog', { name: '系統日誌' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '關閉', exact: true }).first()).toBeFocused();
+  await expectAccessible(page, '系統日誌對話框');
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+  await expectAccessible(page, '淺色系統日誌對話框');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(button).toBeFocused();
+  await button.click();
+  await dialog.getByRole('button', { name: '關閉', exact: true }).last().click();
+  await expect(dialog).toBeHidden();
+  await expect(button).toBeFocused();
+});
+
 test('ui: login rejects empty and wrong credentials, and the password can be revealed', async ({ page }) => {
   await page.goto('./');
   const form = page.locator('#login-form');

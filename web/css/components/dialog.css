@@ -153,8 +153,7 @@
 }
 
 .log-entry__target {
-  color: var(--focus);
-  opacity: 0.85;
+  color: var(--text-muted);
 }
 
 .log-entry__message {
