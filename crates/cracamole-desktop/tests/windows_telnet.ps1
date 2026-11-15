@@ -138,6 +138,15 @@ try {
     foreach ($other in $libraryRects) {
         if ($groupRect.Left -lt $other.Right -and $groupRect.Right -gt $other.Left -and $groupRect.Top -lt $other.Bottom -and $groupRect.Bottom -gt $other.Top) { throw '小視窗群組選擇器與按鈕重疊' }
     }
+    Click (Button '新增')
+    $editorWindow = New-Object TelnetGui+Rect
+    $trustButton = New-Object TelnetGui+Rect
+    Wait-For { ([TelnetGui]::GetWindowLong((Button '移除此主機的一次性信任'), -16) -band 0x10000000) -ne 0 -and [TelnetGui]::GetWindowRect($window, [ref]$editorWindow) -and [TelnetGui]::GetWindowRect((Button '移除此主機的一次性信任'), [ref]$trustButton) -and $trustButton.Right -le $editorWindow.Right -and $trustButton.Bottom -le $editorWindow.Bottom } '窄視窗開啟編輯器時信任按鈕不在視窗內'
+    if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 400, 400, 0x0006)) { throw '無法嘗試縮小編輯器' }
+    Wait-For { [TelnetGui]::GetWindowRect($window, [ref]$editorWindow) -and [TelnetGui]::GetWindowRect((Button '儲存並連線'), [ref]$trustButton) -and $trustButton.Right -le $editorWindow.Right -and $trustButton.Bottom -le $editorWindow.Bottom } '編輯器縮小後儲存按鈕不在視窗內'
+    Click (Button '取消')
+    if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, 400, 550, 0x0006)) { throw '關閉編輯器後無法縮小視窗' }
+    Wait-For { [TelnetGui]::GetWindowRect($window, [ref]$editorWindow) -and ($editorWindow.Right - $editorWindow.Left) -eq 400 } '關閉編輯器後視窗仍受最小尺寸限制'
     if (-not [TelnetGui]::SetWindowPos($window, [IntPtr]::Zero, 0, 0, ($libraryOriginal.Right - $libraryOriginal.Left), ($libraryOriginal.Bottom - $libraryOriginal.Top), 0x0006)) { throw '無法還原連線庫視窗' }
     if ($env:CRACAMOLE_TEST_LIBRARY_RESIZE -eq '1') {
         $before = New-Object TelnetGui+Rect

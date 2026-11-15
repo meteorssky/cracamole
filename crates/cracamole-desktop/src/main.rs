@@ -1463,6 +1463,13 @@ mod windows_ui {
         }
     }
 
+    fn ensure_editor_size(window: &nwg::Window) {
+        let (width, height) = window.size();
+        if width < 640 || height < 550 {
+            window.set_size(width.max(640), height.max(550));
+        }
+    }
+
     fn probe_error_message(error: ProbeError) -> &'static str {
         match error {
             ProbeError::Busy => "主機身分探測忙碌，請稍後再試。",
@@ -3637,6 +3644,7 @@ mod windows_ui {
                         params: draft.params,
                         configured_secrets: Vec::new(),
                     });
+                    ensure_editor_size(&event_window);
                     explanation.set_text("請再次核對設定；儲存後會新增連線，不會覆寫既有連線。");
                 } else {
                     connections.set_visible(true);
@@ -3998,6 +4006,7 @@ mod windows_ui {
                     editor.begin(base);
                     explanation.set_text("留空機密會保留原值；SSH 私鑰請填入檔案路徑。");
                 }
+                ensure_editor_size(&event_window);
             } else if event == nwg::Event::OnButtonClick
                 && handle == editor.choose_group.handle
                 && editor.is_visible()
@@ -4775,6 +4784,11 @@ mod windows_ui {
                 } else {
                     explanation.set_text("無法切換全螢幕。");
                 }
+            } else if event == nwg::Event::OnResize
+                && handle == event_window.handle
+                && editor.is_visible()
+            {
+                ensure_editor_size(&event_window);
             } else if event == nwg::Event::OnResize
                 && handle == event_window.handle
                 && (import_current.borrow().is_some() || export_preview.borrow().is_some())
