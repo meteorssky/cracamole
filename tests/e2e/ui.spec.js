@@ -527,6 +527,25 @@ test('ui: the editor shows only the fields of the selected protocol and explains
   await expect(page.getByRole('button', { name: '新增連線', exact: true })).toBeFocused();
 });
 
+test('ui: connection editor remains accessible for all protocols and themes', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: '新增連線', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新增連線' });
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+    for (const protocol of ['ssh', 'telnet', 'rdp', 'vnc']) {
+      await selectProtocol(dialog, protocol);
+      await expectAccessible(page, `${theme} ${protocol} 編輯器`);
+    }
+    await dialog.getByLabel('連線名稱').fill('accessibility');
+    await dialog.getByLabel('主機名稱或 IP').fill('example.invalid');
+    await dialog.getByLabel('連接埠').fill('70000');
+    await dialog.getByRole('button', { name: '儲存連線', exact: true }).click();
+    await expect(dialog.getByLabel('連接埠')).toHaveAttribute('aria-invalid', 'true');
+    await expectAccessible(page, `${theme} 編輯器驗證錯誤`);
+  }
+});
+
 test('ui: protocol segments support pointer, keyboard and forced colours', async ({ page }) => {
   await page.emulateMedia({ forcedColors: 'active' });
   await login(page);
