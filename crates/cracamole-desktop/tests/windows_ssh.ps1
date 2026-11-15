@@ -161,6 +161,7 @@ try {
         Set-Text $inputs[9] 'fixture-passphrase'
     } else { Set-Text $inputs[7] 'secret' }
     Click (Button '儲存')
+    Wait-For { [SshGui]::ListText($list, 0).Contains('未設定主機金鑰') } '未設定 SSH 主機金鑰的提示未顯示'
     Select-First $list
     Click (Button '收折群組')
     if ([SshGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero) { throw 'SSH group did not collapse' }

@@ -803,7 +803,13 @@ mod windows_ui {
         );
         format!(
             "[{label}] {group}{name} — {endpoint}{}{}",
-            if trusted { " · 已信任" } else { "" },
+            if trusted {
+                " · 已信任"
+            } else if connection.protocol == "ssh" {
+                " · 未設定主機金鑰"
+            } else {
+                ""
+            },
             if readonly { " · 唯讀" } else { "" }
         )
     }
@@ -6157,6 +6163,12 @@ mod windows_ui {
             assert_eq!(
                 connection_label(&connection),
                 "[SSH] [機房] 伺服器 — alice@[2001:db8::1]:22 · 已信任 · 唯讀"
+            );
+            let mut without_pin = connection;
+            without_pin.params.remove("host-key");
+            assert_eq!(
+                connection_label(&without_pin),
+                "[SSH] [機房] 伺服器 — alice@[2001:db8::1]:22 · 未設定主機金鑰 · 唯讀"
             );
         }
 
