@@ -20,6 +20,7 @@ public static class SshGui {
     public static string EditText(IntPtr h) { var s = new StringBuilder(4096); SendMessageText(h, 0x000D, (IntPtr)s.Capacity, s); return s.ToString(); }
     public static string ListText(IntPtr h, int index) { var s = new StringBuilder(4096); SendMessageText(h, 0x0189, (IntPtr)index, s); return s.ToString(); }
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out Rect r);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int width, int height, uint flags);
@@ -171,7 +172,7 @@ try {
     Click (Button '中斷連線')
     [IO.File]::WriteAllText((Join-Path $SyncDir 'untrusted-rejected'), '')
     Wait-For { [IO.File]::Exists((Join-Path $SyncDir 'continue')) } 'test coordinator did not continue'
-    Select-First $list
+    Wait-For { [SshGui]::SendMessageInt($list, 0x0188, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero -and [SshGui]::IsWindowEnabled((Button '核對身分')) } '連線失敗後無法直接核對所選主機'
     $verify = Button '核對身分'
     foreach ($decision in @(7, 6)) {
         [void][SshGui]::PostMessage($verify, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
