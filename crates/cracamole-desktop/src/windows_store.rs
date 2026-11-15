@@ -57,6 +57,20 @@ fn valid_public_key(key: &str) -> bool {
     errors.is_empty() && entries.len() == 1 && !entries[0].revoked && entries[0].hosts.is_none()
 }
 
+pub fn ssh_identity_fingerprint(key: &str) -> Option<String> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    if !valid_public_key(key) {
+        return None;
+    }
+    let (entries, _) = proto_ssh::hostkey::parse(key);
+    let digest = Sha256::digest(&entries.first()?.key_blob);
+    Some(format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest)
+    ))
+}
+
 fn valid_pin_id(id: &str) -> bool {
     id.len() == 36
         && id.bytes().enumerate().all(|(index, byte)| {
@@ -615,6 +629,17 @@ mod tests {
                 .public_key()
                 .to_openssh()
                 .unwrap();
+        let parsed = russh::keys::PublicKey::from_openssh(&key).unwrap();
+        assert_eq!(
+            ssh_identity_fingerprint(&key).as_deref(),
+            Some(
+                parsed
+                    .fingerprint(russh::keys::HashAlg::Sha256)
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert_eq!(ssh_identity_fingerprint("invalid"), None);
         assert_eq!(store.ssh_identity("Host.Example", 22).unwrap(), None);
         store.save_ssh_identity("Host.Example", 22, &key).unwrap();
         assert_eq!(

@@ -13,6 +13,7 @@ proto-telnet = { path = "../proto-telnet" }
 proto-ssh = { path = "../proto-ssh" }
 cracamole-store = { path = "../cracamole-store" }
 serde_json = "1"
+sha2 = "0.11"
 tempfile = "3"
 png = "0.18"
 tokio.workspace = true

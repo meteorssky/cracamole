@@ -145,6 +145,7 @@ try {
     Set-Text $inputs[4] '127.0.0.1'; Set-Text $inputs[5] ([string]$Port)
     [void][SshGui]::PostMessage((Button '移除此主機的一次性信任'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
     Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } '未顯示信任移除確認'
+    if (-not (([SshGui]::Children([SshGui]::Find([uint32]$process.Id, '#32770')) | ForEach-Object { [SshGui]::Text($_) }) -join "`n").Contains($Fingerprint)) { throw '信任移除確認未顯示已保存指紋' }
     if (([SshGui]::SendMessageInt([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0400, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -band 0xffff) -ne 7) { throw '信任移除確認未預設取消' }
     [void][SshGui]::PostMessage([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0111, [IntPtr]7, [IntPtr]::Zero)
     Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -eq [IntPtr]::Zero } '取消信任移除後對話框未關閉'
