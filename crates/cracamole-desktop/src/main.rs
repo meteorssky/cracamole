@@ -1453,6 +1453,18 @@ mod windows_ui {
         }
     }
 
+    fn probe_error_message(error: ProbeError) -> &'static str {
+        match error {
+            ProbeError::Busy => "主機身分探測忙碌，請稍後再試。",
+            ProbeError::Cancelled => "主機身分探測已取消。",
+            ProbeError::TimedOut => "主機身分探測逾時，請檢查位址、連接埠及網路。",
+            ProbeError::HostNotFound => "找不到主機，請檢查主機名稱或位址。",
+            ProbeError::Unavailable => "無法連接遠端服務，請檢查位址、連接埠及網路。",
+            ProbeError::InvalidConfig => "主機身分設定無效，請檢查連線設定。",
+            ProbeError::Failed => "無法取得主機身分，請確認服務與設定。",
+        }
+    }
+
     fn update_connection_statuses(
         list: &nwg::ListBox<String>,
         ids: &RefCell<Vec<String>>,
@@ -5017,7 +5029,11 @@ mod windows_ui {
                                 }
                             }
                         } else {
-                            explanation.set_text("無法取得主機身分，請確認服務與設定。");
+                            let message = match result {
+                                Ok(Err(error)) => probe_error_message(error),
+                                _ => "無法取得主機身分，請確認服務與設定。",
+                            };
+                            explanation.set_text(message);
                         }
                     } else {
                         let proposal = match result {
@@ -5063,6 +5079,10 @@ mod windows_ui {
                                 } else {
                                     Some(("server-cert-sha256", info.sha256.clone(), format!("請透過其他可信管道核對 RDP 憑證指紋：\n\n{}\n\n主體：{}\n簽發者：{}\n\n確認後儲存此指紋？", info.sha256, info.subject, info.issuer)))
                                 }
+                            }
+                            Ok(Err(error)) => {
+                                explanation.set_text(probe_error_message(error));
+                                None
                             }
                             _ => {
                                 explanation.set_text("無法取得主機身分，請確認服務與設定。");

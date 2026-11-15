@@ -8,7 +8,24 @@ pub enum ProbeError {
     Busy,
     Cancelled,
     TimedOut,
+    HostNotFound,
+    Unavailable,
+    InvalidConfig,
     Failed,
+}
+
+fn classify(error: &guac_session::SessionError) -> ProbeError {
+    match error.status() {
+        guac_protocol::Status::UpstreamTimeout | guac_protocol::Status::ClientTimeout => {
+            ProbeError::TimedOut
+        }
+        guac_protocol::Status::UpstreamNotFound | guac_protocol::Status::ResourceNotFound => {
+            ProbeError::HostNotFound
+        }
+        guac_protocol::Status::UpstreamUnavailable => ProbeError::Unavailable,
+        guac_protocol::Status::ClientBadRequest => ProbeError::InvalidConfig,
+        _ => ProbeError::Failed,
+    }
 }
 
 /// 同一個應用程式應共用一個實例，以限制所有探測的總併發數。
@@ -57,8 +74,11 @@ impl Probes {
         configured: Option<&str>,
         cancel: &CancellationToken,
     ) -> Result<guacd::HostKeyInfo, ProbeError> {
-        self.run(cancel, guacd::probe_host_key(host, port, configured, 10))
-            .await
+        self.run(cancel, async {
+            Ok::<_, ()>(guacd::probe_host_key(host, port, configured, 10).await)
+        })
+        .await?
+        .map_err(|error| classify(&error))
     }
 
     pub async fn rdp(
@@ -67,8 +87,11 @@ impl Probes {
         port: u16,
         cancel: &CancellationToken,
     ) -> Result<guacd::CertInfo, ProbeError> {
-        self.run(cancel, guacd::probe_certificate(host, port, 10))
-            .await
+        self.run(cancel, async {
+            Ok::<_, ()>(guacd::probe_certificate(host, port, 10).await)
+        })
+        .await?
+        .map_err(|error| classify(&error))
     }
 }
 
@@ -78,6 +101,18 @@ mod tests {
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
     use tokio::sync::Barrier;
+
+    #[tokio::test]
+    async fn refused_ssh_probe_reports_unavailable_without_error_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let probes = Probes::new(CancellationToken::new());
+        let result = probes
+            .ssh("127.0.0.1", port, None, &CancellationToken::new())
+            .await;
+        assert!(matches!(result, Err(ProbeError::Unavailable)));
+    }
 
     #[tokio::test]
     async fn limits_and_cancels_pending_probes() {
