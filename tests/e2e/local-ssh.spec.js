@@ -104,6 +104,17 @@ test('local SSH renders composited terminal and closes normally', async ({ page,
     return event.defaultPrevented;
   });
   expect(prevented).toBe(true);
+  const prompt = page.waitForEvent('dialog');
+  // 取消 beforeunload 後不會發生導覽；Playwright 的 reload 會等待至逾時。
+  const reload = page.reload({ timeout: 1500 }).catch(error => {
+    if (error.name !== 'TimeoutError' && !error.message.includes('ERR_ABORTED') &&
+        !error.message.includes('navigation cancelled by beforeunload dialog')) throw error;
+  });
+  const unloadDialog = await prompt;
+  expect(unloadDialog.type()).toBe('beforeunload');
+  await unloadDialog.dismiss();
+  await reload;
+  await expect(page.locator('#terminal-status')).toHaveText('已連線');
   await page.getByRole('button', { name: '連線 Local SSH regression' }).click();
   await page.getByRole('button', { name: '貼上本機剪貼簿' }).click();
   await page.getByRole('button', { name: '剪貼簿', exact: true }).click();
