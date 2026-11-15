@@ -39,7 +39,7 @@ web/
 ```
 - 一個檔案一個職責；**超過 250 行必須拆分**。
 - 新增靜態檔必須列入 `crates/cracamole-web/src/assets.rs` 的資產表（單一表、單一 `/assets/{*path}` 路由）。`every_web_file_is_served` 測試會在漏列時失敗。
-- 靜態資產使用內容 SHA-256 ETag 與 `private, no-cache` 重新驗證；首頁及動態回應維持 `no-store`。Windows x64 的 Web API 測試已驗證條件式重新驗證與動態回應不快取；瀏覽器實際快取行為仍待驗證。
+- 靜態資產使用內容 SHA-256 ETag 與 `private, no-cache` 重新驗證；首頁及動態回應維持 `no-store`。Windows x64 的 Web API 測試已驗證條件式重新驗證與動態回應不快取；瀏覽器重複讀取測試中 Chromium、Firefox 送出 ETag 並收到 304，測試環境的 WebKit 重新取得 200，三者取得的內容一致。
 
 ---
 
@@ -225,7 +225,7 @@ web/
 | 現代化編輯器：視覺分段切換器（Segmented Control）、智慧貼上 `user@host:port`、免填名稱自動生成（P1） | **部分完成**：以原生 radio 分段選擇協定；新增連線可自動命名，主機欄可拆解位址及 `ssh -p PORT user@host` 的限定格式，並拒絕包含密碼的位址。Windows x64 的 Chromium、Firefox、WebKit 已驗證分段滑鼠／鍵盤操作、強制色彩、欄位與合成貼上事件；實際系統剪貼簿操作仍由使用者驗證 |
 | 一鍵直貼剪貼簿、面板貼上後自動收合與底部最近連線快切膠囊（P1） | **已實作，實機驗收中**：底部顯示最多兩個最近連線，切換沿用工作階段確認；一鍵貼上及面板 `Ctrl+Enter` 支援成功後收合，唯讀／禁止貼上時停用。Windows x64 Chromium 以本機 SSH 與模擬剪貼簿驗證文字、拒絕讀取、焦點與唯讀；實際系統剪貼簿依使用者指示自行測試 |
 | 編輯器內建主動「探測指紋」按鈕與 `Ctrl+K` 全域快速切換面板（P2） | **部分完成**：`Ctrl+K` 展開連線庫並聚焦搜尋；Windows x64 Chromium 本機 SSH 驗證從終端機及行動輸入代理呼叫，且不將 Ctrl+K 傳到遠端；Chromium、Firefox、WebKit 已驗證連線庫中的快捷鍵。編輯器可探測未保存、已修改或已保存的 SSH／RDP 目的地，不傳送帳密或自動儲存信任；使用者核對並確認後可填入空白信任欄位，SSH 既有金鑰不符或撤銷時拒絕填入。Windows x64 Chromium 本機 SSH 驗證探測、取消及確認填入；三種瀏覽器以模擬回應驗證過期結果與不符拒絕，並以 loopback RDP fixture 驗證 TLS／NLA 憑證探測與保存後比對。真實 RDP 端點及其他瀏覽器的遠端輸入驗收仍待完成 |
-| 內容雜湊與快取、`guacamole.js` 延後載入（P2） | **部分完成**：`guacamole.js` 在首次連線時載入，失敗可重新嘗試；載入期間關閉工作階段不會建立 tunnel。Windows x64 的 Chromium、Firefox、WebKit 已驗證載入、重試及取消。靜態資產已加入內容雜湊 ETag 與條件式重新驗證，尚待功能與瀏覽器快取驗證；網址尚未內容定址 |
+| 內容雜湊與快取、`guacamole.js` 延後載入（P2） | **部分完成**：`guacamole.js` 在首次連線時載入，失敗可重新嘗試；載入期間關閉工作階段不會建立 tunnel。Windows x64 的 Chromium、Firefox、WebKit 已驗證載入、重試及取消。靜態資產的 ETag 已以 API 與瀏覽器重複讀取驗證；Chromium、Firefox 收到 304，測試環境的 WebKit 重新取得 200。網址尚未內容定址 |
 | 多分頁同時維持多條工作階段（P2） | **待實作**：屬未來路線 |
 
 Web 連線庫提供全部、釘選及各協定篩選，以及一次折疊／展開所有群組；搜尋時顯示並展開符合項目，清除搜尋後恢復已保存的折疊狀態。Windows x64 的 Chromium、Firefox、WebKit 已驗證篩選、鍵盤操作與重載；搜尋期間停用全部折疊／展開，避免覆寫既有狀態。
