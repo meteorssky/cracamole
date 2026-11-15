@@ -1,5 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const http = require('node:http');
+const https = require('node:https');
 const { ready } = require('./helpers');
 
 test('browser receives consistent static assets across repeated requests', async ({ page, request }, info) => {
@@ -8,7 +9,7 @@ test('browser receives consistent static assets across repeated requests', async
   const requests = [];
   const proxy = http.createServer((incoming, outgoing) => {
     const tracked = incoming.url.startsWith('/assets/css/base.css?cache-regression=');
-    const forwarded = http.request(new URL(incoming.url, upstream), { method: incoming.method, headers: incoming.headers }, response => {
+    const forwarded = (upstream.protocol === 'https:' ? https : http).request(new URL(incoming.url, upstream), { method: incoming.method, headers: incoming.headers }, response => {
       if (tracked) requests.push({ tag: incoming.headers['if-none-match'], status: response.statusCode });
       outgoing.writeHead(response.statusCode, response.headers);
       response.pipe(outgoing);
