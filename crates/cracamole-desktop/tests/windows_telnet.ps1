@@ -101,6 +101,10 @@ try {
         Set-Text $inputs[7] 'fixture-secret'
         Click (Button '儲存')
         [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
+        if ($missingHost) {
+            Click (Button '核對身分')
+            Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq '找不到主機，請檢查主機名稱或位址。' }).Count -eq 1 } '身分探測未顯示找不到主機'
+        }
         Click (Button '連線')
         $expectedMessage = if ($env:CRACAMOLE_TEST_NOT_FOUND_STATUS -eq '1') { '找不到主機。請檢查主機名稱或位址。' } else { '連線逾時。請檢查主機位址、連接埠及網路。' }
         Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq $expectedMessage }).Count -eq 1 } 'SSH 失敗原因未顯示'
