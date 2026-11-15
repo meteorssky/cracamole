@@ -161,7 +161,7 @@ try {
         $fixture.Handshakes -ge 3
     } 'RDP TLS connection did not reach server'
     if ($fixture.LastProtocols -ne 1) { throw "TLS-only RDP requested unexpected protocols: $($fixture.LastProtocols)" }
-    Wait-For { @($children | Where-Object { [RdpGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } 'fixture connection did not end'
+    Wait-For { @($children | Where-Object { [RdpGui]::Text($_) -eq '遠端連線錯誤。請檢查連線設定；SSH 請使用「核對身分」確認主機金鑰。' }).Count -eq 1 } 'fixture connection did not report the expected upstream error'
     Click (Button '中斷連線')
     [void][RdpGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
     Click (Button '編輯')
