@@ -342,7 +342,7 @@ try {
     Wait-For { @($children | Where-Object { [RdpFullGui]::Text($_) -eq '離開全螢幕' }).Count -eq 1 } 'read-only fullscreen did not start'
     Stop-Process -Id $server.Id -Force
     [void]$server.WaitForExit(10000)
-    Wait-For { @($children | Where-Object { [RdpFullGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } 'unexpected RDP closure not shown' 15
+    Wait-For { @($children | Where-Object { [RdpFullGui]::Text($_) -eq '無法連接遠端服務。請檢查主機位址、連接埠及網路。' }).Count -eq 1 } 'unexpected RDP closure not shown' 15
     if ([RdpFullGui]::GetWindowLong($window, -16) -ne $beforeStyle -or
         -not [RdpFullGui]::GetWindowRect($window, [ref]$restored) -or
         $restored.Left -ne $beforeFullscreen.Left -or $restored.Top -ne $beforeFullscreen.Top -or
@@ -351,7 +351,7 @@ try {
     if (-not [RdpFullGui]::HasVisibleStyle((Button '連線')) -or -not [RdpFullGui]::HasVisibleStyle($list) -or [RdpFullGui]::HasVisibleStyle((Button '中斷連線'))) { throw 'connection list not restored after server closure' }
     [void][RdpFullGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
     Click (Button '連線')
-    Wait-For { @($children | Where-Object { [RdpFullGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 -and [RdpFullGui]::HasVisibleStyle((Button '連線')) } 'retry against stopped server did not return to connection list' 15
+    Wait-For { @($children | Where-Object { [RdpFullGui]::Text($_) -eq '無法連接遠端服務。請檢查主機位址、連接埠及網路。' }).Count -eq 1 -and [RdpFullGui]::HasVisibleStyle((Button '連線')) } 'retry against stopped server did not return to connection list' 15
     [void][RdpFullGui]::PostMessage($window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
     if (-not $process.WaitForExit(10000)) { throw 'desktop process failed to exit' }
     $process.Refresh(); if ($process.ExitCode -ne 0) { throw 'desktop process exited abnormally' }
