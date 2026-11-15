@@ -254,7 +254,7 @@ Web 匯出清單可依名稱、協定、主機或帳號搜尋，並以每頁最�
 
 Windows x64 本機測試：Chromium、Firefox、WebKit 已驗證匯出搜尋與分頁、連線庫篩選與狀態、群組欄位與移至未分類，以及卡片操作不被下一群組標頭遮擋；匯出交換測試使用模擬剪貼簿。三種瀏覽器的亮／暗主題無障礙掃描未發現 serious 或 critical 違規。Chromium 另以獨立 Rust SSH fixture 驗證合成終端畫面、活動工作階段的上一頁確認與 WebSocket 正常關閉碼 1000；此結果不代表真實 RDP／NLA 或實際系統剪貼簿已驗收。
 
-Windows x64 的 Chromium、Firefox、WebKit 另以 axe 掃描 SSH、Telnet、RDP、VNC 編輯器及連接埠驗證錯誤，亮／暗主題均未發現 serious 或 critical 違規；自動掃描不能取代人工無障礙驗收。
+Windows x64 的 Chromium、Firefox、WebKit 另以 axe 掃描 SSH、Telnet、RDP、VNC 編輯器及連接埠驗證錯誤，亮／暗主題均未發現 serious 或 critical 違規；並以預設瀏覽器字級核對各編輯器與日誌對話框中可見文字的計算字級至少為 14px。自動掃描不能取代人工無障礙驗收。
 
 Windows x64 的 Chromium、Firefox、WebKit 亦已驗證 Web 群組合併後兩側連線 ID 與公開參數保留、介面群組數更新及 API 不回傳密碼；此瀏覽器測試不讀取保存的機密值。
 

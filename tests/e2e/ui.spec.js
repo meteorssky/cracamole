@@ -17,6 +17,15 @@ async function expectAccessible(page, where) {
   expect(serious, `accessibility violations on ${where}`).toEqual([]);
 }
 
+async function expectReadableText(scope) {
+  const small = await scope.evaluate(root => [...root.querySelectorAll('*')]
+    .filter(element => [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim()))
+    .filter(element => element.getClientRects().length && getComputedStyle(element).visibility === 'visible')
+    .map(element => ({ text: element.textContent.trim().slice(0, 60), size: parseFloat(getComputedStyle(element).fontSize) }))
+    .filter(item => item.size < 14));
+  expect(small, 'visible interface text smaller than 14px').toEqual([]);
+}
+
 async function removeAllConnections(page) {
   const list = await (await page.request.get('api/connections')).json();
   for (const connection of list) {
@@ -37,6 +46,7 @@ test('ui: logs dialog is accessible and returns focus when dismissed', async ({ 
   await button.click();
   const dialog = page.getByRole('dialog', { name: '系統日誌' });
   await expect(dialog).toBeVisible();
+  await expectReadableText(dialog);
   await expect(dialog.getByRole('button', { name: '關閉', exact: true }).first()).toBeFocused();
   await expectAccessible(page, '系統日誌對話框');
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
@@ -535,6 +545,7 @@ test('ui: connection editor remains accessible for all protocols and themes', as
     await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
     for (const protocol of ['ssh', 'telnet', 'rdp', 'vnc']) {
       await selectProtocol(dialog, protocol);
+      await expectReadableText(dialog);
       await expectAccessible(page, `${theme} ${protocol} 編輯器`);
     }
     await dialog.getByLabel('連線名稱').fill('accessibility');
