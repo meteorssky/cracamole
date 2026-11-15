@@ -1296,6 +1296,50 @@ mod tests {
     }
 
     #[test]
+    fn one_time_trust_action_only_appears_for_new_ssh() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GWL_STYLE, WS_VISIBLE};
+        native_windows_gui::init().unwrap();
+        let mut window = native_windows_gui::Window::default();
+        native_windows_gui::Window::builder()
+            .size((640, 600))
+            .flags(native_windows_gui::WindowFlags::WINDOW)
+            .build(&mut window)
+            .unwrap();
+        let editor = Editor::new(&window).unwrap();
+        let visible = || unsafe {
+            GetWindowLongW(
+                editor.remove_once_trust.handle.hwnd().unwrap().cast(),
+                GWL_STYLE,
+            ) as u32
+                & WS_VISIBLE
+                != 0
+        };
+        editor.begin(None);
+        assert!(visible());
+        for protocol in ["telnet", "rdp", "vnc"] {
+            editor.protocol.set_selection_string(protocol);
+            editor.protocol_changed(editor.protocol.handle);
+            assert!(!visible(), "{protocol}");
+        }
+        editor.protocol.set_selection_string("ssh");
+        editor.protocol_changed(editor.protocol.handle);
+        assert!(visible());
+        let connection = || PublicConnection {
+            id: "saved".into(),
+            name: "host".into(),
+            protocol: "ssh".into(),
+            params: BTreeMap::from([("hostname".into(), "example.test".into())]),
+            configured_secrets: Vec::new(),
+        };
+        editor.begin(Some(connection()));
+        assert!(!visible());
+        editor.begin_duplicate(connection());
+        assert!(!visible());
+        editor.show(false);
+        assert!(!visible());
+    }
+
+    #[test]
     fn group_field_preserves_compatible_connection_names() {
         native_windows_gui::init().unwrap();
         let mut window = native_windows_gui::Window::default();
