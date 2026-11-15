@@ -561,6 +561,7 @@ try {
         throw '遠端畫布未填滿視窗可用寬度'
     }
     Click (Button '收折側欄')
+    Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq '展開側欄' }).Count -eq 1 } '收折後側欄按鈕未更新'
     if (([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -ne 0 -or -not [TelnetGui]::GetWindowRect($sessionFrame, [ref]$collapsedFrame) -or
         $collapsedFrame.Left -ne $expandedFrame.Left -or $collapsedFrame.Top -ne $expandedFrame.Top -or
         $collapsedFrame.Right -ne $expandedFrame.Right -or $collapsedFrame.Bottom -ne $expandedFrame.Bottom) { throw '收折側欄不應變更遠端畫布尺寸' }
@@ -570,6 +571,7 @@ try {
     if (([TelnetGui]::GetWindowLong($combos[3], -16) -band 0x10000000) -eq 0) { throw '展開側欄後群組選擇器未顯示' }
     [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]0x1b, [IntPtr]::Zero)
     Wait-For { ([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -eq 0 } 'Escape 未收折工作階段側欄'
+    Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq '展開側欄' }).Count -eq 1 } 'Escape 收折後側欄按鈕未更新'
     Click (Button '展開側欄')
     Wait-For { ([TelnetGui]::GetWindowLong($list, -16) -band 0x10000000) -ne 0 } 'Escape 收折後無法重新展開側欄'
     if ($env:CRACAMOLE_TEST_VISIBLE_TELNET -eq '1') {
