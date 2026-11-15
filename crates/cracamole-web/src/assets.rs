@@ -45,6 +45,34 @@ macro_rules! asset {
 
 pub const INDEX: &[u8] = include_bytes!("../../../web/index.html");
 
+/// 所有內嵌資產的版本，路徑及內容任一變更都會產生新網址。
+pub fn version() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION.get_or_init(|| {
+        let mut digest = Sha256::new();
+        for asset in ASSETS {
+            digest.update((asset.path.len() as u64).to_be_bytes());
+            digest.update(asset.path.as_bytes());
+            digest.update((asset.body.len() as u64).to_be_bytes());
+            digest.update(asset.body);
+        }
+        let mut value = String::with_capacity(64);
+        for byte in digest.finalize() {
+            write!(value, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        value
+    })
+}
+
+pub fn index() -> &'static str {
+    static INDEX_WITH_VERSION: OnceLock<String> = OnceLock::new();
+    INDEX_WITH_VERSION.get_or_init(|| {
+        std::str::from_utf8(INDEX)
+            .expect("embedded index must be UTF-8")
+            .replace("/assets/", &format!("/assets/{}/", version()))
+    })
+}
+
 const CSS: &str = "text/css; charset=utf-8";
 const JS: &str = "text/javascript; charset=utf-8";
 const PNG: &str = "image/png";

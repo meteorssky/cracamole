@@ -6,7 +6,7 @@ test.beforeEach(async ({ request }) => ready(request));
 test('client loads on demand and a failed load can be retried', async ({ page }, testInfo) => {
   const name = `延遲載入測試 ${testInfo.project.name} ${Date.now()}`;
   let requests = 0;
-  await page.route('**/assets/vendor/guacamole.js', async route => {
+  await page.route(/\/assets\/(?:[a-f0-9]{64}\/)?vendor\/guacamole\.js$/, async route => {
     requests += 1;
     if (requests === 1) await route.abort('failed');
     else await route.continue();
@@ -29,7 +29,7 @@ test('closing while the client loads does not start a tunnel', async ({ page }, 
   let requested = false;
   let sockets = 0;
   page.on('websocket', () => { sockets += 1; });
-  await page.route('**/assets/vendor/guacamole.js', async route => {
+  await page.route(/\/assets\/(?:[a-f0-9]{64}\/)?vendor\/guacamole\.js$/, async route => {
     requested = true;
     await held;
     await route.continue();

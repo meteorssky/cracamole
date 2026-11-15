@@ -160,7 +160,7 @@ test('export search and paging retain selections and replace them only on reques
   await ready(request);
   await login(page);
   await page.evaluate(async () => {
-    const { state } = await import('/assets/js/state.js');
+    const { state } = await import(new URL('./state.js', document.querySelector('script[type="module"]').src));
     state.set('connections', Array.from({ length: 103 }, (_, index) => ({
       id: `fixture-${index}`, name: `主機 ${String(index).padStart(3, '0')}`,
       protocol: 'ssh', params: { hostname: `host-${index}.example`, username: 'tester' },

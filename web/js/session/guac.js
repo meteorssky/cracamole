@@ -12,7 +12,7 @@ export function loadGuacamole() {
   if (libraryLoading) return libraryLoading;
   libraryLoading = new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = '/assets/vendor/guacamole.js';
+    script.src = new URL('../../vendor/guacamole.js', import.meta.url).href;
     script.onload = () => {
       if (globalThis.Guacamole?.Client) resolve();
       else {

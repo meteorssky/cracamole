@@ -3,6 +3,17 @@ const http = require('node:http');
 const https = require('node:https');
 const { ready } = require('./helpers');
 
+test('content-versioned entry loads with immutable cache policy', async ({ page, request }) => {
+  await ready(request);
+  await page.goto('./');
+  const moduleUrl = await page.locator('script[type="module"]').getAttribute('src');
+  expect(moduleUrl).toMatch(/^\/assets\/[a-f0-9]{64}\/js\/main\.js$/);
+  const response = await request.get(moduleUrl);
+  expect(response.status()).toBe(200);
+  expect(response.headers()['cache-control']).toBe('public, max-age=31536000, immutable');
+  await expect(page.locator('#login-form')).toBeVisible();
+});
+
 test('browser receives consistent static assets across repeated requests', async ({ page, request }, info) => {
   await ready(request);
   const upstream = new URL(process.env.CRACAMOLE_URL || 'http://127.0.0.1:18080/');

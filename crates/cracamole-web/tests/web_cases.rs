@@ -139,6 +139,43 @@ async fn static_assets_revalidate_but_dynamic_responses_are_not_cached() {
     assert_eq!(other.status(), StatusCode::OK);
     let index = app.clone().oneshot(request("/", None)).await.unwrap();
     assert_eq!(index.headers()["cache-control"], "no-store");
+    let html = String::from_utf8(
+        to_bytes(index.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let module = html
+        .split_once("src=\"/assets/")
+        .unwrap()
+        .1
+        .split_once("/js/main.js\"")
+        .unwrap()
+        .0;
+    assert_eq!(module.len(), 64);
+    assert!(module.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let versioned = format!("/assets/{module}/js/main.js");
+    let response = app
+        .clone()
+        .oneshot(request(&versioned, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(response.headers()["etag"], tag.as_str());
+    let missing = format!("/assets/{}/js/main.js", "0".repeat(64));
+    assert_eq!(
+        app.clone()
+            .oneshot(request(&missing, None))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     let api = app.oneshot(request("/api/session", None)).await.unwrap();
     assert_eq!(api.headers()["cache-control"], "no-store");
 }

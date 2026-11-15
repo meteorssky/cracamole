@@ -74,7 +74,7 @@ test('updating connection status preserves keyboard focus on the same card', asy
   const open = card.getByRole('button', { name: `連線 ${name}`, exact: true });
   await open.focus();
   await page.evaluate(async id => {
-    const library = await import('/assets/js/views/library.js');
+    const library = await import(new URL('./views/library.js', document.querySelector('script[type="module"]').src));
     library.setActive(id, 'connecting', '正在連線…');
   }, ids[0]);
   await expect(open).toBeFocused();
@@ -96,14 +96,14 @@ test('updating connection status preserves group control focus', async ({ page, 
   const summary = page.getByText(`${group}（1）`, { exact: true });
   await summary.focus();
   await page.evaluate(async connectionId => {
-    const library = await import('/assets/js/views/library.js');
+    const library = await import(new URL('./views/library.js', document.querySelector('script[type="module"]').src));
     library.setActive(connectionId, 'connecting', '正在連線…');
   }, id);
   await expect(summary).toBeFocused();
   const add = page.getByRole('button', { name: `新增至群組 ${group}` });
   await add.focus();
   await page.evaluate(async connectionId => {
-    const library = await import('/assets/js/views/library.js');
+    const library = await import(new URL('./views/library.js', document.querySelector('script[type="module"]').src));
     library.setActive(connectionId, 'connected', '已連線');
   }, id);
   await expect(add).toBeFocused();
@@ -125,7 +125,7 @@ test('recent and connected filters follow session state and search', async ({ pa
   await page.reload();
   await page.getByLabel('搜尋連線').fill(prefix);
   await page.evaluate(async id => {
-    const library = await import('/assets/js/views/library.js');
+    const library = await import(new URL('./views/library.js', document.querySelector('script[type="module"]').src));
     library.setActive(id, 'connecting', '正在連線…');
     library.setActive(id, 'connected', '已連線');
   }, ids[0]);
@@ -137,7 +137,7 @@ test('recent and connected filters follow session state and search', async ({ pa
   await expect(page.getByRole('button', { name: `連線 ${prefix} 最近`, exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: `連線 ${prefix} 未使用` })).toHaveCount(0);
   await page.evaluate(async id => {
-    const library = await import('/assets/js/views/library.js');
+    const library = await import(new URL('./views/library.js', document.querySelector('script[type="module"]').src));
     library.setActive(id, 'closed', '連線已結束');
   }, ids[0]);
   await expect(page.getByRole('button', { name: `連線 ${prefix} 最近`, exact: true })).toHaveCount(0);

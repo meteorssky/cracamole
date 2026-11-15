@@ -121,7 +121,7 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
         shutdown: config.shutdown,
     });
     Ok(Router::new()
-        .route("/", get(|| async { Html(assets::INDEX) }))
+        .route("/", get(|| async { Html(assets::index()) }))
         .route("/assets/{*path}", get(asset))
         .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
         .route("/api/login", post(login))
@@ -157,8 +157,12 @@ pub async fn router(config: WebConfig) -> Result<Router, String> {
 }
 
 async fn asset(Path(path): Path<String>, headers: HeaderMap) -> Result<Response, ApiError> {
+    let (path, versioned) = match path.split_once('/') {
+        Some((version, rest)) if version == assets::version() => (rest, true),
+        _ => (path.as_str(), false),
+    };
     let asset =
-        assets::find(&path).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "找不到檔案"))?;
+        assets::find(path).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "找不到檔案"))?;
     let etag = asset.etag();
     let matched = headers
         .get_all(header::IF_NONE_MATCH)
@@ -180,7 +184,11 @@ async fn asset(Path(path): Path<String>, headers: HeaderMap) -> Result<Response,
     );
     response.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("private, no-cache"),
+        HeaderValue::from_static(if versioned {
+            "public, max-age=31536000, immutable"
+        } else {
+            "private, no-cache"
+        }),
     );
     Ok(response)
 }

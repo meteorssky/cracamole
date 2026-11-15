@@ -6,6 +6,8 @@
 
 整套系統延續了 Apache Guacamole 優雅的「串流指令協定（Guacamole Protocol）」與前端畫布渲染理念，同時**完全移除 Java、Tomcat、Maven、外部資料庫與前端打包工具鏈**：前端靜態資產（HTML / CSS / 原生 ES Modules）於編譯期直接封裝進 `cracamole-web` 單一執行檔，並在同行程內啟動僅綁定私人 loopback（`127.0.0.1:0`）的 Guacamole 協定 daemon。對外只暴露單一 HTTP / WebSocket 服務埠。
 
+首頁載入的靜態資產使用整組內嵌內容的 SHA-256 版本路徑與長期快取；首頁和動態 API 不快取，舊的未版本化資產路徑仍透過 ETag 重新驗證。資產版本在 Rust 行程內計算，不需要前端建置工具。
+
 ---
 
 ## 架構設計筆記（Architecture Overview）
