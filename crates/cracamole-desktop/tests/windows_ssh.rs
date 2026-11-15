@@ -18,6 +18,11 @@ async fn browser_shared_ssh_composited_terminal() {
     );
     let server = ssh_fixture::start_server(ssh_fixture::Behaviour::default()).await;
     let key = server.host_key.public_key().to_openssh().unwrap();
+    let browser = std::env::var("CRACAMOLE_TEST_BROWSER").unwrap_or_else(|_| "chromium".into());
+    assert!(matches!(
+        browser.as_str(),
+        "chromium" | "firefox" | "webkit"
+    ));
     let test_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/e2e");
     let mut command = tokio::process::Command::new("node.exe");
     command.as_std_mut().creation_flags(0x08000000);
@@ -28,9 +33,9 @@ async fn browser_shared_ssh_composited_terminal() {
             "node_modules/@playwright/test/cli.js",
             "test",
             "local-ssh.spec.js",
-            "--project=chromium",
             "--timeout=30000",
         ])
+        .arg(format!("--project={browser}"))
         .env("CRACAMOLE_URL", url)
         .env("CRACAMOLE_LOCAL_SSH_PORT", server.addr.port().to_string())
         .env("CRACAMOLE_LOCAL_SSH_KEY", key);

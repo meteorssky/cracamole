@@ -216,7 +216,7 @@ try {
 }
 ```
 
-Windows x64 另以本機 Rust SSH fixture 和專用 loopback Web 服務，使用 Chromium 驗證瀏覽器合成的終端機畫面、按鍵傳送，以及使用者中斷時 WebSocket 正常關閉碼 1000。重跑前須在 `tests/e2e` 安裝 Playwright 相依套件和 Chromium，並啟動使用獨立資料目錄、測試帳號 `admin`／`fixture-admin-password-2026` 的本機 Web 服務；設定 `CRACAMOLE_URL` 指向該服務後執行：
+Windows x64 另以本機 Rust SSH fixture 和專用 loopback Web 服務，使用 Chromium、Firefox、WebKit 驗證瀏覽器合成的終端機畫面、按鍵傳送，以及使用者中斷時 WebSocket 正常關閉碼 1000。重跑前須在 `tests/e2e` 安裝 Playwright 相依套件和相應瀏覽器，並啟動使用獨立資料目錄、測試帳號 `admin`／`fixture-admin-password-2026` 的本機 Web 服務；設定 `CRACAMOLE_URL` 指向該服務後執行（預設 Chromium，可設定 `CRACAMOLE_TEST_BROWSER` 為 `firefox` 或 `webkit`，每次使用新的資料目錄）：
 
 ```powershell
 cargo test -p cracamole-desktop --test windows_ssh --locked browser_shared_ssh_composited_terminal -- --ignored --exact --nocapture
