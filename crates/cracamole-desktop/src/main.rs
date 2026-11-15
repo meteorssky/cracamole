@@ -4122,6 +4122,8 @@ mod windows_ui {
                         Ok(false) => "此目的地的一次性 SSH 信任已不存在。",
                         Err(_) => "無法移除 SSH 信任，資料可能已變更或權限不足。",
                     });
+                } else if confirmed && expires.get().is_some_and(|end| Instant::now() < end) {
+                    explanation.set_text("連線設定已變更，未移除 SSH 信任。請重新確認。");
                 }
             } else if event == nwg::Event::OnComboxBoxSelection {
                 editor.protocol_changed(handle);

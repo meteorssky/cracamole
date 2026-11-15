@@ -151,6 +151,13 @@ try {
     if (-not [IO.File]::ReadAllText((Join-Path $desktopDir 'ssh-identities.json')).Contains($PublicKey)) { throw '取消後信任遭移除' }
     [void][SshGui]::PostMessage((Button '移除此主機的一次性信任'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
     Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } '未顯示第二次信任移除確認'
+    Set-Text $inputs[4] 'localhost'
+    [void][SshGui]::PostMessage([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0111, [IntPtr]6, [IntPtr]::Zero)
+    Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '連線設定已變更，未移除 SSH 信任。請重新確認。' }).Count -eq 1 } '目的地變更後未拒絕移除'
+    if (-not [IO.File]::ReadAllText((Join-Path $desktopDir 'ssh-identities.json')).Contains($PublicKey)) { throw '目的地變更後移除了信任' }
+    Set-Text $inputs[4] '127.0.0.1'
+    [void][SshGui]::PostMessage((Button '移除此主機的一次性信任'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+    Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } '未顯示第三次信任移除確認'
     [void][SshGui]::PostMessage([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0111, [IntPtr]6, [IntPtr]::Zero)
     Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '已移除此目的地的一次性 SSH 信任；其他信任來源不受影響。' }).Count -eq 1 } '未完成信任移除'
     if ([IO.File]::ReadAllText((Join-Path $desktopDir 'ssh-identities.json')).Contains($PublicKey)) { throw '信任未移除' }
