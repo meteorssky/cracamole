@@ -102,7 +102,8 @@ try {
         Click (Button '儲存')
         [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]::Zero, [IntPtr]::Zero)
         Click (Button '連線')
-        Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } 'SSH 握手逾時未結束'
+        $expectedMessage = if ($env:CRACAMOLE_TEST_NOT_FOUND_STATUS -eq '1') { '找不到主機。請檢查主機名稱或位址。' } else { '連線逾時。請檢查主機位址、連接埠及網路。' }
+        Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq $expectedMessage }).Count -eq 1 } 'SSH 失敗原因未顯示'
         $expectedStatus = if ($missingHost) { '找不到主機' } else { '連線逾時' }
         if (-not [TelnetGui]::ListText($list, 0).Contains($expectedStatus)) { throw ('status-base64=' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([TelnetGui]::ListText($list, 0)))) }
         Click (Button '重新載入')

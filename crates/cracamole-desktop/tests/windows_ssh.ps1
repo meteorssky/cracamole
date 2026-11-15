@@ -166,7 +166,7 @@ try {
     if ([SshGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero) { throw 'SSH group did not collapse' }
     Set-Text $inputs[14] "alice@127.0.0.1:$Port"
     [void][SshGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
-    Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } 'untrusted SSH connection was not rejected'
+    Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '遠端連線錯誤。請檢查連線設定；SSH 請使用「核對身分」確認主機金鑰。' }).Count -eq 1 } 'untrusted SSH connection was not rejected'
     Click (Button '中斷連線')
     [IO.File]::WriteAllText((Join-Path $SyncDir 'untrusted-rejected'), '')
     Wait-For { [IO.File]::Exists((Join-Path $SyncDir 'continue')) } 'test coordinator did not continue'
@@ -217,7 +217,7 @@ try {
         Set-Text $inputs[4] '127.0.0.1'; Set-Text $inputs[5] ([string]$Port); Set-Text $inputs[6] 'alice'
         Set-Text $inputs[7] 'wrong-temporary-password'
         Click (Button '免保存連線')
-        Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } '一次性 SSH 錯誤密碼未被拒絕'
+        Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '驗證失敗。請檢查遠端帳號及驗證設定。' }).Count -eq 1 } '一次性 SSH 錯誤密碼未被拒絕'
     }
     Click (Button '新增')
     Set-Text $inputs[3] '一次性 SSH'
@@ -325,7 +325,7 @@ try {
     [void][SshGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
     Wait-For { [SshGui]::Find([uint32]$process.Id, '#32770') -ne [IntPtr]::Zero } 'confirmed active quick switch dialog missing'
     [void][SshGui]::PostMessage([SshGui]::Find([uint32]$process.Id, '#32770'), 0x0111, [IntPtr]6, [IntPtr]::Zero)
-    Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } 'untrusted quick target was not rejected' 15
+    Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '遠端連線錯誤。請檢查連線設定；SSH 請使用「核對身分」確認主機金鑰。' }).Count -eq 1 } 'untrusted quick target was not rejected' 15
     $target = @((Get-Content -Raw -Encoding utf8 (Join-Path $desktopDir 'connections.json') | ConvertFrom-Json).PSObject.Properties.Value | Where-Object { $_.name -eq 'SSH 切換目標' })
     if ($target.Count -ne 1 -or $target[0].params.'host-key') { throw 'active quick switch automatically trusted host key' }
     Set-Text $inputs[14] 'SSH 切換目標'
@@ -362,7 +362,7 @@ try {
     $saved = (Get-Content -Raw -Encoding utf8 $file | ConvertFrom-Json).PSObject.Properties.Value
     if ($saved.params.'host-key' -ne $MismatchedKey) { throw 'mismatched host key was overwritten' }
     Click (Button '連線')
-    Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '連線已結束或失敗。' }).Count -eq 1 } 'mismatched SSH connection was not rejected'
+    Wait-For { @($children | Where-Object { [SshGui]::Text($_) -eq '遠端連線錯誤。請檢查連線設定；SSH 請使用「核對身分」確認主機金鑰。' }).Count -eq 1 } 'mismatched SSH connection was not rejected'
     if ($PrivateKeyPath) {
         Click (Button '中斷連線')
         Select-First $list

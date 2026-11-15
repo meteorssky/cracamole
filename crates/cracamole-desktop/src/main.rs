@@ -1390,6 +1390,8 @@ mod windows_ui {
         Connected,
         Ended,
         Failed,
+        UpstreamError,
+        UpstreamUnavailable,
         AuthenticationFailed,
         Timeout,
         HostNotFound,
@@ -1409,6 +1411,8 @@ mod windows_ui {
             "● 目前工作階段（已連線） · ",
             "○ 連線已結束 · ",
             "● 連線失敗或異常中斷 · ",
+            "● 遠端連線錯誤 · ",
+            "● 無法連接遠端服務 · ",
             "● 驗證失敗 · ",
             "● 連線逾時 · ",
             "● 找不到主機 · ",
@@ -1423,12 +1427,30 @@ mod windows_ui {
             Some(ConnectionStatus::Connected) => "● 目前工作階段（已連線） · ",
             Some(ConnectionStatus::Ended) => "○ 連線已結束 · ",
             Some(ConnectionStatus::Failed) => "● 連線失敗或異常中斷 · ",
+            Some(ConnectionStatus::UpstreamError) => "● 遠端連線錯誤 · ",
+            Some(ConnectionStatus::UpstreamUnavailable) => "● 無法連接遠端服務 · ",
             Some(ConnectionStatus::AuthenticationFailed) => "● 驗證失敗 · ",
             Some(ConnectionStatus::Timeout) => "● 連線逾時 · ",
             Some(ConnectionStatus::HostNotFound) => "● 找不到主機 · ",
             Some(ConnectionStatus::Disconnected) => "○ 已中斷 · ",
         };
         format!("{prefix}{label}")
+    }
+
+    fn connection_end_message(status: ConnectionStatus) -> &'static str {
+        match status {
+            ConnectionStatus::UpstreamError => {
+                "遠端連線錯誤。請檢查連線設定；SSH 請使用「核對身分」確認主機金鑰。"
+            }
+            ConnectionStatus::UpstreamUnavailable => {
+                "無法連接遠端服務。請檢查主機位址、連接埠及網路。"
+            }
+            ConnectionStatus::AuthenticationFailed => "驗證失敗。請檢查遠端帳號及驗證設定。",
+            ConnectionStatus::Timeout => "連線逾時。請檢查主機位址、連接埠及網路。",
+            ConnectionStatus::HostNotFound => "找不到主機。請檢查主機名稱或位址。",
+            ConnectionStatus::Ended => "連線已結束。",
+            _ => "連線已結束或失敗。",
+        }
     }
 
     fn update_connection_statuses(
@@ -5307,6 +5329,7 @@ mod windows_ui {
                         }
                     }
                     if session.task.is_finished() {
+                        let mut end_message = "連線已結束或失敗。";
                         if let Some(mut session) = state.take() {
                             let status = match runtime.block_on(&mut session.task) {
                                 Ok(Ok(())) => ConnectionStatus::Ended,
@@ -5324,10 +5347,17 @@ mod windows_ui {
                                     | guac_protocol::Status::UpstreamNotFound => {
                                         ConnectionStatus::HostNotFound
                                     }
+                                    guac_protocol::Status::UpstreamError => {
+                                        ConnectionStatus::UpstreamError
+                                    }
+                                    guac_protocol::Status::UpstreamUnavailable => {
+                                        ConnectionStatus::UpstreamUnavailable
+                                    }
                                     _ => ConnectionStatus::Failed,
                                 },
                                 Ok(Err(_)) | Err(_) => ConnectionStatus::Failed,
                             };
+                            end_message = connection_end_message(status);
                             if !session.transient {
                                 statuses
                                     .borrow_mut()
@@ -5399,7 +5429,7 @@ mod windows_ui {
                                 &duplicate, &pin,
                             ],
                         );
-                        explanation.set_text("連線已結束或失敗。");
+                        explanation.set_text(end_message);
                     }
                 }
             } else if event == nwg::Event::OnMouseWheel
