@@ -6,11 +6,14 @@ use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateSolidBrush, FillRect, GetSysColorBrush, SetBkColor, SetBkMode, SetTextColor, HBRUSH,
+    CreatePen, CreateSolidBrush, DeleteObject, FillRect, GetSysColorBrush, InvalidateRect,
+    MapWindowPoints, RoundRect, SelectObject, SetBkColor, SetBkMode, SetTextColor, HBRUSH, HDC,
 };
 use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows_sys::Win32::UI::Controls::SetWindowTheme;
-use windows_sys::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW, GetClientRect};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumChildWindows, GetClassNameW, GetClientRect, GetWindowRect, IsWindowVisible,
+};
 
 // COLORREF 為 0x00BBGGRR。
 const DARK_BG: u32 = 0x001B_1818; // #18181B
@@ -100,10 +103,69 @@ pub fn style_window(window: &nwg::Window) {
     }
 }
 
+/// 卡片外框與填色（淺色為白底，深色比頁面略亮）。
+unsafe fn draw_cards(window: HWND, hdc: HDC, cards: &[Vec<nwg::ControlHandle>], dark: bool) {
+    let (fill, line) = if dark {
+        (0x0023_1F1F, 0x0046_3F3F) // #1F1F23、#3F3F46
+    } else {
+        (0x00FF_FFFF, 0x00E4_E4E4) // #FFFFFF、#E4E4E7
+    };
+    unsafe {
+        let brush = CreateSolidBrush(fill);
+        let pen = CreatePen(0, 1, line);
+        let old_brush = SelectObject(hdc, brush as _);
+        let old_pen = SelectObject(hdc, pen as _);
+        for group in cards {
+            let mut union: Option<RECT> = None;
+            for control in group {
+                let Some(child) = control.hwnd() else {
+                    continue;
+                };
+                if IsWindowVisible(child as _) == 0 {
+                    continue;
+                }
+                let mut rect: RECT = std::mem::zeroed();
+                GetWindowRect(child as _, &mut rect);
+                MapWindowPoints(
+                    std::ptr::null_mut(),
+                    window,
+                    &mut rect as *mut RECT as *mut _,
+                    2,
+                );
+                union = Some(match union {
+                    None => rect,
+                    Some(u) => RECT {
+                        left: u.left.min(rect.left),
+                        top: u.top.min(rect.top),
+                        right: u.right.max(rect.right),
+                        bottom: u.bottom.max(rect.bottom),
+                    },
+                });
+            }
+            if let Some(u) = union {
+                RoundRect(
+                    hdc,
+                    u.left - 12,
+                    u.top - 12,
+                    u.right + 12,
+                    u.bottom + 12,
+                    12,
+                    12,
+                );
+            }
+        }
+        SelectObject(hdc, old_brush);
+        SelectObject(hdc, old_pen);
+        DeleteObject(brush as _);
+        DeleteObject(pen as _);
+    }
+}
+
 /// 綁定繪色訊息：深色時繪製背景與各類控制項；淺色時僅將 `muted` 標籤改為次要文字色。
 pub fn install(
     window: &nwg::Window,
     muted: nwg::ControlHandle,
+    cards: Vec<Vec<nwg::ControlHandle>>,
 ) -> Result<nwg::RawEventHandler, nwg::NwgError> {
     nwg::bind_raw_event_handler(
         &window.handle,
@@ -113,12 +175,23 @@ pub fn install(
             let is_muted = muted.hwnd().is_some_and(|handle| handle as isize == lparam);
             unsafe {
                 match message {
-                    // WM_ERASEBKGND
-                    0x0014 if dark => {
+                    // WM_ERASEBKGND：繪製頁面背景與圓角卡片。
+                    0x0014 => {
                         let mut rect: RECT = std::mem::zeroed();
                         GetClientRect(hwnd as _, &mut rect);
-                        FillRect(wparam as _, &rect, bg_brush());
+                        let page = if dark {
+                            bg_brush()
+                        } else {
+                            GetSysColorBrush(15)
+                        };
+                        FillRect(wparam as _, &rect, page);
+                        draw_cards(hwnd as _, wparam as _, &cards, dark);
                         Some(1)
+                    }
+                    // WM_SIZE：卡片範圍隨版面改變，需整面重繪。
+                    0x0005 => {
+                        InvalidateRect(hwnd as _, std::ptr::null(), 1);
+                        None
                     }
                     // WM_CTLCOLORSTATIC / WM_CTLCOLORBTN
                     0x0138 | 0x0135 if dark => {

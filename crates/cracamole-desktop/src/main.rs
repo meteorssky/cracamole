@@ -1806,8 +1806,6 @@ mod windows_ui {
             .background_color(super::windows_theme::label_background())
             .parent(&window)
             .build(&mut idle_stage)?;
-        // 次要說明文字與深色主題（跟隨系統設定）。
-        let muted_handler = super::windows_theme::install(&window, explanation.handle)?;
         idle_stage.set_visible(false);
         nwg::Label::builder()
             .text("")
@@ -2016,6 +2014,36 @@ mod windows_ui {
         let capture_mask = Rc::clone(&mouse_mask);
         let last_mouse = Rc::new(Cell::new(None::<(u32, u32)>));
         let capture_last_mouse = Rc::clone(&last_mouse);
+        // 次要說明文字與深色主題（跟隨系統設定）。
+        // 卡片：側欄（搜尋、群組、清單）與主要操作按鈕各一張圓角卡片。
+        let muted_handler = super::windows_theme::install(
+            &window,
+            explanation.handle,
+            vec![
+                vec![
+                    search.handle,
+                    group_picker.handle,
+                    collapse_group.handle,
+                    expand_groups.handle,
+                    tree_toggle.handle,
+                    export_settings.handle,
+                    import_settings.handle,
+                    group_rename.handle,
+                    connections.handle,
+                ],
+                vec![
+                    refresh.handle,
+                    logout.handle,
+                    connect.handle,
+                    add.handle,
+                    edit.handle,
+                    delete.handle,
+                    verify.handle,
+                    duplicate.handle,
+                    pin.handle,
+                ],
+            ],
+        )?;
         let handler = nwg::full_bind_event_handler(&window.handle, move |event, data, handle| {
             let tree_key =
                 if handle == connections.handle && event == nwg::Event::OnListBoxDoubleClick {
