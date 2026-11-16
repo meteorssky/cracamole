@@ -478,6 +478,31 @@ impl Library {
         cx.notify();
     }
 
+    /// 把 RDP 憑證指紋寫入已保存的連線；未保存的連線無法記住。
+    fn remember_certificate(&mut self, pending: &Pending) -> Result<(), &'static str> {
+        let store = self.store.clone().ok_or("需要先登入才能保存憑證信任。")?;
+        let public = self
+            .connections
+            .iter()
+            .find(|c| c.id == pending.connection.id)
+            .ok_or("此連線尚未保存，無法記住憑證。")?;
+        let mut params = public.params.clone();
+        params.insert(pending.trust_param.to_string(), pending.trust_value.clone());
+        let draft = cracamole_store::Draft {
+            name: public.name.clone(),
+            protocol: public.protocol.clone(),
+            params,
+        };
+        let id = public.id.clone();
+        match remote::block_on(store.save(Some(&id), draft)) {
+            Ok(Some(_)) => {
+                self.connections = remote::block_on(store.list()).unwrap_or_default();
+                Ok(())
+            }
+            _ => Err("無法保存憑證信任，未建立連線。"),
+        }
+    }
+
     /// 連線到目前選取的項目。
     fn connect_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.live.is_some() {
@@ -589,6 +614,16 @@ impl Library {
                 return;
             }
             self.refresh_trust();
+        } else if remember && pending.trust_param == "server-cert-sha256" {
+            // RDP：憑證指紋寫入該連線本身（密碼等機密由連線庫保留）。失敗就不連線。
+            match self.remember_certificate(&pending) {
+                Ok(()) => {}
+                Err(message) => {
+                    self.notice = Some(message.into());
+                    cx.notify();
+                    return;
+                }
+            }
         }
         let mut connection = pending.connection;
         connection
@@ -1227,7 +1262,11 @@ impl Library {
                             .test_support()
                             .aria_label("取消"),
                     )
-                    .children((self.store.is_some() && pending.trust_param == "host-key").then(|| {
+                    .children(
+                        (self.store.is_some()
+                            && (pending.trust_param == "host-key"
+                                || self.connections.iter().any(|c| c.id == pending.connection.id)))
+                        .then(|| {
                         button("trust-remember", "信任並記住", false)
                             .on_click(cx.listener(|this, _, window, cx| this.trust_pending(true, window, cx)))
                             .test_support()
@@ -3864,5 +3903,66 @@ telnet://10.8.0.3
         .unwrap();
         connect(cx);
         wait_until(cx, "再次出現指紋核對", |cx| cx.read_entity(&content, |l, _| l.pending.is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn rdp_certificate_trust_is_remembered_in_the_saved_connection(cx: &mut TestAppContext) {
+        let Some(fixture) = rdp_fixture() else {
+            return;
+        };
+        cx.executor().allow_parking();
+        let (window, content, _dir) = logged_in(cx, 600);
+        // 先把連線保存到私有連線庫（含密碼）。
+        let id = cx.update_window(window, |_, _, cx| {
+            let store = content.read(cx).store.clone().unwrap();
+            let mut params = std::collections::BTreeMap::new();
+            params.insert("hostname".to_string(), "127.0.0.1".to_string());
+            params.insert("port".to_string(), fixture.port.to_string());
+            params.insert("security".to_string(), "tls".to_string());
+            params.insert("username".to_string(), "fixture".to_string());
+            params.insert("password".to_string(), "fixture-secret".to_string());
+            let draft = cracamole_store::Draft { name: "lab-rdp".into(), protocol: "rdp".into(), params };
+            let id = super::remote::block_on(store.save(None, draft)).unwrap().unwrap().id;
+            content.update(cx, |library, _| {
+                library.connections = super::remote::block_on(store.list()).unwrap_or_default();
+            });
+            id
+        })
+        .unwrap();
+
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(format!("row-{id}"), cx);
+            window.render_frame(cx);
+            window.click("session-action", cx);
+        })
+        .unwrap();
+        wait_until(cx, "出現憑證核對", |cx| cx.read_entity(&content, |l, _| l.pending.is_some()));
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("trust-remember").is_some());
+            window.click("trust-remember", cx);
+        })
+        .unwrap();
+        wait_until(cx, "收到 RDP 畫面", |cx| {
+            cx.read_entity(&content, |l, _| l.live.as_ref().is_some_and(|live| live.frame.is_some()))
+        });
+        let store = cx.read_entity(&content, |l, _| l.store.clone().unwrap());
+        let saved = super::remote::block_on(store.get(&id)).unwrap().unwrap();
+        assert!(saved.params["server-cert-sha256"].eq_ignore_ascii_case(&fixture.pin));
+        assert_eq!(saved.params["password"], "fixture-secret", "機密必須保留");
+
+        // 中斷後再連線：已保存憑證，不再詢問。
+        cx.update_window(window, |_, window, cx| {
+            window.click("session-action", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).live.is_none());
+            window.click("session-action", cx);
+            assert!(content.read(cx).pending.is_none() && !content.read(cx).probing);
+        })
+        .unwrap();
+        wait_until(cx, "直接連線", |cx| {
+            cx.read_entity(&content, |l, _| l.live.as_ref().is_some_and(|live| live.frame.is_some()))
+        });
     }
 }

@@ -112,6 +112,21 @@ Remove-Item Env:CRACAMOLE_TEST_VISIBLE_TELNET
 
 原生滑鼠座標依實際顯示的影格大小換算；影格置中或裁切時，留白不會當成遠端點擊，拖曳與放開會限制在可見範圍。Windows 收回滑鼠捕捉時會釋放遠端按鍵。自動化以隱藏的 Windows 控制項繪製到記憶體裝置環境，核對置中及裁切座標；完整實體滑鼠及可見合成畫面仍待驗收。
 
+#### 現代化的 Windows 介面（GPUI，建議使用）
+
+`desktop-gpui/` 是以 GPUI Kit 重寫的 Windows 桌面介面：深色主題、圓角卡片、群組、搜尋與位址快速連線、匯入／匯出、SSH／RDP 信任保存與管理、SSH 私鑰、雙向剪貼簿、Telnet／SSH／RDP／VNC 工作階段與登入到期。它是**獨立的 Cargo workspace**（GPUI 依賴很重，不併入主 workspace 的 `Cargo.lock`），並重用 `cracamole-store`、`cracamole-desktop` 的 `driver`、`session`、`display` 以及 Win32 版的私有連線庫（`windows_store`、`windows_private`），不複製其邏輯。
+
+```powershell
+.\scripts\run_desktop_gpui.ps1            # 隱藏輸入管理員密碼後啟動；第一次會先建置
+.\scripts\run_desktop_gpui.ps1 -Release
+```
+
+環境變數與 Win32 版相同：`CRACAMOLE_ADMIN_USERNAME`／`CRACAMOLE_ADMIN_PASSWORD`、`CRACAMOLE_DESKTOP_DATA_DIR`、`CRACAMOLE_DESKTOP_SESSION_MAX_SECS`；資料目錄也相同，因此既有的桌面連線可直接使用。
+
+驗證範圍：38 項無頭 UI 測試（`cd desktop-gpui; cargo test`，設 `RUST_MIN_STACK=536870912`），涵蓋登入閘門、連線保存、群組、剪貼簿（測試平台的記憶體內假剪貼簿）、匯入／匯出，以及以本機 Telnet、SSH（russh）、RDP（`tests/rdp-fixture`，未建置時略過）與最小 RFB 伺服器進行的端對端工作階段；另可用 `CRACAMOLE_SCREENSHOT_DIR=out cargo test screenshots -- --nocapture` 以 wgpu 離屏渲染輸出畫面。離屏渲染與實際視窗（DirectX）的字型細節可能不同；**實機可見畫面、實體輸入、高 DPI 與真實 Windows／xrdp 服務仍待驗收**。Win32 版保留為備援，在 GPUI 版完成實機驗收前請勿移除。
+
+#### Win32 原生介面（備援）
+
 在 Windows 安裝 Rust 與 MSVC 建置工具，並在啟動程式的環境中設定至少 12 字元的 `CRACAMOLE_ADMIN_PASSWORD`；`CRACAMOLE_ADMIN_USERNAME` 可省略，預設為 `admin`。在 repository 根目錄執行：
 
 ```powershell
