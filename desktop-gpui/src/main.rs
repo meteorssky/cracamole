@@ -4,9 +4,20 @@
 
 mod remote;
 
+// 與 Win32 版共用同一份私有連線庫（私有 ACL、單一程序鎖）；不複製其邏輯。
+#[allow(dead_code)]
+#[path = "../../crates/cracamole-desktop/src/windows_private.rs"]
+mod windows_private;
+#[allow(dead_code)]
+#[path = "../../crates/cracamole-desktop/src/windows_store.rs"]
+mod windows_store;
+
 use cracamole_store::PublicConnection;
 use remote::{Event, RemoteInput};
+use cracamole_store::credentials::Credentials;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::test::TestSupportExt;
 use gpui_kit::*;
@@ -51,7 +62,22 @@ struct Live {
     ended: bool,
 }
 
+/// 登入前的狀態；未登入時不載入任何連線資料。
+struct Auth {
+    credentials: Option<Arc<Credentials>>,
+    startup_error: Option<String>,
+    data_dir: Option<PathBuf>,
+    username: Entity<InputState>,
+    password: Entity<InputState>,
+    error: Option<String>,
+    attempts: Vec<Instant>,
+    busy: bool,
+}
+
 struct Library {
+    store: Option<Arc<windows_store::WindowsStore>>,
+    auth: Option<Auth>,
+    secret: Entity<InputState>,
     /// 遠端畫面容器的實際範圍（繪製時量測），供座標換算與調整遠端解析度。
     view: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     pending: Option<Pending>,
@@ -88,13 +114,8 @@ fn sample(id: &str, name: &str, protocol: &str, host: &str, user: &str) -> Publi
     }
 }
 
+/// 範例連線：僅供開發預覽與測試；正式連線一律來自登入後開啟的私有連線庫。
 fn load() -> Vec<PublicConnection> {
-    if let Some(dir) = std::env::var_os("CRACAMOLE_DESKTOP_DATA_DIR") {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        if let Ok(list) = runtime.block_on(cracamole_store::Store::list_existing(dir.into())) {
-            return list;
-        }
-    }
     vec![
         sample("1", "prod-web-01", "ssh", "10.0.1.11", "deploy"),
         sample("2", "prod-db-01", "ssh", "10.0.1.21", "dba"),
@@ -105,10 +126,52 @@ fn load() -> Vec<PublicConnection> {
 }
 
 impl Library {
+    /// 開發預覽與測試：範例連線、免登入、不持久化。
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::with_connections(window, cx, load())
+    }
+
+    /// 正式啟動：先登入，成功後才開啟私有連線庫並載入連線。
+    fn locked(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        credentials: Result<Arc<Credentials>, String>,
+        data_dir: Option<PathBuf>,
+    ) -> Self {
+        let mut this = Self::with_connections(window, cx, Vec::new());
+        let username = cx.new(|cx| InputState::new(window, cx).placeholder("帳號"));
+        let password = cx.new(|cx| InputState::new(window, cx).placeholder("密碼").masked(true));
+        cx.subscribe_in(&password, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.try_login(window, cx);
+            }
+        })
+        .detach();
+        let (credentials, startup_error) = match credentials {
+            Ok(credentials) => (Some(credentials), None),
+            Err(message) => (None, Some(message)),
+        };
+        this.auth = Some(Auth {
+            credentials,
+            startup_error,
+            data_dir,
+            username,
+            password,
+            error: None,
+            attempts: Vec::new(),
+            busy: false,
+        });
+        this
+    }
+
+    fn with_connections(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        connections: Vec<PublicConnection>,
+    ) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜尋名稱、主機或協定"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        let connections = load();
+        let secret = cx.new(|cx| InputState::new(window, cx).placeholder("密碼（選填）").masked(true));
         let pinned = connections.iter().take(2).map(|c| c.id.clone()).collect();
         let field = |window: &mut Window, cx: &mut Context<Self>, hint: &'static str| {
             cx.new(|cx| InputState::new(window, cx).placeholder(hint))
@@ -118,6 +181,9 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            store: None,
+            auth: None,
+            secret,
             view: Default::default(),
             pending: None,
             probing: false,
@@ -139,6 +205,97 @@ impl Library {
         }
     }
 
+    fn try_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(auth) = self.auth.as_mut() else {
+            return;
+        };
+        if auth.busy {
+            return;
+        }
+        let Some(credentials) = auth.credentials.clone() else {
+            return;
+        };
+        let now = Instant::now();
+        auth.attempts.retain(|at| now.duration_since(*at) < Duration::from_secs(60));
+        if auth.attempts.len() >= 10 {
+            auth.error = Some("登入次數過多，請稍後再試。".into());
+            cx.notify();
+            return;
+        }
+        auth.attempts.push(now);
+        let username = auth.username.read(cx).value().to_string();
+        let password = auth.password.read(cx).value().to_string();
+        auth.password.clone().update(cx, |state, cx| state.set_value("", window, cx));
+        auth.busy = true;
+        auth.error = None;
+        let result = remote::verify(credentials, username, password);
+        cx.spawn_in(window, async move |this, cx| {
+            let result = result.await;
+            let _ = this.update_in(cx, |this, window, cx| this.on_login(result, window, cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn on_login(
+        &mut self,
+        result: Result<Result<bool, cracamole_store::credentials::VerifyError>, tokio::sync::oneshot::error::RecvError>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(auth) = self.auth.as_mut() else {
+            return;
+        };
+        auth.busy = false;
+        match result {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                auth.error = Some("帳號或密碼不正確。".into());
+                cx.notify();
+                return;
+            }
+            _ => {
+                auth.error = Some("無法驗證帳密，請稍後再試。".into());
+                cx.notify();
+                return;
+            }
+        }
+        let Some(directory) = auth.data_dir.clone() else {
+            auth.error = Some("找不到桌面資料目錄。請設定 CRACAMOLE_DESKTOP_DATA_DIR。".into());
+            cx.notify();
+            return;
+        };
+        match remote::block_on(windows_store::WindowsStore::open(directory)) {
+            Err(_) => {
+                auth.error = Some("無法開啟私有桌面連線庫，請檢查資料目錄權限或其他桌面程式。".into());
+            }
+            Ok(store) => {
+                let store = Arc::new(store);
+                self.connections = remote::block_on(store.list()).unwrap_or_default();
+                self.pinned = store.pinned().unwrap_or_default().into_iter().collect();
+                self.store = Some(store);
+                self.auth = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn toggle_pin(&mut self, id: &str, cx: &mut Context<Self>) {
+        let pinned = !self.pinned.iter().any(|p| p == id);
+        if let Some(store) = &self.store {
+            if store.set_pinned(id, pinned).is_err() {
+                self.notice = Some("無法儲存釘選狀態。".into());
+                cx.notify();
+                return;
+            }
+        }
+        self.pinned.retain(|p| p != id);
+        if pinned {
+            self.pinned.push(id.to_string());
+        }
+        cx.notify();
+    }
+
     /// 連線到目前選取的項目。
     fn connect_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.live.is_some() {
@@ -151,7 +308,7 @@ impl Library {
         else {
             return;
         };
-        let connection = remote::load_connection(public);
+        let connection = remote::load_connection(public, self.store.as_deref());
         self.notice = None;
         // SSH 沒有已設定的主機金鑰時，先探測並讓使用者核對指紋。
         if remote::needs_identity(&connection) {
@@ -351,7 +508,7 @@ impl Library {
     }
 
     /// 以欄位內容建立草稿並以共用規則驗證；成功時加入清單並關閉編輯器。
-    fn save(&mut self, cx: &mut Context<Self>) {
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = |state: &Entity<InputState>| state.read(cx).value().trim().to_string();
         let default_port = PROTOCOLS
             .iter()
@@ -368,26 +525,54 @@ impl Library {
         if !user.is_empty() {
             params.insert("username".to_string(), user);
         }
+        let secret = self.secret.read(cx).value().to_string();
+        if !secret.is_empty() {
+            params.insert("password".to_string(), secret);
+        }
         let draft = cracamole_store::Draft {
             name: text(&self.name),
             protocol: self.protocol.to_string(),
             params,
         };
-        match cracamole_store::validate(&draft) {
-            Err(invalid) => self.error = Some(invalid.message.to_string()),
+        let outcome: Result<(), String> = if let Some(store) = self.store.clone() {
+            // 登入後：由私有連線庫驗證並寫入，再重新載入清單。
+            match remote::block_on(store.save(None, draft)) {
+                Ok(_) => {
+                    self.connections = remote::block_on(store.list()).unwrap_or_default();
+                    Ok(())
+                }
+                Err(windows_store::SaveError::Invalid(invalid)) => Err(invalid.message.to_string()),
+                Err(windows_store::SaveError::Io(_)) => Err("無法儲存到私有連線庫。".to_string()),
+            }
+        } else {
+            cracamole_store::validate(&draft)
+                .map_err(|invalid| invalid.message.to_string())
+                .map(|()| {
+                    self.connections.push(PublicConnection {
+                        id: format!("new-{}", self.connections.len() + 1),
+                        name: draft.name,
+                        protocol: draft.protocol,
+                        params: draft.params,
+                        configured_secrets: vec![],
+                    });
+                })
+        };
+        match outcome {
+            Err(message) => self.error = Some(message),
             Ok(()) => {
-                self.connections.push(PublicConnection {
-                    id: format!("new-{}", self.connections.len() + 1),
-                    name: draft.name,
-                    protocol: draft.protocol,
-                    params: draft.params,
-                    configured_secrets: vec![],
-                });
                 self.editing = false;
                 self.error = None;
+                self.clear_editor(window, cx);
             }
         }
         cx.notify();
+    }
+
+    /// 清空編輯器欄位（含密碼）。
+    fn clear_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for state in [&self.name, &self.host, &self.port, &self.user, &self.secret] {
+            state.clone().update(cx, |state, cx| state.set_value("", window, cx));
+        }
     }
 
     fn visible(&self, cx: &App) -> Vec<PublicConnection> {
@@ -413,6 +598,55 @@ impl Library {
 }
 
 impl Library {
+    fn login_view(&self, cx: &mut Context<Self>) -> Div {
+        let auth = self.auth.as_ref().expect("login view requires auth state");
+        let label = |text: &'static str| div().text_size(px(13.)).text_color(rgb(MUTED)).child(text);
+        let message = auth.startup_error.clone().or_else(|| auth.error.clone());
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgb(BG))
+            .child(
+                div()
+                    .w(px(420.))
+                    .p_6()
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(CARD))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(div().text_size(px(22.)).text_color(rgb(TEXT)).child("cracamole"))
+                    .child(label("請以管理員帳號登入。"))
+                    .child(label("帳號"))
+                    .child(Input::new(&auth.username))
+                    .child(label("密碼"))
+                    .child(Input::new(&auth.password))
+                    .children(message.map(|message| {
+                        div().text_size(px(13.)).text_color(rgb(0xf87171)).child(message)
+                    }))
+                    .child(
+                        div()
+                            .id("login")
+                            .h(px(40.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(10.))
+                            .bg(rgb(if auth.busy || auth.credentials.is_none() { CARD } else { ACCENT }))
+                            .text_color(rgb(0xffffff))
+                            .cursor_pointer()
+                            .child(if auth.busy { "驗證中…" } else { "登入" })
+                            .on_click(cx.listener(|this, _, window, cx| this.try_login(window, cx)))
+                            .test_support()
+                            .aria_label("登入"),
+                    ),
+            )
+    }
+
     fn trust_card(&self, pending: &Pending, cx: &mut Context<Self>) -> Div {
         let host = pending.connection.params.get("hostname").cloned().unwrap_or_default();
         let button = |id: &'static str, text: &'static str, primary: bool| {
@@ -570,6 +804,8 @@ impl Library {
             .child(Input::new(&self.name))
             .child(label("主機"))
             .child(Input::new(&self.host))
+            .child(label("密碼（選填，保存於私有連線庫）"))
+            .child(Input::new(&self.secret))
             .child(
                 div()
                     .flex()
@@ -603,9 +839,10 @@ impl Library {
                     .justify_end()
                     .child(
                         button("cancel", "取消", false)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.editing = false;
                                 this.error = None;
+                                this.clear_editor(window, cx);
                                 cx.notify();
                             }))
                             .test_support()
@@ -613,7 +850,7 @@ impl Library {
                     )
                     .child(
                         button("save", "儲存", true)
-                            .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
+                            .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
                             .test_support()
                             .aria_label("儲存"),
                     ),
@@ -651,6 +888,9 @@ fn pill(id: &'static str, label: String, active: bool) -> Stateful<Div> {
 
 impl Render for Library {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.auth.is_some() {
+            return self.login_view(cx).into_any_element();
+        }
         self.sync_remote_size();
         let rows = self.visible(cx);
         let total = self.connections.len();
@@ -719,11 +959,18 @@ impl Render for Library {
                                     .child(format!("{user}@{host}")),
                             ),
                     )
-                    .child(
+                    .child({
+                        let pin_id = c.id.clone();
                         div()
+                            .id(SharedString::from(format!("pin-{}", c.id)))
+                            .px_1()
+                            .cursor_pointer()
                             .text_color(rgb(if is_pinned { 0xfbbf24 } else { MUTED }))
-                            .child(if is_pinned { "★" } else { "☆" }),
-                    ),
+                            .child(if is_pinned { "★" } else { "☆" })
+                            .on_click(cx.listener(move |this, _, _, cx| this.toggle_pin(&pin_id, cx)))
+                            .test_support()
+                            .aria_label(if is_pinned { "取消釘選" } else { "釘選" })
+                    }),
             );
         }
 
@@ -948,14 +1195,26 @@ impl Render for Library {
             .text_color(rgb(TEXT))
             .child(sidebar)
             .child(stage)
+            .into_any_element()
     }
 }
 
 fn main() {
-    gpui_kit::application().run(|cx| {
+    let username = std::env::var("CRACAMOLE_ADMIN_USERNAME").unwrap_or_else(|_| "admin".into());
+    let credentials = match std::env::var("CRACAMOLE_ADMIN_PASSWORD") {
+        Ok(password) => remote::block_on(Credentials::new(username, password))
+            .map(Arc::new),
+        Err(_) => Err("請先設定 CRACAMOLE_ADMIN_PASSWORD（至少 12 字元）再啟動。".to_string()),
+    };
+    let data_dir = std::env::var_os("CRACAMOLE_DESKTOP_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("cracamole-desktop"))
+        });
+    gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
-        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
-            let view = cx.new(|cx| Library::new(window, cx));
+        gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
+            let view = cx.new(|cx| Library::locked(window, cx, credentials, data_dir));
             cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
         })
         .expect("window");
@@ -1508,5 +1767,129 @@ mod tests {
                 .any(|m| m[0] == 5 && m[1] == 1 && m[2..4] == 10u16.to_be_bytes() && m[4..6] == 5u16.to_be_bytes());
             key && pointer
         });
+    }
+
+    #[gpui_kit::test]
+    fn login_gates_the_library_then_saves_and_pins_in_the_private_store(cx: &mut TestAppContext) {
+        use gpui_kit::component::input::InputState;
+        cx.executor().allow_parking();
+        let credentials = super::remote::block_on(super::Credentials::new(
+            "admin".into(),
+            "correct-horse-battery".into(),
+        ))
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().join("desktop");
+        let (window, content) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            let dir = data_dir.clone();
+            let (window, content) = gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Point::default(),
+                        size: size(px(1200.), px(760.)),
+                    })),
+                    ..Default::default()
+                },
+                cx,
+                move |window, cx| {
+                    cx.new(|cx| {
+                        Library::locked(window, cx, Ok(std::sync::Arc::new(credentials)), Some(dir))
+                    })
+                },
+            )
+            .expect("open test window");
+            (gpui_kit::AnyWindowHandle::from(window), content)
+        });
+
+        let fill = |cx: &mut TestAppContext, user: &str, password: &str| {
+            cx.update_window(window, |_, window, cx| {
+                let (u, p) = {
+                    let auth = content.read(cx).auth.as_ref().unwrap();
+                    (auth.username.clone(), auth.password.clone())
+                };
+                u.update(cx, |s: &mut InputState, cx| s.set_value(user, window, cx));
+                p.update(cx, |s: &mut InputState, cx| s.set_value(password, window, cx));
+                window.render_frame(cx);
+                window.click("login", cx);
+            })
+            .unwrap();
+        };
+
+        // 未登入：沒有任何連線資料，也看不到連線庫畫面。
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("login").is_some());
+            assert!(window.try_find("add").is_none());
+            assert!(content.read(cx).connections.is_empty());
+            assert!(content.read(cx).store.is_none());
+        })
+        .unwrap();
+
+        // 錯誤密碼：維持鎖定、顯示固定訊息，且不建立資料目錄。
+        fill(cx, "admin", "wrong-password-123");
+        wait_until(cx, "收到驗證結果", |cx| {
+            cx.read_entity(&content, |library, _| {
+                library.auth.as_ref().is_some_and(|auth| auth.error.is_some())
+            })
+        });
+        cx.update_window(window, |_, _, cx| {
+            let library = content.read(cx);
+            assert_eq!(
+                library.auth.as_ref().unwrap().error.as_deref(),
+                Some("帳號或密碼不正確。")
+            );
+            assert!(library.store.is_none());
+            // 送出後密碼欄位已清空。
+            assert!(library.auth.as_ref().unwrap().password.read(cx).value().is_empty());
+        })
+        .unwrap();
+        assert!(!data_dir.exists(), "驗證失敗不得建立資料目錄");
+
+        // 正確密碼：開啟私有連線庫。
+        fill(cx, "admin", "correct-horse-battery");
+        wait_until(cx, "登入完成", |cx| {
+            cx.read_entity(&content, |library, _| library.auth.is_none())
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(content.read(cx).store.is_some());
+            assert!(content.read(cx).connections.is_empty());
+            assert!(window.try_find("add").is_some());
+
+            // 新增含密碼的連線 → 寫入私有連線庫。
+            window.click("add", cx);
+            window.render_frame(cx);
+            let (name, host, secret) = {
+                let library = content.read(cx);
+                (library.name.clone(), library.host.clone(), library.secret.clone())
+            };
+            name.update(cx, |s: &mut InputState, cx| s.set_value("lab-persist", window, cx));
+            host.update(cx, |s: &mut InputState, cx| s.set_value("10.1.2.3", window, cx));
+            secret.update(cx, |s: &mut InputState, cx| s.set_value("s3cret-value", window, cx));
+            window.click("save", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(!library.editing && library.error.is_none());
+            assert_eq!(library.connections.len(), 1);
+            // 密碼不在公開欄位，只標記為已設定。
+            let saved = &library.connections[0];
+            assert!(saved.configured_secrets.iter().any(|s| s == "password"));
+            assert!(!saved.params.contains_key("password"));
+            // 儲存後編輯器欄位（含密碼）已清空。
+            assert!(library.secret.read(cx).value().is_empty());
+            let id = saved.id.clone();
+            let store = library.store.clone().unwrap();
+            let full = super::remote::block_on(store.get(&id)).unwrap().unwrap();
+            assert_eq!(full.params.get("password").map(String::as_str), Some("s3cret-value"));
+
+            // 釘選會持久化。
+            window.click(format!("pin-{id}"), cx);
+            window.render_frame(cx);
+            assert!(store.pinned().unwrap().contains(&id));
+        })
+        .unwrap();
+        let persisted = std::fs::read_to_string(data_dir.join("connections.json")).unwrap();
+        assert!(persisted.contains("lab-persist"));
     }
 }

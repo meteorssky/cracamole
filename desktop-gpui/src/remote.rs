@@ -31,13 +31,13 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// 取得可連線的完整設定：有資料目錄時讀取含機密的版本，否則只用公開欄位。
-pub fn load_connection(public: &PublicConnection) -> Connection {
-    if let Some(dir) = std::env::var_os("CRACAMOLE_DESKTOP_DATA_DIR") {
-        if let Ok(Some(connection)) = runtime().block_on(cracamole_store::Store::get_existing(
-            dir.into(),
-            public.id.clone(),
-        )) {
+/// 取得可連線的完整設定：有私有連線庫時讀取含機密的版本，否則只用公開欄位。
+pub fn load_connection(
+    public: &PublicConnection,
+    store: Option<&crate::windows_store::WindowsStore>,
+) -> Connection {
+    if let Some(store) = store {
+        if let Ok(Some(connection)) = runtime().block_on(store.get(&public.id)) {
             return connection;
         }
     }
@@ -49,10 +49,22 @@ pub fn load_connection(public: &PublicConnection) -> Connection {
     }
 }
 
-/// 測試用：在工作階段使用的同一個 runtime 上執行 future。
-#[cfg(test)]
+/// 在共用的 runtime 上執行 future（呼叫端不可在 tokio 執行緒內）。
 pub fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
     runtime().block_on(future)
+}
+
+/// 在共用 runtime 上驗證管理員帳密；密碼交給驗證後即清除。
+pub fn verify(
+    credentials: Arc<cracamole_store::credentials::Credentials>,
+    username: String,
+    password: String,
+) -> tokio::sync::oneshot::Receiver<Result<bool, cracamole_store::credentials::VerifyError>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    runtime().spawn(async move {
+        let _ = tx.send(credentials.verify(&username, password).await);
+    });
+    rx
 }
 
 /// 伺服器身分探測結果（SSH 主機金鑰或 RDP 憑證）。

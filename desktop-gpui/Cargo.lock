@@ -1539,16 +1539,22 @@ dependencies = [
 name = "cracamole-desktop-gpui"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "cracamole-desktop",
  "cracamole-store",
  "gpui-kit",
  "guacd",
  "image",
+ "proto-ssh",
  "rand 0.10.4",
  "russh",
+ "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "tokio",
  "tokio-util",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
