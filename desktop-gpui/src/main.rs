@@ -2,7 +2,11 @@
 //! cracamole 桌面介面（GPUI 版）原型：連線庫畫面。
 //! 資料來自 `cracamole-store`（`CRACAMOLE_DESKTOP_DATA_DIR`），未設定時顯示範例連線。
 
+mod remote;
+
 use cracamole_store::PublicConnection;
+use remote::{Event, RemoteInput};
+use std::sync::Arc;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::test::TestSupportExt;
 use gpui_kit::*;
@@ -23,7 +27,18 @@ enum Tab {
     Pinned,
 }
 
+/// 進行中的遠端工作階段。
+struct Live {
+    input: tokio::sync::mpsc::Sender<RemoteInput>,
+    cancel: tokio_util::sync::CancellationToken,
+    frame: Option<Arc<RenderImage>>,
+    status: String,
+    ended: bool,
+}
+
 struct Library {
+    live: Option<Live>,
+    focus: FocusHandle,
     connections: Vec<PublicConnection>,
     pinned: Vec<String>,
     selected: Option<String>,
@@ -83,6 +98,8 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            live: None,
+            focus: cx.focus_handle(),
             connections,
             pinned,
             selected: None,
@@ -95,6 +112,75 @@ impl Library {
             host,
             port,
             user,
+        }
+    }
+
+    /// 連線到目前選取的項目。
+    fn connect_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.live.is_some() {
+            return;
+        }
+        let Some(public) = self
+            .connections
+            .iter()
+            .find(|c| Some(&c.id) == self.selected.as_ref())
+        else {
+            return;
+        };
+        let connection = remote::load_connection(public);
+        let mut session = remote::start(connection, 960, 540);
+        self.live = Some(Live {
+            input: session.input.clone(),
+            cancel: session.cancel.clone(),
+            frame: None,
+            status: "連線中…".into(),
+            ended: false,
+        });
+        window.focus(&self.focus, cx);
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = session.events.recv().await {
+                if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn on_event(&mut self, event: Event, cx: &mut Context<Self>) {
+        let Some(live) = self.live.as_mut() else {
+            return;
+        };
+        match event {
+            Event::Frame(frame) => {
+                if let Some(image) = remote::to_image(&frame) {
+                    live.frame = Some(image);
+                    live.status = "已連線".into();
+                }
+            }
+            Event::Ended(message) => {
+                live.ended = true;
+                live.status = message.unwrap_or_else(|| "連線已結束".into());
+            }
+        }
+        cx.notify();
+    }
+
+    fn disconnect(&mut self, cx: &mut Context<Self>) {
+        if let Some(live) = self.live.take() {
+            live.cancel.cancel();
+        }
+        cx.notify();
+    }
+
+    fn send_key(&mut self, keystroke: &Keystroke) {
+        let Some(live) = self.live.as_ref().filter(|live| !live.ended) else {
+            return;
+        };
+        for (keysym, pressed) in remote::key_events(keystroke) {
+            // 佇列已滿時丟棄輸入，不阻塞介面。
+            let _ = live.input.try_send(RemoteInput::Key { keysym, pressed });
         }
     }
 
@@ -161,6 +247,40 @@ impl Library {
 }
 
 impl Library {
+    fn action_button(&self, can_connect: bool, cx: &mut Context<Self>) -> AnyElement {
+        let live = self.live.is_some();
+        let text = if live { "中斷" } else { "連線" };
+        // 單一元素識別：點擊途中重繪也不會落到另一個按鈕。
+        let id = "session-action";
+        let enabled = live || can_connect;
+        let button = div()
+            .id(id)
+            .px_5()
+            .h(px(36.))
+            .flex()
+            .items_center()
+            .rounded(px(10.))
+            .bg(rgb(if live { 0x3b1d24 } else if enabled { ACCENT } else { CARD }))
+            .text_color(rgb(if enabled { 0xffffff } else { MUTED }))
+            .child(text);
+        if !enabled {
+            return button.test_support().aria_label(text).into_any_element();
+        }
+        button
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| {
+                // 以點擊當下的狀態決定動作。
+                if this.live.is_some() {
+                    this.disconnect(cx);
+                } else {
+                    this.connect_selected(window, cx);
+                }
+            }))
+            .test_support()
+            .aria_label(text)
+            .into_any_element()
+    }
+
     fn editor_card(&self, cx: &mut Context<Self>) -> Div {
         let label = |text: &'static str| div().text_size(px(13.)).text_color(rgb(MUTED)).child(text);
         let mut protocols = div().flex().gap_2();
@@ -460,6 +580,8 @@ impl Render for Library {
         };
         let stage = div()
             .flex_1()
+            .min_w_0()
+            .overflow_hidden()
             .h_full()
             .flex()
             .flex_col()
@@ -467,19 +589,50 @@ impl Render for Library {
                 div()
                     .px_5()
                     .py_4()
+                    .flex()
+                    .items_center()
+                    .justify_between()
                     .border_b_1()
                     .border_color(rgb(BORDER))
                     .child(
                         div()
-                            .text_size(px(18.))
-                            .text_color(rgb(TEXT))
-                            .child(selected_name.unwrap_or_else(|| "尚未選擇連線".into())),
+                            .child(
+                                div()
+                                    .text_size(px(18.))
+                                    .text_color(rgb(TEXT))
+                                    .child(selected_name.clone().unwrap_or_else(|| "尚未選擇連線".into())),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(MUTED))
+                                    .child(self.live.as_ref().map_or(subtitle.to_string(), |l| l.status.clone())),
+                            ),
                     )
-                    .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(subtitle)),
+                    .child(self.action_button(selected_name.is_some(), cx)),
             )
             .child(
-                div().flex_1().flex().items_center().justify_center().child(if self.editing {
-                    editor
+                div().flex_1().flex().items_center().justify_center().child(if let Some(live) = &self.live {
+                    div()
+                        .id("session")
+                        .track_focus(&self.focus)
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
+                            this.send_key(&event.keystroke);
+                        }))
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(rgb(0x000000))
+                        .child(match &live.frame {
+                            Some(image) => img(image.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
+                            None => div().text_color(rgb(MUTED)).child(live.status.clone()).into_any_element(),
+                        })
+                        .test_support()
+                        .aria_label("遠端工作階段")
+                        .into_any_element()
+                } else if self.editing {
+                    editor.into_any_element()
                 } else {
                     div()
                         .w(px(520.))
@@ -504,6 +657,7 @@ impl Render for Library {
                                 .text_color(rgb(MUTED))
                                 .child("選擇左側連線，或搜尋主機與輸入連線位址即可開始。"),
                         )
+                        .into_any_element()
                 }),
             );
 
@@ -654,6 +808,81 @@ mod tests {
             window.render_frame(cx);
             assert!(!content.read(cx).editing);
             assert_eq!(content.read(cx).connections.len(), 5);
+        })
+        .unwrap();
+    }
+
+    /// 程序內的 Telnet 伺服器：送出一行文字，並記錄收到的位元組。
+    fn telnet_fixture() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = received.clone();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.write_all(b"hello cracamole\r\n$ ");
+                let mut buffer = [0u8; 256];
+                while let Ok(count) = stream.read(&mut buffer) {
+                    if count == 0 {
+                        break;
+                    }
+                    sink.lock().unwrap().extend_from_slice(&buffer[..count]);
+                }
+            }
+        });
+        (port, received)
+    }
+
+    fn wait_until(cx: &mut TestAppContext, what: &str, mut done: impl FnMut(&mut TestAppContext) -> bool) {
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("逾時：{what}");
+    }
+
+    #[gpui_kit::test]
+    fn telnet_session_shows_frames_sends_keys_and_disconnects(cx: &mut TestAppContext) {
+        // 測試含真實的網路 I/O，允許其他執行緒喚醒 GPUI 任務。
+        cx.executor().allow_parking();
+        let (port, received) = telnet_fixture();
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            content.update(cx, |library, _| {
+                let mut connection = super::sample("t1", "lab-telnet", "telnet", "127.0.0.1", "");
+                connection.params.insert("port".into(), port.to_string());
+                library.connections.push(connection);
+                library.selected = Some("t1".into());
+            });
+            window.render_frame(cx);
+            window.click("session-action", cx);
+        })
+        .unwrap();
+
+        wait_until(cx, "收到第一張畫面", |cx| {
+            cx.read_entity(&content, |library, _| {
+                library.live.as_ref().is_some_and(|live| live.frame.is_some())
+            })
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("session").is_some());
+            window.press("x", cx);
+        })
+        .unwrap();
+        wait_until(cx, "伺服器收到按鍵", |_| received.lock().unwrap().contains(&b'x'));
+
+        cx.update_window(window, |_, window, cx| {
+            window.click("session-action", cx);
+            let right_after = content.read(cx).live.is_none();
+            window.render_frame(cx);
+            assert!(right_after, "點擊後 live 未清除");
+            assert!(content.read(cx).live.is_none(), "重繪後 live 又出現");
         })
         .unwrap();
     }

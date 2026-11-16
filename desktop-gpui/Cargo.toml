@@ -12,4 +12,7 @@ publish = false
 # test-support 讓元素可被無頭 UI 測試查詢（無障礙識別，不影響畫面）。
 gpui-kit = { version = "0.10.0", features = ["test-support"] }
 cracamole-store = { path = "../crates/cracamole-store" }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+cracamole-desktop = { path = "../crates/cracamole-desktop" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util"] }
+tokio-util = "0.7"
+image = { version = "0.25", default-features = false }
