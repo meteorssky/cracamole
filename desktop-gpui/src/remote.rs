@@ -10,6 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 pub enum Event {
     Frame(Arc<Frame>),
+    /// 遠端複製的文字。
+    Clipboard(Arc<str>),
     /// 工作階段結束；`Some` 為可顯示的失敗原因（不含遠端提供的文字）。
     Ended(Option<String>),
 }
@@ -133,7 +135,7 @@ pub fn probe(
 pub fn start(connection: Connection, width: u32, height: u32) -> Remote {
     let (input, input_rx) = mpsc::channel(256);
     let (frames_tx, mut frames_rx) = watch::channel(None);
-    let (clipboard_tx, _clipboard_rx) = watch::channel(None);
+    let (clipboard_tx, mut clipboard_rx) = watch::channel(None::<Arc<str>>);
     let (event_tx, events) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
     let token = cancel.clone();
@@ -144,6 +146,17 @@ pub fn start(connection: Connection, width: u32, height: u32) -> Remote {
                 let frame: Option<Arc<Frame>> = frames_rx.borrow_and_update().clone();
                 if let Some(frame) = frame {
                     if frames_events.send(Event::Frame(frame)).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let clipboard_events = event_tx.clone();
+        let clipboard_forwarder = tokio::spawn(async move {
+            while clipboard_rx.changed().await.is_ok() {
+                let text: Option<Arc<str>> = clipboard_rx.borrow_and_update().clone();
+                if let Some(text) = text {
+                    if clipboard_events.send(Event::Clipboard(text)).is_err() {
                         break;
                     }
                 }
@@ -160,6 +173,7 @@ pub fn start(connection: Connection, width: u32, height: u32) -> Remote {
         )
         .await;
         let _ = forwarder.await;
+        let _ = clipboard_forwarder.await;
         let message = match result {
             Ok(()) => None,
             Err(DriverError::Remote(status)) => Some(format!("遠端連線錯誤（{status:?}）")),
@@ -222,6 +236,15 @@ pub fn resize_target(requested: (u32, u32), view: (u32, u32)) -> Option<(u32, u3
     }
     (view.0.abs_diff(requested.0) > 8 || view.1.abs_diff(requested.1) > 8).then_some(view)
 }
+
+/// 貼到遠端前移除控制字元（保留換行、歸位與 Tab）。
+pub fn sanitize_paste(text: &str) -> String {
+    text.chars()
+        .filter(|c| matches!(c, '\n' | '\r' | '\t') || !c.is_control())
+        .collect()
+}
+
+pub const PASTE_LIMIT: usize = 256 * 1024;
 
 const CONTROL_L: u32 = 0xffe3;
 
@@ -291,6 +314,13 @@ mod tests {
             key: key.to_string(),
             key_char: key_char.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn paste_text_drops_control_characters_but_keeps_line_breaks() {
+        assert_eq!(sanitize_paste("a\u{1b}[31mb\u{7f}\u{0}c\r\n\td"), "a[31mbc\r\n\td");
+        assert_eq!(sanitize_paste("遠端測試🙂"), "遠端測試🙂");
+        assert_eq!(sanitize_paste("\u{1b}\u{9b}"), "");
     }
 
     #[test]

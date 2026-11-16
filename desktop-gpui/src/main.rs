@@ -58,6 +58,11 @@ struct Live {
     requested: (u32, u32),
     /// 目前按下的滑鼠按鈕（Guacamole 遮罩：1 左、2 中、4 右）。
     mask: u32,
+    read_only: bool,
+    allow_copy: bool,
+    allow_paste: bool,
+    /// 同時只允許一個貼上作業。
+    paste_limit: Arc<tokio::sync::Semaphore>,
     status: String,
     ended: bool,
 }
@@ -396,6 +401,12 @@ impl Library {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let flag = |key: &str| connection.params.get(key).is_some_and(|v| v == "true");
+        let (read_only, allow_copy, allow_paste) = (
+            flag("read-only"),
+            !flag("disable-copy"),
+            !flag("disable-paste"),
+        );
         let view = self.view.get();
         let (width, height) = (f32::from(view.size.width), f32::from(view.size.height));
         let requested = if width >= 320.0 && height >= 240.0 {
@@ -411,6 +422,10 @@ impl Library {
             size: (0, 0),
             requested,
             mask: 0,
+            read_only,
+            allow_copy,
+            allow_paste,
+            paste_limit: Arc::new(tokio::sync::Semaphore::new(1)),
             status: "連線中…".into(),
             ended: false,
         });
@@ -436,6 +451,13 @@ impl Library {
                     live.size = (frame.width as u32, frame.height as u32);
                     live.frame = Some(image);
                     live.status = "已連線".into();
+                }
+            }
+            Event::Clipboard(text) => {
+                // 遠端複製的文字寫入本機剪貼簿（僅在未停用複製時）。
+                if live.allow_copy {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+                    live.status = "已更新系統剪貼簿。".into();
                 }
             }
             Event::Ended(message) => {
@@ -500,6 +522,36 @@ impl Library {
             y,
             mask: live.mask,
         });
+    }
+
+    /// 把本機剪貼簿文字貼到遠端：受唯讀與 `disable-paste` 限制，過濾控制字元並限制大小。
+    fn paste_local(&mut self, cx: &mut Context<Self>) {
+        let text = cx.read_from_clipboard().and_then(|item| item.text());
+        let Some(live) = self.live.as_mut().filter(|live| !live.ended) else {
+            return;
+        };
+        live.status = if live.read_only || !live.allow_paste {
+            "此連線不允許貼上到遠端。".into()
+        } else {
+            match text.map(|text| remote::sanitize_paste(&text)) {
+                None => "剪貼簿沒有文字。".into(),
+                Some(text) if text.is_empty() => "剪貼簿沒有可貼上的文字。".into(),
+                Some(text) if text.len() > remote::PASTE_LIMIT => {
+                    "剪貼簿超過 256 KiB，請先縮短內容。".into()
+                }
+                Some(text) => match live.paste_limit.clone().try_acquire_owned() {
+                    Err(_) => "上一次貼上尚未完成。".into(),
+                    Ok(permit) => {
+                        let text = zeroize::Zeroizing::new(text);
+                        match live.input.try_send(RemoteInput::Paste { text, permit }) {
+                            Ok(()) => "已送出貼上內容。".into(),
+                            Err(_) => "遠端輸入佇列已滿，請稍後再試。".into(),
+                        }
+                    }
+                },
+            }
+        };
+        cx.notify();
     }
 
     fn send_key(&mut self, keystroke: &Keystroke) {
@@ -796,6 +848,31 @@ impl Library {
                             .aria_label("信任並連線"),
                     ),
             )
+    }
+
+    /// 連線中才顯示：把本機剪貼簿貼到遠端。
+    fn paste_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(live) = self.live.as_ref().filter(|live| !live.ended) else {
+            return div().into_any_element();
+        };
+        let allowed = !live.read_only && live.allow_paste;
+        div()
+            .id("paste")
+            .px_4()
+            .h(px(36.))
+            .flex()
+            .items_center()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(PANEL))
+            .text_color(rgb(if allowed { TEXT } else { MUTED }))
+            .cursor_pointer()
+            .child("貼上")
+            .on_click(cx.listener(|this, _, _, cx| this.paste_local(cx)))
+            .test_support()
+            .aria_label("貼上到遠端")
+            .into_any_element()
     }
 
     /// 編輯與刪除（刪除需再次確認）；未選取、連線中或編輯中時不顯示。
@@ -1286,6 +1363,7 @@ impl Render for Library {
                             .items_center()
                             .gap_2()
                             .child(self.manage_buttons(selected_name.is_some(), cx))
+                            .child(self.paste_button(cx))
                             .child(self.action_button(selected_name.is_some(), cx)),
                     ),
             )
@@ -2181,6 +2259,83 @@ mod tests {
             assert_eq!(library.connections.len(), 4);
             assert!(library.selected.is_none());
             assert!(library.connections.iter().all(|c| c.id != "1"));
+        })
+        .unwrap();
+    }
+
+    /// 注意：TestAppContext 使用記憶體內的假剪貼簿，這些測試不會讀寫 Windows 系統剪貼簿。
+    #[gpui_kit::test]
+    fn clipboard_flows_both_ways_and_honours_policy(cx: &mut TestAppContext) {
+        use gpui_kit::ClipboardItem;
+        cx.executor().allow_parking();
+        let (port, received) = telnet_fixture();
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("paste").is_none(), "未連線時沒有貼上按鈕");
+            content.update(cx, |library, _| {
+                let mut connection = super::sample("t1", "lab-telnet", "telnet", "127.0.0.1", "");
+                connection.params.insert("port".into(), port.to_string());
+                library.connections.push(connection);
+                library.selected = Some("t1".into());
+            });
+            window.render_frame(cx);
+            window.click("session-action", cx);
+        })
+        .unwrap();
+        wait_until(cx, "收到第一張畫面", |cx| {
+            cx.read_entity(&content, |library, _| {
+                library.live.as_ref().is_some_and(|live| live.frame.is_some())
+            })
+        });
+
+        // 本機 → 遠端：含控制字元的文字被過濾後送出。
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            cx.write_to_clipboard(ClipboardItem::new_string("echo \u{1b}[31m遠端🙂".into()));
+            window.click("paste", cx);
+        })
+        .unwrap();
+        wait_until(cx, "伺服器收到貼上文字", |_| {
+            let bytes = received.lock().unwrap().clone();
+            String::from_utf8_lossy(&bytes).contains("echo [31m遠端🙂")
+        });
+        assert!(!received.lock().unwrap().contains(&0x1b), "控制字元不得送到遠端");
+
+        // 停用貼上：不送出任何資料。
+        let before = received.lock().unwrap().len();
+        cx.update_window(window, |_, window, cx| {
+            content.update(cx, |library, _| library.live.as_mut().unwrap().allow_paste = false);
+            cx.write_to_clipboard(ClipboardItem::new_string("blocked".into()));
+            window.click("paste", cx);
+            window.render_frame(cx);
+            assert_eq!(
+                content.read(cx).live.as_ref().unwrap().status,
+                "此連線不允許貼上到遠端。"
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(received.lock().unwrap().len(), before);
+
+        // 遠端 → 本機：寫入剪貼簿；停用複製時不寫入。
+        cx.update_window(window, |_, _, cx| {
+            content.update(cx, |library, cx| {
+                library.on_event(super::Event::Clipboard("遠端複製的文字".into()), cx)
+            });
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+                Some("遠端複製的文字")
+            );
+            content.update(cx, |library, cx| {
+                library.live.as_mut().unwrap().allow_copy = false;
+                library.on_event(super::Event::Clipboard("不應寫入".into()), cx)
+            });
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+                Some("遠端複製的文字")
+            );
         })
         .unwrap();
     }
