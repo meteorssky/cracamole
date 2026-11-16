@@ -10,6 +10,8 @@ mod windows_paste;
 mod windows_private;
 #[cfg(windows)]
 mod windows_store;
+#[cfg(windows)]
+mod windows_theme;
 
 #[cfg(windows)]
 fn main() {
@@ -1573,27 +1575,6 @@ mod windows_ui {
             .size((570, 45))
             .parent(&window)
             .build(&mut explanation)?;
-        // 次要說明文字採用較淡的前景色（對應 NSH 的 muted-foreground），對比仍達 WCAG AA。
-        let muted_handle = explanation.handle;
-        let muted_handler =
-            nwg::bind_raw_event_handler(&window.handle, 0x10002, move |_, message, hdc, label| {
-                // WM_CTLCOLORSTATIC
-                if message == 0x0138
-                    && muted_handle
-                        .hwnd()
-                        .is_some_and(|hwnd| hwnd as isize == label)
-                {
-                    unsafe {
-                        use windows_sys::Win32::Graphics::Gdi::{
-                            GetSysColorBrush, SetBkMode, SetTextColor,
-                        };
-                        SetBkMode(hdc as _, 1);
-                        SetTextColor(hdc as _, 0x005B_5252);
-                        return Some(GetSysColorBrush(15) as isize);
-                    }
-                }
-                None
-            })?;
         nwg::Label::builder()
             .text("帳號")
             .position((24, 132))
@@ -1822,8 +1803,11 @@ mod windows_ui {
             .text("選擇左側連線並按 Enter 或雙擊，即可開始。\r\n\r\n也可搜尋主機或輸入連線 URI。")
             .h_align(nwg::HTextAlign::Center)
             .v_align(nwg::VTextAlign::Center)
+            .background_color(super::windows_theme::label_background())
             .parent(&window)
             .build(&mut idle_stage)?;
+        // 次要說明文字與深色主題（跟隨系統設定）。
+        let muted_handler = super::windows_theme::install(&window, explanation.handle)?;
         idle_stage.set_visible(false);
         nwg::Label::builder()
             .text("")
@@ -6223,6 +6207,7 @@ mod windows_ui {
                 }
                 None
             })?;
+        super::windows_theme::style_window(&window);
         nwg::dispatch_thread_events();
         nwg::unbind_raw_event_handler(&muted_handler)?;
         for handler in editor_key_handlers {
