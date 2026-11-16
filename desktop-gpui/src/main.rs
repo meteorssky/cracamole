@@ -89,6 +89,9 @@ struct Auth {
 }
 
 struct Library {
+    /// 選取的 SSH 連線已保存的主機公鑰（獨立信任檔）。
+    saved_trust: Option<String>,
+    confirm_forget: bool,
     /// 匯入前的預覽（已通過共用驗證，尚未寫入）。
     import_preview: Option<Vec<cracamole_store::Draft>>,
     /// 由位址帶入、表單沒有欄位的參數（例如 RDP 網域），儲存新連線時併入。
@@ -223,6 +226,8 @@ impl Library {
             live.cancel.cancel();
         }
         self.store = None;
+        self.saved_trust = None;
+        self.confirm_forget = false;
         self.expires = None;
         self.connections.clear();
         self.pinned.clear();
@@ -292,6 +297,8 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            saved_trust: None,
+            confirm_forget: false,
             import_preview: None,
             extra_params: BTreeMap::new(),
             login_config: None,
@@ -426,6 +433,49 @@ impl Library {
         cx.notify();
     }
 
+    /// SSH 連線的信任目標（主機、連接埠）。
+    fn ssh_target(connection: &PublicConnection) -> Option<(String, u16)> {
+        (connection.protocol == "ssh").then(|| {
+            let host = connection.params.get("hostname").cloned().unwrap_or_default();
+            let port = connection.params.get("port").and_then(|p| p.parse().ok()).unwrap_or(22);
+            (host, port)
+        })
+    }
+
+    /// 重新讀取選取連線已保存的主機金鑰（只有登入後的私有連線庫才有）。
+    fn refresh_trust(&mut self) {
+        self.confirm_forget = false;
+        self.saved_trust = (|| {
+            let store = self.store.as_ref()?;
+            let connection = self.connections.iter().find(|c| Some(&c.id) == self.selected.as_ref())?;
+            let (host, port) = Self::ssh_target(connection)?;
+            store.ssh_identity(&host, port).ok().flatten()
+        })();
+    }
+
+    /// 移除已保存的主機金鑰；以顯示給使用者的金鑰為準，避免誤刪被更換過的項目。
+    fn forget_trust(&mut self, cx: &mut Context<Self>) {
+        self.confirm_forget = false;
+        let (Some(store), Some(expected)) = (self.store.clone(), self.saved_trust.clone()) else {
+            return;
+        };
+        let Some((host, port)) = self
+            .connections
+            .iter()
+            .find(|c| Some(&c.id) == self.selected.as_ref())
+            .and_then(Self::ssh_target)
+        else {
+            return;
+        };
+        self.notice = Some(match store.remove_ssh_identity(&host, port, &expected) {
+            Ok(true) => "已移除保存的主機信任；下次連線會重新核對。".into(),
+            Ok(false) => "沒有找到要移除的主機信任。".into(),
+            Err(_) => "無法移除：保存的主機信任已變更，請重新選取後再試。".into(),
+        });
+        self.refresh_trust();
+        cx.notify();
+    }
+
     /// 連線到目前選取的項目。
     fn connect_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.live.is_some() {
@@ -461,11 +511,17 @@ impl Library {
             .and_then(|port| port.parse().ok())
             .unwrap_or(if connection.protocol == "rdp" { 3389 } else { 22 });
         self.probing = true;
-        let result = remote::probe(connection.protocol.clone(), host, port);
+        // 已保存的主機金鑰：探測時一併比對，不符就拒絕。
+        let saved = self
+            .store
+            .as_ref()
+            .filter(|_| connection.protocol == "ssh")
+            .and_then(|store| store.ssh_identity(&host, port).ok().flatten());
+        let result = remote::probe(connection.protocol.clone(), host, port, saved.clone());
         cx.spawn_in(window, async move |this, cx| {
             let result = result.await.unwrap_or_else(|_| Err("探測已取消。".to_string()));
             let _ = this.update_in(cx, |this, window, cx| {
-                this.on_probe(connection, result, window, cx)
+                this.on_probe(connection, saved, result, window, cx)
             });
         })
         .detach();
@@ -474,7 +530,8 @@ impl Library {
 
     fn on_probe(
         &mut self,
-        connection: cracamole_store::Connection,
+        mut connection: cracamole_store::Connection,
+        saved: Option<String>,
         result: Result<remote::Identity, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -484,11 +541,19 @@ impl Library {
             Err(message) => self.notice = Some(message),
             // 系統 known_hosts 已信任且相符：直接連線。
             Ok(info) if info.trusted && info.matches => {
+                // 以已保存的金鑰連線，由 SSH 層再次驗證。
+                if let Some(key) = saved {
+                    connection.params.insert("host-key".into(), key);
+                }
                 self.start_session(connection, window, cx);
                 return;
             }
             Ok(info) if info.trusted => {
-                self.notice = Some("主機金鑰與已信任的不符，已拒絕連線。".to_string());
+                self.notice = Some(if saved.is_some() {
+                    "主機金鑰與已保存的信任不符，已拒絕連線。若主機金鑰已更換，請先移除已保存的信任。".to_string()
+                } else {
+                    "主機金鑰與已信任的不符，已拒絕連線。".to_string()
+                });
             }
             Ok(info) => {
                 self.pending = Some(Pending {
@@ -504,10 +569,25 @@ impl Library {
     }
 
     /// 使用者核對指紋後信任：金鑰或憑證只用於這一次連線，不寫入任何檔案。
-    fn trust_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn trust_pending(&mut self, remember: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pending) = self.pending.take() else {
             return;
         };
+        if remember && pending.trust_param == "host-key" {
+            // 保存失敗就不連線（失敗即關閉），避免使用者以為已記住。
+            let host = pending.connection.params.get("hostname").cloned().unwrap_or_default();
+            let port = pending.connection.params.get("port").and_then(|p| p.parse().ok()).unwrap_or(22);
+            let saved = self
+                .store
+                .as_ref()
+                .map(|store| store.save_ssh_identity(&host, port, &pending.trust_value));
+            if !matches!(saved, Some(Ok(()))) {
+                self.notice = Some("無法保存主機信任，未建立連線。".into());
+                cx.notify();
+                return;
+            }
+            self.refresh_trust();
+        }
         let mut connection = pending.connection;
         connection
             .params
@@ -857,6 +937,7 @@ impl Library {
         }
         self.pinned.retain(|p| p != &id);
         self.selected = None;
+        self.refresh_trust();
         self.notice = None;
         cx.notify();
     }
@@ -876,6 +957,7 @@ impl Library {
         self.search.clone().update(cx, |state, cx| state.set_value("", window, cx));
         if let Some(existing) = find_destination(&self.connections, &draft) {
             self.selected = Some(existing.id.clone());
+            self.refresh_trust();
             self.tab = Tab::All;
             self.notice = Some("已選取相同目的地的既有連線。".into());
             cx.notify();
@@ -1143,9 +1225,15 @@ impl Library {
                             .test_support()
                             .aria_label("取消"),
                     )
+                    .children((self.store.is_some() && pending.trust_param == "host-key").then(|| {
+                        button("trust-remember", "信任並記住", false)
+                            .on_click(cx.listener(|this, _, window, cx| this.trust_pending(true, window, cx)))
+                            .test_support()
+                            .aria_label("信任並記住")
+                    }))
                     .child(
                         button("trust", "信任並連線", true)
-                            .on_click(cx.listener(|this, _, window, cx| this.trust_pending(window, cx)))
+                            .on_click(cx.listener(|this, _, window, cx| this.trust_pending(false, window, cx)))
                             .test_support()
                             .aria_label("信任並連線"),
                     ),
@@ -1236,6 +1324,7 @@ impl Library {
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.selected = Some(id.clone());
+                this.refresh_trust();
                 cx.notify();
             }))
             .child(div().size(px(8.)).rounded_full().bg(rgb(MUTED)))
@@ -1550,6 +1639,29 @@ impl Library {
                 .cursor_pointer()
                 .child(text)
         };
+        if self.confirm_forget {
+            return div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_size(px(13.)).text_color(rgb(0xfca5a5)).child("確認移除保存的信任？"))
+                .child(
+                    small("forget-confirm", "移除", true)
+                        .on_click(cx.listener(|this, _, _, cx| this.forget_trust(cx)))
+                        .test_support()
+                        .aria_label("確認移除信任"),
+                )
+                .child(
+                    small("forget-cancel", "取消", false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.confirm_forget = false;
+                            cx.notify();
+                        }))
+                        .test_support()
+                        .aria_label("取消移除信任"),
+                )
+                .into_any_element();
+        }
         if self.confirm_delete {
             return div()
                 .flex()
@@ -1576,6 +1688,15 @@ impl Library {
         div()
             .flex()
             .gap_2()
+            .children(self.saved_trust.is_some().then(|| {
+                small("forget", "移除信任", false)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.confirm_forget = true;
+                        cx.notify();
+                    }))
+                    .test_support()
+                    .aria_label("移除已保存的主機信任")
+            }))
             .child(
                 small("edit", "編輯", false)
                     .on_click(cx.listener(|this, _, window, cx| this.edit_selected(window, cx)))
@@ -2108,6 +2229,9 @@ impl Render for Library {
                     .border_color(rgb(BORDER))
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
                             .child(
                                 div()
                                     .text_size(px(18.))
@@ -2122,6 +2246,11 @@ impl Render for Library {
                                         "正在核對主機身分…".to_string()
                                     } else if let Some(notice) = &self.notice {
                                         notice.clone()
+                                    } else if let (Some(key), None) = (&self.saved_trust, &self.live) {
+                                        format!(
+                                            "已記住主機金鑰 {}",
+                                            windows_store::ssh_identity_fingerprint(key).unwrap_or_default()
+                                        )
                                     } else {
                                         self.live.as_ref().map_or(subtitle.to_string(), |l| l.status.clone())
                                     }),
@@ -2130,6 +2259,7 @@ impl Render for Library {
                     .child(
                         div()
                             .flex()
+                            .flex_shrink_0()
                             .items_center()
                             .gap_2()
                             .child(self.manage_buttons(selected_name.is_some(), cx))
@@ -3621,5 +3751,115 @@ telnet://10.8.0.3
         .unwrap();
         let persisted = std::fs::read_to_string(directory.path().join("desktop").join("connections.json")).unwrap();
         assert!(persisted.contains("10.8.0.1") && persisted.contains("10.8.0.3"));
+    }
+
+    #[gpui_kit::test]
+    fn remembered_ssh_trust_skips_the_prompt_rejects_changed_keys_and_can_be_removed(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let server = super::remote::block_on(ssh_fixture::start_server(Default::default()));
+        let port = server.addr.port();
+        let key = server.host_key.public_key().to_openssh().unwrap();
+        let (window, content, directory) = logged_in(cx, 600);
+
+        let connect = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                window.click("session-action", cx);
+            })
+            .unwrap();
+        };
+        let disconnect = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                window.click("session-action", cx);
+                window.render_frame(cx);
+                assert!(content.read(cx).live.is_none());
+            })
+            .unwrap();
+        };
+        let live_frame = |cx: &mut TestAppContext| {
+            cx.read_entity(&content, |library, _| {
+                library.live.as_ref().is_some_and(|live| live.frame.is_some())
+            })
+        };
+
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            content.update(cx, |library, _| library.connections.push(ssh_sample(port)));
+            window.render_frame(cx);
+            window.click("row-s1", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).saved_trust.is_none());
+            assert!(window.try_find("forget").is_none());
+        })
+        .unwrap();
+
+        // 第一次：核對指紋並選「信任並記住」。
+        connect(cx);
+        wait_until(cx, "出現指紋核對", |cx| cx.read_entity(&content, |l, _| l.pending.is_some()));
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("trust-remember").is_some());
+            window.click("trust-remember", cx);
+        })
+        .unwrap();
+        wait_until(cx, "收到 SSH 畫面", &live_frame);
+        let store = cx.read_entity(&content, |l, _| l.store.clone().unwrap());
+        assert_eq!(store.ssh_identity("127.0.0.1", port).unwrap().as_deref(), Some(key.as_str()));
+        let identities = std::fs::read_to_string(directory.path().join("desktop").join("ssh-identities.json")).unwrap();
+        assert!(!identities.contains("secret"), "信任檔不得含密碼");
+        disconnect(cx);
+
+        // 第二次：已保存，不再詢問，直接連線。
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(content.read(cx).saved_trust.is_some());
+            assert!(window.try_find("forget").is_some());
+        })
+        .unwrap();
+        connect(cx);
+        wait_until(cx, "直接連線", &live_frame);
+        cx.read_entity(&content, |l, _| assert!(l.pending.is_none()));
+        disconnect(cx);
+
+        // 金鑰被換掉：拒絕連線，且不傳送驗證資訊。
+        let other = ssh_fixture::host_key().public_key().to_openssh().unwrap();
+        // 信任檔不允許直接覆蓋不同的金鑰：先移除，再存入另一把來模擬主機金鑰被更換。
+        assert!(store.remove_ssh_identity("127.0.0.1", port, &key).unwrap());
+        store.save_ssh_identity("127.0.0.1", port, &other).unwrap();
+        let tried = server.rec.lock().unwrap().auth_methods_tried.len();
+        cx.update_window(window, |_, window, cx| {
+            content.update(cx, |library, _| library.refresh_trust());
+            window.render_frame(cx);
+        })
+        .unwrap();
+        connect(cx);
+        wait_until(cx, "收到不符訊息", |cx| {
+            cx.read_entity(&content, |l, _| {
+                !l.probing && l.notice.as_deref().is_some_and(|n| n.contains("不符"))
+            })
+        });
+        cx.read_entity(&content, |l, _| assert!(l.live.is_none() && l.pending.is_none()));
+        assert_eq!(server.rec.lock().unwrap().auth_methods_tried.len(), tried);
+
+        // 移除保存的信任（需確認）：之後又會詢問。
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("forget", cx);
+            window.render_frame(cx);
+            assert!(window.try_find("forget-confirm").is_some());
+            window.click("forget-cancel", cx);
+            window.render_frame(cx);
+            assert!(store.ssh_identity("127.0.0.1", port).unwrap().is_some());
+            window.click("forget", cx);
+            window.render_frame(cx);
+            window.click("forget-confirm", cx);
+            window.render_frame(cx);
+            assert!(store.ssh_identity("127.0.0.1", port).unwrap().is_none());
+            assert!(content.read(cx).saved_trust.is_none());
+        })
+        .unwrap();
+        connect(cx);
+        wait_until(cx, "再次出現指紋核對", |cx| cx.read_entity(&content, |l, _| l.pending.is_some()));
     }
 }

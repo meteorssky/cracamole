@@ -98,6 +98,7 @@ pub fn probe(
     protocol: String,
     host: String,
     port: u16,
+    configured: Option<String>,
 ) -> tokio::sync::oneshot::Receiver<Result<Identity, String>> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     runtime().spawn(async move {
@@ -115,7 +116,7 @@ pub fn probe(
                 })
                 .map_err(|_| failure)
         } else {
-            guacd::probe_host_key(&host, port, None, 10)
+            guacd::probe_host_key(&host, port, configured.as_deref(), 10)
                 .await
                 .map(|info| Identity {
                     fingerprint: info.fingerprint,
