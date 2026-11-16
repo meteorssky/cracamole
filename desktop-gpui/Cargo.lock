@@ -1542,7 +1542,10 @@ dependencies = [
  "cracamole-desktop",
  "cracamole-store",
  "gpui-kit",
+ "guacd",
  "image",
+ "rand 0.10.4",
+ "russh",
  "tokio",
  "tokio-util",
 ]

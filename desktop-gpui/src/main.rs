@@ -27,6 +27,13 @@ enum Tab {
     Pinned,
 }
 
+/// 等待使用者核對指紋的 SSH 連線。
+struct Pending {
+    connection: cracamole_store::Connection,
+    public_key: String,
+    fingerprint: String,
+}
+
 /// 進行中的遠端工作階段。
 struct Live {
     input: tokio::sync::mpsc::Sender<RemoteInput>,
@@ -37,6 +44,9 @@ struct Live {
 }
 
 struct Library {
+    pending: Option<Pending>,
+    probing: bool,
+    notice: Option<String>,
     live: Option<Live>,
     focus: FocusHandle,
     connections: Vec<PublicConnection>,
@@ -98,6 +108,9 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            pending: None,
+            probing: false,
+            notice: None,
             live: None,
             focus: cx.focus_handle(),
             connections,
@@ -128,6 +141,84 @@ impl Library {
             return;
         };
         let connection = remote::load_connection(public);
+        self.notice = None;
+        // SSH 沒有已設定的主機金鑰時，先探測並讓使用者核對指紋。
+        if connection.protocol == "ssh" && !connection.params.contains_key("host-key") {
+            self.begin_probe(connection, window, cx);
+            return;
+        }
+        self.start_session(connection, window, cx);
+    }
+
+    fn begin_probe(
+        &mut self,
+        connection: cracamole_store::Connection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let host = connection.params.get("hostname").cloned().unwrap_or_default();
+        let port = connection
+            .params
+            .get("port")
+            .and_then(|port| port.parse().ok())
+            .unwrap_or(22);
+        self.probing = true;
+        let result = remote::probe_ssh(host, port);
+        cx.spawn_in(window, async move |this, cx| {
+            let result = result.await.unwrap_or_else(|_| Err("探測已取消。".to_string()));
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.on_probe(connection, result, window, cx)
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn on_probe(
+        &mut self,
+        connection: cracamole_store::Connection,
+        result: Result<remote::HostKeyInfo, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.probing = false;
+        match result {
+            Err(message) => self.notice = Some(message),
+            // 系統 known_hosts 已信任且相符：直接連線。
+            Ok(info) if info.trusted && info.matches => {
+                self.start_session(connection, window, cx);
+                return;
+            }
+            Ok(info) if info.trusted => {
+                self.notice = Some("主機金鑰與已信任的不符，已拒絕連線。".to_string());
+            }
+            Ok(info) => {
+                self.pending = Some(Pending {
+                    connection,
+                    public_key: info.public_key,
+                    fingerprint: info.fingerprint,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// 使用者核對指紋後信任：金鑰只用於這一次連線，不寫入任何檔案。
+    fn trust_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        let mut connection = pending.connection;
+        connection.params.insert("host-key".into(), pending.public_key);
+        self.start_session(connection, window, cx);
+    }
+
+    fn start_session(
+        &mut self,
+        connection: cracamole_store::Connection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let mut session = remote::start(connection, 960, 540);
         self.live = Some(Live {
             input: session.input.clone(),
@@ -247,6 +338,74 @@ impl Library {
 }
 
 impl Library {
+    fn trust_card(&self, pending: &Pending, cx: &mut Context<Self>) -> Div {
+        let host = pending.connection.params.get("hostname").cloned().unwrap_or_default();
+        let button = |id: &'static str, text: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_5()
+                .h(px(38.))
+                .flex()
+                .items_center()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(if primary { ACCENT } else { BORDER }))
+                .bg(rgb(if primary { ACCENT } else { PANEL }))
+                .text_color(rgb(if primary { 0xffffff } else { TEXT }))
+                .cursor_pointer()
+                .child(text)
+        };
+        div()
+            .w(px(560.))
+            .p_6()
+            .rounded(px(16.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(CARD))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_size(px(18.)).text_color(rgb(TEXT)).child("核對主機身分"))
+            .child(
+                div()
+                    .text_color(rgb(MUTED))
+                    .child(format!("尚未信任 {host} 的主機金鑰。請與伺服器管理者透過可信管道提供的指紋比對，一致後才信任。")),
+            )
+            .child(
+                div()
+                    .id("fingerprint")
+                    .px_3()
+                    .py_2()
+                    .rounded(px(8.))
+                    .bg(rgb(BG))
+                    .text_color(rgb(TEXT))
+                    .child(pending.fingerprint.clone())
+                    .test_support()
+                    .aria_label(pending.fingerprint.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .justify_end()
+                    .child(
+                        button("trust-cancel", "取消", false)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.pending = None;
+                                cx.notify();
+                            }))
+                            .test_support()
+                            .aria_label("取消"),
+                    )
+                    .child(
+                        button("trust", "信任並連線", true)
+                            .on_click(cx.listener(|this, _, window, cx| this.trust_pending(window, cx)))
+                            .test_support()
+                            .aria_label("信任並連線"),
+                    ),
+            )
+    }
+
     fn action_button(&self, can_connect: bool, cx: &mut Context<Self>) -> AnyElement {
         let live = self.live.is_some();
         let text = if live { "中斷" } else { "連線" };
@@ -606,7 +765,13 @@ impl Render for Library {
                                 div()
                                     .text_size(px(13.))
                                     .text_color(rgb(MUTED))
-                                    .child(self.live.as_ref().map_or(subtitle.to_string(), |l| l.status.clone())),
+                                    .child(if self.probing {
+                                        "正在核對主機身分…".to_string()
+                                    } else if let Some(notice) = &self.notice {
+                                        notice.clone()
+                                    } else {
+                                        self.live.as_ref().map_or(subtitle.to_string(), |l| l.status.clone())
+                                    }),
                             ),
                     )
                     .child(self.action_button(selected_name.is_some(), cx)),
@@ -631,6 +796,8 @@ impl Render for Library {
                         .test_support()
                         .aria_label("遠端工作階段")
                         .into_any_element()
+                } else if let Some(pending) = &self.pending {
+                    self.trust_card(pending, cx).into_any_element()
                 } else if self.editing {
                     editor.into_any_element()
                 } else {
@@ -810,6 +977,100 @@ mod tests {
             assert_eq!(content.read(cx).connections.len(), 5);
         })
         .unwrap();
+    }
+
+    #[path = "../../../crates/proto-ssh/tests/common/mod.rs"]
+    mod ssh_fixture;
+
+    fn ssh_sample(port: u16) -> cracamole_store::PublicConnection {
+        let mut connection = super::sample("s1", "lab-ssh", "ssh", "127.0.0.1", "alice");
+        connection.params.insert("port".into(), port.to_string());
+        connection.params.insert("password".into(), "secret".into());
+        connection
+    }
+
+    #[gpui_kit::test]
+    fn ssh_requires_fingerprint_confirmation_before_authenticating(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let server = super::remote::block_on(ssh_fixture::start_server(Default::default()));
+        let expected = server
+            .host_key
+            .public_key()
+            .fingerprint(russh::keys::HashAlg::Sha256)
+            .to_string();
+        let port = server.addr.port();
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            content.update(cx, |library, _| {
+                library.connections.push(ssh_sample(port));
+                library.selected = Some("s1".into());
+            });
+            window.render_frame(cx);
+            window.click("session-action", cx);
+        })
+        .unwrap();
+
+        wait_until(cx, "出現指紋核對", |cx| {
+            cx.read_entity(&content, |library, _| library.pending.is_some())
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).pending.as_ref().unwrap().fingerprint, expected);
+            assert!(window.try_find("fingerprint").is_some());
+            // 核對前不得傳送任何驗證資訊，也不得建立工作階段。
+            assert!(server.rec.lock().unwrap().auth_methods_tried.is_empty());
+            assert!(content.read(cx).live.is_none());
+            window.click("trust-cancel", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).pending.is_none());
+        })
+        .unwrap();
+        assert!(server.rec.lock().unwrap().auth_methods_tried.is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn ssh_session_connects_after_trusting_the_fingerprint(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let server = super::remote::block_on(ssh_fixture::start_server(Default::default()));
+        let port = server.addr.port();
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            content.update(cx, |library, _| {
+                library.connections.push(ssh_sample(port));
+                library.selected = Some("s1".into());
+            });
+            window.render_frame(cx);
+            window.click("session-action", cx);
+        })
+        .unwrap();
+        wait_until(cx, "出現指紋核對", |cx| {
+            cx.read_entity(&content, |library, _| library.pending.is_some())
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("trust", cx);
+        })
+        .unwrap();
+        wait_until(cx, "收到 SSH 畫面", |cx| {
+            cx.read_entity(&content, |library, _| {
+                library.live.as_ref().is_some_and(|live| live.frame.is_some())
+            })
+        });
+        assert!(server.rec.lock().unwrap().shell);
+        assert_eq!(
+            server.rec.lock().unwrap().auth_user.as_deref(),
+            Some("alice")
+        );
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press("y", cx);
+        })
+        .unwrap();
+        wait_until(cx, "伺服器收到按鍵", |_| {
+            server.rec.lock().unwrap().received.contains(&b'y')
+        });
     }
 
     /// 程序內的 Telnet 伺服器：送出一行文字，並記錄收到的位元組。

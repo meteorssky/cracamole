@@ -2,6 +2,7 @@
 
 use cracamole_desktop::driver::{self, DriverError, Frame};
 pub use cracamole_desktop::driver::Input as RemoteInput;
+pub use guacd::HostKeyInfo;
 use cracamole_store::{Connection, PublicConnection};
 use gpui_kit::{Keystroke, RenderImage};
 use std::sync::{Arc, OnceLock};
@@ -47,6 +48,27 @@ pub fn load_connection(public: &PublicConnection) -> Connection {
         protocol: public.protocol.clone(),
         params: public.params.clone(),
     }
+}
+
+/// 測試用：在工作階段使用的同一個 runtime 上執行 future。
+#[cfg(test)]
+pub fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    runtime().block_on(future)
+}
+
+/// 探測 SSH 主機金鑰（不傳送任何驗證資訊）；失敗只回傳固定訊息，不含遠端文字。
+pub fn probe_ssh(
+    host: String,
+    port: u16,
+) -> tokio::sync::oneshot::Receiver<Result<guacd::HostKeyInfo, String>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    runtime().spawn(async move {
+        let result = guacd::probe_host_key(&host, port, None, 10)
+            .await
+            .map_err(|_| "無法取得主機金鑰，請確認主機位址與連接埠。".to_string());
+        let _ = tx.send(result);
+    });
+    rx
 }
 
 pub fn start(connection: Connection, width: u32, height: u32) -> Remote {

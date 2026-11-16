@@ -13,6 +13,11 @@ publish = false
 gpui-kit = { version = "0.10.0", features = ["test-support"] }
 cracamole-store = { path = "../crates/cracamole-store" }
 cracamole-desktop = { path = "../crates/cracamole-desktop" }
+guacd = { path = "../crates/guacd" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util"] }
 tokio-util = "0.7"
 image = { version = "0.25", default-features = false }
+
+[dev-dependencies]
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+rand = "0.10"
