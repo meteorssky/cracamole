@@ -9,6 +9,7 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
-gpui-kit = "0.10.0"
+# test-support 讓元素可被無頭 UI 測試查詢（無障礙識別，不影響畫面）。
+gpui-kit = { version = "0.10.0", features = ["test-support"] }
 cracamole-store = { path = "../crates/cracamole-store" }
 tokio = { version = "1", features = ["rt-multi-thread"] }

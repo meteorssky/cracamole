@@ -1,8 +1,10 @@
+#![recursion_limit = "512"]
 //! cracamole 桌面介面（GPUI 版）原型：連線庫畫面。
 //! 資料來自 `cracamole-store`（`CRACAMOLE_DESKTOP_DATA_DIR`），未設定時顯示範例連線。
 
 use cracamole_store::PublicConnection;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::test::TestSupportExt;
 use gpui_kit::*;
 use std::collections::BTreeMap;
 
@@ -145,6 +147,8 @@ impl Render for Library {
             list = list.child(
                 div()
                     .id(SharedString::from(format!("row-{}", c.id)))
+                    .test_support()
+                    .aria_label(c.name.clone())
                     .flex()
                     .items_center()
                     .gap_3()
@@ -251,14 +255,18 @@ impl Render for Library {
                                 this.tab = Tab::All;
                                 cx.notify();
                             }),
-                        ),
+                        )
+                        .test_support()
+                        .aria_label("全部"),
                     )
                     .child(
                         pill("tab-pinned", format!("已釘選  {pinned}"), self.tab == Tab::Pinned)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.tab = Tab::Pinned;
                                 cx.notify();
-                            })),
+                            }))
+                            .test_support()
+                            .aria_label("已釘選"),
                     ),
             )
             .child(div().h(px(1.)).bg(rgb(BORDER)))
@@ -335,4 +343,62 @@ fn main() {
         })
         .expect("window");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Library;
+    use gpui_kit::test::{TestAppContextExt, TestWindowExt};
+    use gpui_kit::{
+        px, size, AppContext, Bounds, Entity, Point, TestAppContext, WindowBounds, WindowOptions,
+    };
+
+    fn open(cx: &mut TestAppContext) -> (gpui_kit::AnyWindowHandle, Entity<Library>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let (window, content) = gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Point::default(),
+                        size: size(px(1200.), px(760.)),
+                    })),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| Library::new(window, cx)),
+            )
+            .expect("open test window");
+            (window.into(), content)
+        })
+    }
+
+    #[gpui_kit::test]
+    fn library_lists_sample_connections_and_selects_on_click(cx: &mut TestAppContext) {
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).connections.len(), 5);
+            window.click("row-2", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).selected.as_deref(), Some("2"));
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn pinned_tab_filters_the_list(cx: &mut TestAppContext) {
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).visible(cx).len(), 5);
+            window.click("tab-pinned", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).visible(cx).len(), 2);
+            assert!(window.try_find("row-5").is_none());
+            window.click("tab-all", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).visible(cx).len(), 5);
+        })
+        .unwrap();
+    }
 }
