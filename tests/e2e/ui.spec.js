@@ -90,6 +90,44 @@ test('ui: first run guides to the first host and opens the editor for the chosen
   await expect(form.getByLabel('連接埠')).toHaveAttribute('placeholder', '3389');
 });
 
+test('ui: 1080p library shows at least 15 hosts across four groups', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await login(page);
+  await removeAllConnections(page);
+  for (let group = 1; group <= 4; group++) {
+    for (let host = 1; host <= 5; host++) {
+      const response = await page.request.post('api/connections', {
+        headers: { Origin: origin(page) },
+        data: { name: `群組 ${group} / 主機 ${host}`, protocol: 'ssh', params: { hostname: 'example.invalid' } },
+      });
+      expect(response.status()).toBe(201);
+    }
+  }
+  await page.reload();
+  const drawer = page.locator('.drawer');
+  await expect(drawer.locator('.card')).toHaveCount(20);
+  await drawer.evaluate(element => { element.scrollTop = 0; });
+  const visible = await drawer.evaluate(element => {
+    const viewport = element.getBoundingClientRect();
+    const inside = item => {
+      const rect = item.getBoundingClientRect();
+      return rect.top >= viewport.top && rect.bottom <= viewport.bottom;
+    };
+    return {
+      hosts: [...element.querySelectorAll('.card')].filter(inside).length,
+      groups: [...element.querySelectorAll('.conn-group__title')].filter(inside).length,
+      heights: [...element.querySelectorAll('.card')].map(item => item.getBoundingClientRect().height),
+    };
+  });
+  expect(visible.hosts).toBeGreaterThanOrEqual(15);
+  expect(visible.groups).toBeGreaterThanOrEqual(3);
+  for (const height of visible.heights) {
+    expect(height).toBeGreaterThanOrEqual(44);
+    expect(height).toBeLessThanOrEqual(50);
+  }
+  await removeAllConnections(page);
+});
+
 test('ui: pinned hosts and collapsed groups persist, while search expands matching groups', async ({ page }) => {
   await login(page);
   const group = `測試群組-${Date.now()}`;
