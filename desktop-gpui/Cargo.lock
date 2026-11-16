@@ -1543,6 +1543,7 @@ dependencies = [
  "cracamole-desktop",
  "cracamole-store",
  "gpui-kit",
+ "gpui-pre-wgpu",
  "guacd",
  "image",
  "proto-ssh",

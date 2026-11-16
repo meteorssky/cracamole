@@ -3,6 +3,8 @@
 //! 資料來自 `cracamole-store`（`CRACAMOLE_DESKTOP_DATA_DIR`），未設定時顯示範例連線。
 
 mod remote;
+#[cfg(test)]
+mod screenshots;
 
 // 與 Win32 版共用同一份私有連線庫（私有 ACL、單一程序鎖）；不複製其邏輯。
 #[allow(dead_code)]
@@ -1813,6 +1815,29 @@ impl Library {
             .child(Input::new(&self.name))
             .child(label("主機"))
             .child(Input::new(&self.host))
+            .child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(label("連接埠"))
+                            .child(Input::new(&self.port)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(label("帳號"))
+                            .child(Input::new(&self.user)),
+                    ),
+            )
             .child(label("密碼（選填，保存於私有連線庫）"))
             .child(Input::new(&self.secret))
             .children((self.protocol == "ssh").then(|| {
@@ -1847,29 +1872,6 @@ impl Library {
                     .child(label("私鑰密語（選填）"))
                     .child(Input::new(&self.passphrase))
             }))
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(label("連接埠"))
-                            .child(Input::new(&self.port)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(label("帳號"))
-                            .child(Input::new(&self.user)),
-                    ),
-            )
             )
             .children(self.error.clone().map(|message| {
                 div().text_size(px(13.)).text_color(rgb(0xf87171)).child(message)
@@ -2387,6 +2389,7 @@ fn main() {
     };
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
         gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
             let view = cx.new(|cx| Library::locked(window, cx, credentials, data_dir, lifetime));
             cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
