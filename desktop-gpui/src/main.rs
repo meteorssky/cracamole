@@ -75,6 +75,9 @@ struct Auth {
 }
 
 struct Library {
+    /// 正在編輯的既有連線（None 表示新增）。
+    editing_id: Option<String>,
+    confirm_delete: bool,
     store: Option<Arc<windows_store::WindowsStore>>,
     auth: Option<Auth>,
     secret: Entity<InputState>,
@@ -181,6 +184,8 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            editing_id: None,
+            confirm_delete: false,
             store: None,
             auth: None,
             secret,
@@ -514,21 +519,21 @@ impl Library {
             .iter()
             .find(|(name, _)| *name == self.protocol)
             .map_or("", |(_, port)| *port);
-        let mut params = BTreeMap::new();
-        params.insert("hostname".to_string(), text(&self.host));
         let port = text(&self.port);
-        params.insert(
-            "port".to_string(),
-            if port.is_empty() { default_port.to_string() } else { port },
-        );
-        let user = text(&self.user);
-        if !user.is_empty() {
-            params.insert("username".to_string(), user);
-        }
+        let port = if port.is_empty() { default_port.to_string() } else { port };
         let secret = self.secret.read(cx).value().to_string();
-        if !secret.is_empty() {
-            params.insert("password".to_string(), secret);
-        }
+        let base = self
+            .editing_id
+            .as_ref()
+            .and_then(|id| self.connections.iter().find(|c| &c.id == id));
+        let params = merged_params(
+            base,
+            self.protocol,
+            &text(&self.host),
+            &port,
+            &text(&self.user),
+            &secret,
+        );
         let draft = cracamole_store::Draft {
             name: text(&self.name),
             protocol: self.protocol.to_string(),
@@ -536,11 +541,12 @@ impl Library {
         };
         let outcome: Result<(), String> = if let Some(store) = self.store.clone() {
             // 登入後：由私有連線庫驗證並寫入，再重新載入清單。
-            match remote::block_on(store.save(None, draft)) {
-                Ok(_) => {
+            match remote::block_on(store.save(self.editing_id.as_deref(), draft)) {
+                Ok(Some(_)) => {
                     self.connections = remote::block_on(store.list()).unwrap_or_default();
                     Ok(())
                 }
+                Ok(None) => Err("找不到要更新的連線。".to_string()),
                 Err(windows_store::SaveError::Invalid(invalid)) => Err(invalid.message.to_string()),
                 Err(windows_store::SaveError::Io(_)) => Err("無法儲存到私有連線庫。".to_string()),
             }
@@ -548,23 +554,97 @@ impl Library {
             cracamole_store::validate(&draft)
                 .map_err(|invalid| invalid.message.to_string())
                 .map(|()| {
-                    self.connections.push(PublicConnection {
-                        id: format!("new-{}", self.connections.len() + 1),
-                        name: draft.name,
-                        protocol: draft.protocol,
-                        params: draft.params,
-                        configured_secrets: vec![],
-                    });
+                    let existing = self
+                        .editing_id
+                        .as_ref()
+                        .and_then(|id| self.connections.iter_mut().find(|c| &c.id == id));
+                    if let Some(connection) = existing {
+                        connection.name = draft.name;
+                        connection.protocol = draft.protocol;
+                        connection.params = draft.params;
+                    } else {
+                        self.connections.push(PublicConnection {
+                            id: format!("new-{}", self.connections.len() + 1),
+                            name: draft.name,
+                            protocol: draft.protocol,
+                            params: draft.params,
+                            configured_secrets: vec![],
+                        });
+                    }
                 })
         };
         match outcome {
             Err(message) => self.error = Some(message),
             Ok(()) => {
                 self.editing = false;
+                self.editing_id = None;
                 self.error = None;
                 self.clear_editor(window, cx);
             }
         }
+        cx.notify();
+    }
+
+    /// 以選取的連線預填編輯器；密碼欄位留空表示保留原值。
+    fn edit_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(connection) = self
+            .connections
+            .iter()
+            .find(|c| Some(&c.id) == self.selected.as_ref())
+        else {
+            return;
+        };
+        let value = |key: &str| connection.params.get(key).cloned().unwrap_or_default();
+        let (id, name, protocol) = (
+            connection.id.clone(),
+            connection.name.clone(),
+            connection.protocol.clone(),
+        );
+        let fields = [
+            (name, &self.name),
+            (value("hostname"), &self.host),
+            (value("port"), &self.port),
+            (value("username"), &self.user),
+            (String::new(), &self.secret),
+        ];
+        for (text, state) in fields {
+            state.clone().update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+        self.protocol = PROTOCOLS
+            .iter()
+            .find(|(name, _)| *name == protocol)
+            .map_or("ssh", |(name, _)| *name);
+        self.editing = true;
+        self.editing_id = Some(id);
+        self.confirm_delete = false;
+        self.error = None;
+        cx.notify();
+    }
+
+    /// 刪除選取的連線（已在介面確認過）。
+    fn delete_selected(&mut self, cx: &mut Context<Self>) {
+        self.confirm_delete = false;
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        if let Some(store) = self.store.clone() {
+            match remote::block_on(store.delete(&id)) {
+                Ok(_) => {
+                    self.connections = remote::block_on(store.list()).unwrap_or_default();
+                    let _ = store.set_pinned(&id, false);
+                }
+                Err(_) => {
+                    self.notice = Some("無法從私有連線庫刪除。".into());
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            self.connections.retain(|c| c.id != id);
+        }
+        self.pinned.retain(|p| p != &id);
+        self.selected = None;
+        self.notice = None;
         cx.notify();
     }
 
@@ -718,6 +798,70 @@ impl Library {
             )
     }
 
+    /// 編輯與刪除（刪除需再次確認）；未選取、連線中或編輯中時不顯示。
+    fn manage_buttons(&self, has_selection: bool, cx: &mut Context<Self>) -> AnyElement {
+        if !has_selection || self.live.is_some() || self.editing || self.pending.is_some() {
+            return div().into_any_element();
+        }
+        let small = |id: &'static str, text: &'static str, danger: bool| {
+            div()
+                .id(id)
+                .px_4()
+                .h(px(36.))
+                .flex()
+                .items_center()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(if danger { 0x7f1d1d } else { BORDER }))
+                .bg(rgb(if danger { 0x3b1d24 } else { PANEL }))
+                .text_color(rgb(if danger { 0xfca5a5 } else { TEXT }))
+                .cursor_pointer()
+                .child(text)
+        };
+        if self.confirm_delete {
+            return div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_size(px(13.)).text_color(rgb(0xfca5a5)).child("確認刪除這筆連線？"))
+                .child(
+                    small("delete-confirm", "刪除", true)
+                        .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx)))
+                        .test_support()
+                        .aria_label("確認刪除"),
+                )
+                .child(
+                    small("delete-cancel", "取消", false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.confirm_delete = false;
+                            cx.notify();
+                        }))
+                        .test_support()
+                        .aria_label("取消刪除"),
+                )
+                .into_any_element();
+        }
+        div()
+            .flex()
+            .gap_2()
+            .child(
+                small("edit", "編輯", false)
+                    .on_click(cx.listener(|this, _, window, cx| this.edit_selected(window, cx)))
+                    .test_support()
+                    .aria_label("編輯"),
+            )
+            .child(
+                small("delete", "刪除", true)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.confirm_delete = true;
+                        cx.notify();
+                    }))
+                    .test_support()
+                    .aria_label("刪除"),
+            )
+            .into_any_element()
+    }
+
     fn action_button(&self, can_connect: bool, cx: &mut Context<Self>) -> AnyElement {
         let live = self.live.is_some();
         let text = if live { "中斷" } else { "連線" };
@@ -797,7 +941,7 @@ impl Library {
             .flex()
             .flex_col()
             .gap_3()
-            .child(div().text_size(px(18.)).text_color(rgb(TEXT)).child("新增連線"))
+            .child(div().text_size(px(18.)).text_color(rgb(TEXT)).child(if self.editing_id.is_some() { "編輯連線" } else { "新增連線" }))
             .child(label("協定"))
             .child(protocols)
             .child(label("名稱"))
@@ -841,6 +985,7 @@ impl Library {
                         button("cancel", "取消", false)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.editing = false;
+                                this.editing_id = None;
                                 this.error = None;
                                 this.clear_editor(window, cx);
                                 cx.notify();
@@ -856,6 +1001,39 @@ impl Library {
                     ),
             )
     }
+}
+
+/// 編輯時的參數：保留未在表單出現的設定（網域、安全模式等）；
+/// 協定或目的地改變時移除舊的信任（host-key／server-cert-sha256），避免沿用到新主機。
+fn merged_params(
+    base: Option<&PublicConnection>,
+    protocol: &str,
+    host: &str,
+    port: &str,
+    user: &str,
+    secret: &str,
+) -> BTreeMap<String, String> {
+    let mut params = base.map(|b| b.params.clone()).unwrap_or_default();
+    let destination_changed = base.is_some_and(|b| {
+        b.protocol != protocol
+            || b.params.get("hostname").map(String::as_str) != Some(host)
+            || b.params.get("port").map(String::as_str) != Some(port)
+    });
+    if destination_changed {
+        params.remove("host-key");
+        params.remove("server-cert-sha256");
+    }
+    params.insert("hostname".to_string(), host.to_string());
+    params.insert("port".to_string(), port.to_string());
+    if user.is_empty() {
+        params.remove("username");
+    } else {
+        params.insert("username".to_string(), user.to_string());
+    }
+    if !secret.is_empty() {
+        params.insert("password".to_string(), secret.to_string());
+    }
+    params
 }
 
 fn protocol_color(protocol: &str) -> u32 {
@@ -1013,6 +1191,8 @@ impl Render for Library {
                             .child("新增")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.editing = true;
+                                this.editing_id = None;
+                                this.confirm_delete = false;
                                 this.error = None;
                                 cx.notify();
                             }))
@@ -1100,7 +1280,14 @@ impl Render for Library {
                                     }),
                             ),
                     )
-                    .child(self.action_button(selected_name.is_some(), cx)),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(self.manage_buttons(selected_name.is_some(), cx))
+                            .child(self.action_button(selected_name.is_some(), cx)),
+                    ),
             )
             .child(
                 div().flex_1().flex().items_center().justify_center().child(if let Some(live) = &self.live {
@@ -1891,5 +2078,110 @@ mod tests {
         .unwrap();
         let persisted = std::fs::read_to_string(data_dir.join("connections.json")).unwrap();
         assert!(persisted.contains("lab-persist"));
+
+        // 編輯：密碼留空時保留原值；刪除：連線庫與檔案都移除。
+        cx.update_window(window, |_, window, cx| {
+            let id = content.read(cx).connections[0].id.clone();
+            let store = content.read(cx).store.clone().unwrap();
+            window.click(format!("row-{id}"), cx);
+            window.render_frame(cx);
+            window.click("edit", cx);
+            window.render_frame(cx);
+            let name = content.read(cx).name.clone();
+            name.update(cx, |s: &mut InputState, cx| s.set_value("lab-renamed", window, cx));
+            window.click("save", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.error.is_none() && !library.editing);
+            assert_eq!(library.connections.len(), 1);
+            assert_eq!(library.connections[0].name, "lab-renamed");
+            let full = super::remote::block_on(store.get(&id)).unwrap().unwrap();
+            assert_eq!(full.params.get("password").map(String::as_str), Some("s3cret-value"));
+
+            window.click("delete", cx);
+            window.render_frame(cx);
+            window.click("delete-confirm", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).connections.is_empty());
+            assert!(super::remote::block_on(store.get(&id)).unwrap().is_none());
+            assert!(!store.pinned().unwrap().contains(&id));
+        })
+        .unwrap();
+        let persisted = std::fs::read_to_string(data_dir.join("connections.json")).unwrap();
+        assert!(!persisted.contains("lab-renamed") && !persisted.contains("s3cret-value"));
+    }
+
+    #[test]
+    fn editing_keeps_other_settings_and_drops_trust_when_the_destination_changes() {
+        use super::merged_params;
+        let mut base = super::sample("e1", "x", "rdp", "10.0.0.5", "alice");
+        base.params.insert("port".into(), "3389".into());
+        base.params.insert("domain".into(), "EXAMPLE".into());
+        base.params.insert("server-cert-sha256".into(), "ab".repeat(32));
+
+        // 目的地不變：保留信任與其他設定；清空帳號會移除 username。
+        let same = merged_params(Some(&base), "rdp", "10.0.0.5", "3389", "", "");
+        assert_eq!(same.get("server-cert-sha256"), base.params.get("server-cert-sha256"));
+        assert_eq!(same.get("domain").map(String::as_str), Some("EXAMPLE"));
+        assert!(!same.contains_key("username"));
+        assert!(!same.contains_key("password"));
+
+        // 主機、連接埠或協定改變：移除舊的信任，其他設定保留。
+        for (protocol, host, port) in [("rdp", "10.0.0.6", "3389"), ("rdp", "10.0.0.5", "3390"), ("vnc", "10.0.0.5", "3389")] {
+            let moved = merged_params(Some(&base), protocol, host, port, "alice", "new-secret");
+            assert!(!moved.contains_key("server-cert-sha256"), "{protocol} {host} {port}");
+            assert_eq!(moved.get("domain").map(String::as_str), Some("EXAMPLE"));
+            assert_eq!(moved.get("password").map(String::as_str), Some("new-secret"));
+        }
+
+        // 新增：只有表單欄位。
+        let fresh = merged_params(None, "ssh", "h", "22", "u", "");
+        assert_eq!(fresh.len(), 3);
+    }
+
+    #[gpui_kit::test]
+    fn edit_prefills_the_form_and_delete_needs_confirmation(cx: &mut TestAppContext) {
+        use gpui_kit::component::input::InputState;
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("edit").is_none(), "未選取時不顯示編輯與刪除");
+            window.click("row-1", cx);
+            window.render_frame(cx);
+
+            window.click("edit", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.editing && library.editing_id.as_deref() == Some("1"));
+            assert_eq!(library.name.read(cx).value().as_ref(), "prod-web-01");
+            assert_eq!(library.host.read(cx).value().as_ref(), "10.0.1.11");
+            assert_eq!(library.user.read(cx).value().as_ref(), "deploy");
+
+            let name = library.name.clone();
+            name.update(cx, |s: &mut InputState, cx| s.set_value("prod-web-renamed", window, cx));
+            window.click("save", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(!library.editing && library.editing_id.is_none());
+            assert_eq!(library.connections.len(), 5);
+            assert_eq!(library.connections[0].name, "prod-web-renamed");
+
+            // 刪除：先出現確認，取消不刪除，確認才刪除。
+            window.click("delete", cx);
+            window.render_frame(cx);
+            assert!(window.try_find("delete-confirm").is_some());
+            window.click("delete-cancel", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).connections.len(), 5);
+            window.click("delete", cx);
+            window.render_frame(cx);
+            window.click("delete-confirm", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert_eq!(library.connections.len(), 4);
+            assert!(library.selected.is_none());
+            assert!(library.connections.iter().all(|c| c.id != "1"));
+        })
+        .unwrap();
     }
 }
