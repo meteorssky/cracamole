@@ -301,11 +301,7 @@ impl Library {
         let Some(live) = self.live.as_mut().filter(|live| !live.ended && live.frame.is_some()) else {
             return;
         };
-        if width < 320 || height < 240 {
-            return;
-        }
-        let (old_w, old_h) = live.requested;
-        if width.abs_diff(old_w) > 8 || height.abs_diff(old_h) > 8 {
+        if let Some((width, height)) = remote::resize_target(live.requested, (width, height)) {
             if live
                 .input
                 .try_send(RemoteInput::Resize { width, height })
@@ -1376,6 +1372,141 @@ mod tests {
         wait_until(cx, "伺服器收到按鍵與滑鼠", |_| {
             fixture.directory.path().join("key").exists()
                 && fixture.directory.path().join("mouse").exists()
+        });
+    }
+
+    /// 最小的程序內 RFB 伺服器：無驗證、64×48 的紅色畫面，記錄用戶端訊息。
+    fn vnc_fixture() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+
+        async fn message(s: &mut TcpStream) -> Option<Vec<u8>> {
+            let kind = s.read_u8().await.ok()?;
+            let mut out = vec![kind];
+            let mut body = match kind {
+                0 => vec![0u8; 19],
+                3 => vec![0u8; 9],
+                4 => vec![0u8; 7],
+                5 => vec![0u8; 5],
+                2 => {
+                    let mut head = [0u8; 3];
+                    s.read_exact(&mut head).await.ok()?;
+                    out.extend_from_slice(&head);
+                    vec![0u8; usize::from(u16::from_be_bytes([head[1], head[2]])) * 4]
+                }
+                6 => {
+                    let mut head = [0u8; 7];
+                    s.read_exact(&mut head).await.ok()?;
+                    out.extend_from_slice(&head);
+                    vec![0u8; u32::from_be_bytes([head[3], head[4], head[5], head[6]]) as usize]
+                }
+                _ => return None,
+            };
+            s.read_exact(&mut body).await.ok()?;
+            out.extend(body);
+            Some(out)
+        }
+
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = log.clone();
+        let port = super::remote::block_on(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                let Ok((mut s, _)) = listener.accept().await else {
+                    return;
+                };
+                let (w, h) = (64u16, 48u16);
+                s.write_all(b"RFB 003.008\n").await.unwrap();
+                let mut version = [0u8; 12];
+                s.read_exact(&mut version).await.unwrap();
+                s.write_all(&[1, 1]).await.unwrap(); // 安全類型：None
+                s.read_u8().await.unwrap();
+                s.write_all(&0u32.to_be_bytes()).await.unwrap();
+                s.read_u8().await.unwrap(); // ClientInit
+                let mut init = vec![];
+                init.extend_from_slice(&w.to_be_bytes());
+                init.extend_from_slice(&h.to_be_bytes());
+                init.extend_from_slice(&[32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]);
+                init.extend_from_slice(&6u32.to_be_bytes());
+                init.extend_from_slice(b"My Mac");
+                s.write_all(&init).await.unwrap();
+                for _ in 0..3 {
+                    message(&mut s).await.unwrap(); // SetPixelFormat、SetEncodings、更新請求
+                }
+                // 一張 Raw 更新：整面紅色（記憶體順序 B、G、R、X）。
+                let mut update = vec![0, 0, 0, 1];
+                for value in [0u16, 0, w, h] {
+                    update.extend_from_slice(&value.to_be_bytes());
+                }
+                update.extend_from_slice(&0i32.to_be_bytes());
+                for _ in 0..(usize::from(w) * usize::from(h)) {
+                    update.extend_from_slice(&[0, 0, 255, 0]);
+                }
+                s.write_all(&update).await.unwrap();
+                while let Some(m) = message(&mut s).await {
+                    sink.lock().unwrap().push(m);
+                }
+            });
+            port
+        });
+        (port, log)
+    }
+
+    #[gpui_kit::test]
+    fn vnc_session_paints_the_framebuffer_and_forwards_keys_and_pointer(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let (port, log) = vnc_fixture();
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            content.update(cx, |library, _| {
+                let mut connection = super::sample("v1", "lab-vnc", "vnc", "127.0.0.1", "");
+                connection.params.insert("port".into(), port.to_string());
+                library.connections.push(connection);
+                library.selected = Some("v1".into());
+            });
+            window.render_frame(cx);
+            // VNC 沒有身分核對步驟，直接建立工作階段。
+            window.click("session-action", cx);
+            assert!(content.read(cx).pending.is_none());
+        })
+        .unwrap();
+
+        wait_until(cx, "收到 VNC 畫面", |cx| {
+            cx.read_entity(&content, |library, _| {
+                library.live.as_ref().is_some_and(|live| live.frame.is_some())
+            })
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let library = content.read(cx);
+            let live = library.live.as_ref().unwrap();
+            assert_eq!(live.size, (64, 48));
+            let pixels = live.frame.as_ref().unwrap().as_bytes(0).unwrap();
+            assert_eq!(&pixels[..3], &[0, 0, 255], "左上角應為紅色（BGRA）");
+            window.press("a", cx);
+            let bounds = window.find("session").bounds();
+            let (left, top, _, _) = super::remote::display_rect(
+                (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                (64, 48),
+            );
+            window.click_at(
+                "session",
+                gpui_kit::point(px(left + 10.5), px(top + 5.5)),
+                cx,
+            );
+        })
+        .unwrap();
+        wait_until(cx, "伺服器收到按鍵與滑鼠", |_| {
+            let log = log.lock().unwrap();
+            let key = log
+                .iter()
+                .any(|m| m[0] == 4 && m[1] == 1 && m[4..8] == 0x61u32.to_be_bytes());
+            let pointer = log
+                .iter()
+                .any(|m| m[0] == 5 && m[1] == 1 && m[2..4] == 10u16.to_be_bytes() && m[4..6] == 5u16.to_be_bytes());
+            key && pointer
         });
     }
 }

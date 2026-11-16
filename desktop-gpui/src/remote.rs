@@ -203,6 +203,14 @@ pub fn to_remote(local: (f32, f32), view: (f32, f32), frame: (u32, u32)) -> Opti
     ))
 }
 
+/// 顯示區改變後是否要調整遠端桌面：太小（< 320×240）或差距不超過 8 像素時不動。
+pub fn resize_target(requested: (u32, u32), view: (u32, u32)) -> Option<(u32, u32)> {
+    if view.0 < 320 || view.1 < 240 {
+        return None;
+    }
+    (view.0.abs_diff(requested.0) > 8 || view.1.abs_diff(requested.1) > 8).then_some(view)
+}
+
 const CONTROL_L: u32 = 0xffe3;
 
 /// GPUI 按鍵 → X11 keysym 的按下／放開序列；無法對應時回傳空序列。
@@ -271,6 +279,15 @@ mod tests {
             key: key.to_string(),
             key_char: key_char.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn remote_resizes_only_for_meaningful_view_changes() {
+        assert_eq!(resize_target((960, 540), (960, 540)), None);
+        assert_eq!(resize_target((960, 540), (965, 545)), None);
+        assert_eq!(resize_target((960, 540), (1200, 700)), Some((1200, 700)));
+        assert_eq!(resize_target((960, 540), (100, 700)), None);
+        assert_eq!(resize_target((960, 540), (0, 0)), None);
     }
 
     #[test]
