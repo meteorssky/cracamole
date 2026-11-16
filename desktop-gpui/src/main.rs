@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::test::TestSupportExt;
 use gpui_kit::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const BG: u32 = 0x0f1117;
 const PANEL: u32 = 0x151821;
@@ -80,6 +80,11 @@ struct Auth {
 }
 
 struct Library {
+    collapsed: BTreeSet<String>,
+    /// 正在更名的群組。
+    renaming: Option<String>,
+    group_name: Entity<InputState>,
+    group: Entity<InputState>,
     /// 正在編輯的既有連線（None 表示新增）。
     editing_id: Option<String>,
     confirm_delete: bool,
@@ -189,6 +194,10 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            collapsed: BTreeSet::new(),
+            renaming: None,
+            group_name: cx.new(|cx| InputState::new(window, cx).placeholder("新的群組名稱（留空＝移至未分類）")),
+            group: cx.new(|cx| InputState::new(window, cx).placeholder("群組（選填）")),
             editing_id: None,
             confirm_delete: false,
             store: None,
@@ -586,8 +595,15 @@ impl Library {
             &text(&self.user),
             &secret,
         );
+        let (group, member) = (text(&self.group), text(&self.name));
+        if !group.is_empty() && (!valid_group(&group) || member.contains('/')) {
+            self.error = Some("群組與名稱不可含斜線或控制字元，群組不超過 116 個字元。".into());
+            cx.notify();
+            return;
+        }
+        let full_name = if group.is_empty() { member } else { format!("{group} / {member}") };
         let draft = cracamole_store::Draft {
-            name: text(&self.name),
+            name: full_name,
             protocol: self.protocol.to_string(),
             params,
         };
@@ -652,8 +668,11 @@ impl Library {
             connection.name.clone(),
             connection.protocol.clone(),
         );
+        let (group, member) = split_group(&name);
+        let (group, member) = (group.unwrap_or("").to_string(), member.to_string());
         let fields = [
-            (name, &self.name),
+            (member, &self.name),
+            (group, &self.group),
             (value("hostname"), &self.host),
             (value("port"), &self.port),
             (value("username"), &self.user),
@@ -702,7 +721,7 @@ impl Library {
 
     /// 清空編輯器欄位（含密碼）。
     fn clear_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for state in [&self.name, &self.host, &self.port, &self.user, &self.secret] {
+        for state in [&self.name, &self.group, &self.host, &self.port, &self.user, &self.secret] {
             state.clone().update(cx, |state, cx| state.set_value("", window, cx));
         }
     }
@@ -848,6 +867,229 @@ impl Library {
                             .aria_label("信任並連線"),
                     ),
             )
+    }
+
+    /// 群組標題：點選收合／展開；「更名」可重新命名整個群組。
+    fn group_header(
+        &self,
+        group: Option<&str>,
+        count: usize,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let title = group.unwrap_or("未分類").to_string();
+        let mut header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px_3()
+            .pt_2()
+            .text_size(px(13.))
+            .text_color(rgb(MUTED));
+        let toggle_name = title.clone();
+        let toggle = div()
+            .id(SharedString::from(format!("group-{title}")))
+            .flex_1()
+            .cursor_pointer()
+            .child(format!("{} {title}（{count}）", if collapsed { "▸" } else { "▾" }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.collapsed.remove(&toggle_name) {
+                    this.collapsed.insert(toggle_name.clone());
+                }
+                cx.notify();
+            }))
+            .test_support()
+            .aria_label(title.clone());
+        header = header.child(toggle);
+        if let Some(group) = group {
+            let old = group.to_string();
+            header = header.child(
+                div()
+                    .id(SharedString::from(format!("rename-{group}")))
+                    .px_2()
+                    .cursor_pointer()
+                    .child("更名")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.group_name
+                            .clone()
+                            .update(cx, |state, cx| state.set_value(old.clone(), window, cx));
+                        this.renaming = Some(old.clone());
+                        this.error = None;
+                        cx.notify();
+                    }))
+                    .test_support()
+                    .aria_label(format!("更名群組 {group}")),
+            );
+        }
+        header.into_any_element()
+    }
+
+    fn connection_row(
+        &self,
+        c: &PublicConnection,
+        label: &str,
+        selected: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = c.id.clone();
+        let is_selected = selected == Some(c.id.as_str());
+        let is_pinned = self.pinned.contains(&c.id);
+        let host = c.params.get("hostname").cloned().unwrap_or_default();
+        let user = c.params.get("username").cloned().unwrap_or_default();
+        div()
+            .id(SharedString::from(format!("row-{}", c.id)))
+            .test_support()
+            .aria_label(c.name.clone())
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(rgb(if is_selected { ACCENT } else { PANEL }))
+            .bg(rgb(if is_selected { 0x1e1b3a } else { PANEL }))
+            .hover(|s| s.bg(rgb(CARD)))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.selected = Some(id.clone());
+                cx.notify();
+            }))
+            .child(div().size(px(8.)).rounded_full().bg(rgb(MUTED)))
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(6.))
+                    .bg(rgb(0x20243a))
+                    .text_color(rgb(protocol_color(&c.protocol)))
+                    .text_size(px(12.))
+                    .child(c.protocol.to_uppercase()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .child(div().text_color(rgb(TEXT)).child(label.to_string()))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(rgb(MUTED))
+                            .child(format!("{user}@{host}")),
+                    ),
+            )
+            .child({
+                let pin_id = c.id.clone();
+                div()
+                    .id(SharedString::from(format!("pin-{}", c.id)))
+                    .px_1()
+                    .cursor_pointer()
+                    .text_color(rgb(if is_pinned { 0xfbbf24 } else { MUTED }))
+                    .child(if is_pinned { "★" } else { "☆" })
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_pin(&pin_id, cx)))
+                    .test_support()
+                    .aria_label(if is_pinned { "取消釘選" } else { "釘選" })
+            })
+            .into_any_element()
+    }
+
+    /// 群組更名卡片；新名稱留空表示把該群組的連線移至未分類。
+    fn rename_card(&self, old: &str, cx: &mut Context<Self>) -> Div {
+        let button = |id: &'static str, text: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_5()
+                .h(px(38.))
+                .flex()
+                .items_center()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(if primary { ACCENT } else { BORDER }))
+                .bg(rgb(if primary { ACCENT } else { PANEL }))
+                .text_color(rgb(if primary { 0xffffff } else { TEXT }))
+                .cursor_pointer()
+                .child(text)
+        };
+        div()
+            .w(px(520.))
+            .p_6()
+            .rounded(px(16.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(CARD))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_size(px(18.)).text_color(rgb(TEXT)).child(format!("更名群組「{old}」")))
+            .child(Input::new(&self.group_name))
+            .children(self.error.clone().map(|message| {
+                div().text_size(px(13.)).text_color(rgb(0xf87171)).child(message)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .justify_end()
+                    .child(
+                        button("rename-cancel", "取消", false)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.renaming = None;
+                                this.error = None;
+                                cx.notify();
+                            }))
+                            .test_support()
+                            .aria_label("取消更名"),
+                    )
+                    .child(
+                        button("rename-save", "儲存", true)
+                            .on_click(cx.listener(|this, _, _, cx| this.rename_group(cx)))
+                            .test_support()
+                            .aria_label("儲存群組名稱"),
+                    ),
+            )
+    }
+
+    fn rename_group(&mut self, cx: &mut Context<Self>) {
+        let Some(old) = self.renaming.clone() else {
+            return;
+        };
+        let new = self.group_name.read(cx).value().trim().to_string();
+        let outcome: Result<(), String> = if let Some(store) = self.store.clone() {
+            match remote::block_on(store.rename_group(&old, &new)) {
+                Ok(_) => {
+                    self.connections = remote::block_on(store.list()).unwrap_or_default();
+                    Ok(())
+                }
+                Err(windows_store::SaveError::Invalid(invalid)) => Err(invalid.message.to_string()),
+                Err(windows_store::SaveError::Io(_)) => Err("無法儲存到私有連線庫。".to_string()),
+            }
+        } else if !valid_group(&new) {
+            Err("群組名稱不可含斜線或控制字元，且不超過 116 個字元。".to_string())
+        } else {
+            for connection in &mut self.connections {
+                let (group, member) = split_group(&connection.name);
+                if group == Some(old.as_str()) {
+                    connection.name = if new.is_empty() {
+                        member.to_string()
+                    } else {
+                        format!("{new} / {member}")
+                    };
+                }
+            }
+            Ok(())
+        };
+        match outcome {
+            Err(message) => self.error = Some(message),
+            Ok(()) => {
+                if self.collapsed.remove(&old) && !new.is_empty() {
+                    self.collapsed.insert(new);
+                }
+                self.renaming = None;
+                self.error = None;
+            }
+        }
+        cx.notify();
     }
 
     /// 連線中才顯示：把本機剪貼簿貼到遠端。
@@ -1021,6 +1263,8 @@ impl Library {
             .child(div().text_size(px(18.)).text_color(rgb(TEXT)).child(if self.editing_id.is_some() { "編輯連線" } else { "新增連線" }))
             .child(label("協定"))
             .child(protocols)
+            .child(label("群組（選填）"))
+            .child(Input::new(&self.group))
             .child(label("名稱"))
             .child(Input::new(&self.name))
             .child(label("主機"))
@@ -1078,6 +1322,19 @@ impl Library {
                     ),
             )
     }
+}
+
+/// 連線名稱的群組：`群組/成員`；沒有群組（或群組名稱為空）時回傳 (None, 原名稱)。
+fn split_group(name: &str) -> (Option<&str>, &str) {
+    match name.split_once('/') {
+        Some((group, member)) if !group.trim().is_empty() => (Some(group.trim()), member.trim()),
+        _ => (None, name),
+    }
+}
+
+/// 群組名稱是否合法：不可含斜線或控制字元，長度不超過 116。
+fn valid_group(group: &str) -> bool {
+    group.chars().count() <= 116 && !group.contains('/') && !group.chars().any(char::is_control)
 }
 
 /// 編輯時的參數：保留未在表單出現的設定（網域、安全模式等）；
@@ -1156,6 +1413,15 @@ impl Render for Library {
             .find(|c| Some(&c.id) == selected.as_ref())
             .map(|c| c.name.clone());
 
+        let searching = !self.search.read(cx).value().is_empty();
+        let mut ungrouped: Vec<&PublicConnection> = Vec::new();
+        let mut groups: BTreeMap<String, Vec<&PublicConnection>> = BTreeMap::new();
+        for c in &rows {
+            match split_group(&c.name).0 {
+                Some(group) => groups.entry(group.to_string()).or_default().push(c),
+                None => ungrouped.push(c),
+            }
+        }
         let mut list = div()
             .id("list")
             .flex()
@@ -1164,69 +1430,21 @@ impl Render for Library {
             .p_2()
             .overflow_y_scroll()
             .flex_1();
-        for c in rows {
-            let id = c.id.clone();
-            let is_selected = selected.as_deref() == Some(c.id.as_str());
-            let is_pinned = self.pinned.contains(&c.id);
-            let host = c.params.get("hostname").cloned().unwrap_or_default();
-            let user = c.params.get("username").cloned().unwrap_or_default();
-            list = list.child(
-                div()
-                    .id(SharedString::from(format!("row-{}", c.id)))
-                    .test_support()
-                    .aria_label(c.name.clone())
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px_3()
-                    .py_2()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(if is_selected { ACCENT } else { PANEL }))
-                    .bg(rgb(if is_selected { 0x1e1b3a } else { PANEL }))
-                    .hover(|s| s.bg(rgb(CARD)))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected = Some(id.clone());
-                        cx.notify();
-                    }))
-                    .child(div().size(px(8.)).rounded_full().bg(rgb(MUTED)))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(6.))
-                            .bg(rgb(0x20243a))
-                            .text_color(rgb(protocol_color(&c.protocol)))
-                            .text_size(px(12.))
-                            .child(c.protocol.to_uppercase()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .child(div().text_color(rgb(TEXT)).child(c.name.clone()))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .text_color(rgb(MUTED))
-                                    .child(format!("{user}@{host}")),
-                            ),
-                    )
-                    .child({
-                        let pin_id = c.id.clone();
-                        div()
-                            .id(SharedString::from(format!("pin-{}", c.id)))
-                            .px_1()
-                            .cursor_pointer()
-                            .text_color(rgb(if is_pinned { 0xfbbf24 } else { MUTED }))
-                            .child(if is_pinned { "★" } else { "☆" })
-                            .on_click(cx.listener(move |this, _, _, cx| this.toggle_pin(&pin_id, cx)))
-                            .test_support()
-                            .aria_label(if is_pinned { "取消釘選" } else { "釘選" })
-                    }),
-            );
+        if !groups.is_empty() && !ungrouped.is_empty() {
+            list = list.child(self.group_header(None, ungrouped.len(), false, cx));
+        }
+        for c in ungrouped {
+            list = list.child(self.connection_row(c, &c.name, selected.as_deref(), cx));
+        }
+        for (group, members) in groups {
+            let collapsed = !searching && self.collapsed.contains(&group);
+            list = list.child(self.group_header(Some(&group), members.len(), collapsed, cx));
+            if !collapsed {
+                for c in members {
+                    let label = split_group(&c.name).1.to_string();
+                    list = list.child(self.connection_row(c, &label, selected.as_deref(), cx));
+                }
+            }
         }
 
         let sidebar = div()
@@ -1423,6 +1641,8 @@ impl Render for Library {
                         .into_any_element()
                 } else if let Some(pending) = &self.pending {
                     self.trust_card(pending, cx).into_any_element()
+                } else if let Some(old) = &self.renaming {
+                    self.rename_card(old, cx).into_any_element()
                 } else if self.editing {
                     editor.into_any_element()
                 } else {
@@ -1695,7 +1915,7 @@ mod tests {
                 library.live.as_ref().is_some_and(|live| live.frame.is_some())
             })
         });
-        assert!(server.rec.lock().unwrap().shell);
+        wait_until(cx, "伺服器記錄 shell", |_| server.rec.lock().unwrap().shell);
         assert_eq!(
             server.rec.lock().unwrap().auth_user.as_deref(),
             Some("alice")
@@ -2187,6 +2407,42 @@ mod tests {
         .unwrap();
         let persisted = std::fs::read_to_string(data_dir.join("connections.json")).unwrap();
         assert!(!persisted.contains("lab-renamed") && !persisted.contains("s3cret-value"));
+
+        // 群組更名：寫入私有連線庫，保留成員的機密。
+        cx.update_window(window, |_, window, cx| {
+            let store = content.read(cx).store.clone().unwrap();
+            for (name, secret) in [("ops/one", "p1"), ("ops/two", "p2")] {
+                let mut params = std::collections::BTreeMap::new();
+                params.insert("hostname".to_string(), "10.0.0.9".to_string());
+                params.insert("port".to_string(), "23".to_string());
+                params.insert("password".to_string(), secret.to_string());
+                let draft = cracamole_store::Draft {
+                    name: name.into(),
+                    protocol: "telnet".into(),
+                    params,
+                };
+                super::remote::block_on(store.save(None, draft)).unwrap();
+            }
+            content.update(cx, |library, _| {
+                library.connections = super::remote::block_on(store.list()).unwrap_or_default();
+            });
+            window.render_frame(cx);
+            window.click("rename-ops", cx);
+            window.render_frame(cx);
+            let input = content.read(cx).group_name.clone();
+            input.update(cx, |s: &mut InputState, cx| s.set_value("infra", window, cx));
+            window.click("rename-save", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.error.is_none(), "{:?}", library.error);
+            let mut names: Vec<_> = library.connections.iter().map(|c| c.name.clone()).collect();
+            names.sort();
+            assert_eq!(names, ["infra / one", "infra / two"]);
+            let one = library.connections.iter().find(|c| c.name == "infra / one").unwrap();
+            let full = super::remote::block_on(store.get(&one.id)).unwrap().unwrap();
+            assert_eq!(full.params.get("password").map(String::as_str), Some("p1"));
+        })
+        .unwrap();
     }
 
     #[test]
@@ -2336,6 +2592,97 @@ mod tests {
                 cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
                 Some("遠端複製的文字")
             );
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn group_names_split_on_the_first_slash_only() {
+        use super::{split_group, valid_group};
+        assert_eq!(split_group("核心機房/db-01"), (Some("核心機房"), "db-01"));
+        assert_eq!(split_group(" ops / web "), (Some("ops"), "web"));
+        assert_eq!(split_group("plain"), (None, "plain"));
+        assert_eq!(split_group("/oops"), (None, "/oops"));
+        assert!(valid_group("") && valid_group("辦公網段"));
+        assert!(!valid_group("a/b") && !valid_group("a\u{7}b"));
+        assert!(!valid_group(&"x".repeat(117)));
+    }
+
+    #[gpui_kit::test]
+    fn groups_collapse_rename_and_compose_names_in_the_editor(cx: &mut TestAppContext) {
+        use gpui_kit::component::input::InputState;
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            content.update(cx, |library, _| {
+                library.connections.clear();
+                library.pinned.clear();
+                for (id, name) in [("a", "核心/db"), ("b", "核心/web"), ("c", "辦公/mac"), ("d", "lonely")] {
+                    library.connections.push(super::sample(id, name, "ssh", "10.0.0.1", "u"));
+                }
+            });
+            window.render_frame(cx);
+            // 有群組時，沒有群組的項目歸在「未分類」。
+            for header in ["未分類", "核心", "辦公"] {
+                assert!(window.try_find(format!("group-{header}")).is_some(), "{header}");
+            }
+
+            // 收合：成員被隱藏；再點一次展開。
+            window.click("group-核心", cx);
+            window.render_frame(cx);
+            assert!(window.try_find("row-a").is_none() && window.try_find("row-c").is_some());
+            window.click("group-核心", cx);
+            window.render_frame(cx);
+            assert!(window.try_find("row-a").is_some());
+
+            // 更名整個群組。
+            window.click("rename-核心", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).group_name.read(cx).value().as_ref(), "核心");
+            let input = content.read(cx).group_name.clone();
+            input.update(cx, |s: &mut InputState, cx| s.set_value("a/b", window, cx));
+            window.click("rename-save", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).error.is_some(), "含斜線的群組名稱要被拒絕");
+            input.update(cx, |s: &mut InputState, cx| s.set_value("資料中心", window, cx));
+            window.click("rename-save", cx);
+            window.render_frame(cx);
+            let names: Vec<_> = content.read(cx).connections.iter().map(|c| c.name.clone()).collect();
+            assert_eq!(names, ["資料中心 / db", "資料中心 / web", "辦公/mac", "lonely"]);
+            assert!(content.read(cx).renaming.is_none());
+
+            // 留空：把該群組移至未分類。
+            window.click("rename-辦公", cx);
+            window.render_frame(cx);
+            let input = content.read(cx).group_name.clone();
+            input.update(cx, |s: &mut InputState, cx| s.set_value("", window, cx));
+            window.click("rename-save", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).connections[2].name, "mac");
+
+            // 編輯器：群組與名稱合成 `群組/名稱`；編輯時再拆開。
+            window.click("add", cx);
+            window.render_frame(cx);
+            let (group, name, host) = {
+                let library = content.read(cx);
+                (library.group.clone(), library.name.clone(), library.host.clone())
+            };
+            group.update(cx, |s: &mut InputState, cx| s.set_value("lab", window, cx));
+            name.update(cx, |s: &mut InputState, cx| s.set_value("node-1", window, cx));
+            host.update(cx, |s: &mut InputState, cx| s.set_value("10.9.0.1", window, cx));
+            window.click("save", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.error.is_none(), "{:?}", library.error);
+            let saved = library.connections.last().unwrap();
+            assert_eq!(saved.name, "lab / node-1");
+            let id = saved.id.clone();
+            window.click(format!("row-{id}"), cx);
+            window.render_frame(cx);
+            window.click("edit", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert_eq!(library.group.read(cx).value().as_ref(), "lab");
+            assert_eq!(library.name.read(cx).value().as_ref(), "node-1");
         })
         .unwrap();
     }
