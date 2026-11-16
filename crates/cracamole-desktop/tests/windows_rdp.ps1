@@ -109,10 +109,16 @@ try {
     Wait-For { [RdpGui]::Find([uint32]$process.Id, $null) -ne [IntPtr]::Zero } 'window not found' 15
     $window = [RdpGui]::Find([uint32]$process.Id, $null)
     if (-not $process.WaitForInputIdle(10000)) { throw 'controls timed out' }
-    $children = [RdpGui]::Children($window)
-    $inputs = @($children | Where-Object { [RdpGui]::Class($_) -eq 'Edit' })
+    Wait-For {
+        $script:children = [RdpGui]::Children($window)
+        $script:inputs = @($script:children | Where-Object { [RdpGui]::Class($_) -eq 'Edit' })
+        $script:combos = @($script:children | Where-Object { [RdpGui]::Class($_) -eq 'ComboBox' })
+        $script:inputs.Count -ge 17 -and $script:combos.Count -ge 4 -and @($script:children | Where-Object { [RdpGui]::Class($_) -eq 'ListBox' }).Count -ge 1 -and @($script:children | Where-Object { [RdpGui]::Text($_) -eq '登出' }).Count -eq 1 -and @($script:children | Where-Object { [RdpGui]::Text($_) -eq '核對身分' }).Count -eq 1
+    } 'RDP editor controls missing' 15
+    $children = $script:children
+    $inputs = $script:inputs
     $list = @($children | Where-Object { [RdpGui]::Class($_) -eq 'ListBox' })[0]
-    $combos = @($children | Where-Object { [RdpGui]::Class($_) -eq 'ComboBox' })
+    $combos = $script:combos
     if ($combos.Count -ne 4 -or $inputs.Count -ne 17) { throw 'RDP editor controls missing' }
     $protocol = $combos[0]
     $security = $combos[1]
@@ -189,8 +195,13 @@ try {
     Wait-For { [RdpGui]::Find([uint32]$process.Id, $null) -ne [IntPtr]::Zero } 'restart window not found' 15
     $window = [RdpGui]::Find([uint32]$process.Id, $null)
     if (-not $process.WaitForInputIdle(10000)) { throw 'restart controls timed out' }
-    $children = [RdpGui]::Children($window)
-    $inputs = @($children | Where-Object { [RdpGui]::Class($_) -eq 'Edit' })
+    Wait-For {
+        $script:children = [RdpGui]::Children($window)
+        $script:inputs = @($script:children | Where-Object { [RdpGui]::Class($_) -eq 'Edit' })
+        $script:inputs.Count -ge 17 -and @($script:children | Where-Object { [RdpGui]::Class($_) -eq 'ListBox' }).Count -ge 1 -and @($script:children | Where-Object { [RdpGui]::Text($_) -eq '登入' }).Count -eq 1 -and @($script:children | Where-Object { [RdpGui]::Text($_) -eq '核對身分' }).Count -eq 1
+    } 'restart controls timed out' 15
+    $children = $script:children
+    $inputs = $script:inputs
     $list = @($children | Where-Object { [RdpGui]::Class($_) -eq 'ListBox' })[0]
     Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
     Click (Button '登入')

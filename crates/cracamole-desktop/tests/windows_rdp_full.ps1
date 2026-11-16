@@ -126,9 +126,15 @@ try {
     Wait-For { [RdpFullGui]::Find([uint32]$process.Id, $null) -ne [IntPtr]::Zero } 'window not found' 30
     $window = [RdpFullGui]::Find([uint32]$process.Id, $null)
     if (-not $process.WaitForInputIdle(10000)) { throw 'controls timed out' }
-    $children = [RdpFullGui]::Children($window)
-    $inputs = @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'Edit' })
-    $combos = @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'ComboBox' })
+    Wait-For {
+        $script:children = [RdpFullGui]::Children($window)
+        $script:inputs = @($script:children | Where-Object { [RdpFullGui]::Class($_) -eq 'Edit' })
+        $script:combos = @($script:children | Where-Object { [RdpFullGui]::Class($_) -eq 'ComboBox' })
+        $script:inputs.Count -ge 17 -and $script:combos.Count -ge 4 -and @($script:children | Where-Object { [RdpFullGui]::Class($_) -eq 'ListBox' }).Count -ge 1 -and @($script:children | Where-Object { [RdpFullGui]::Text($_) -eq '登出' }).Count -eq 1 -and @($script:children | Where-Object { [RdpFullGui]::Text($_) -eq '核對身分' }).Count -eq 1
+    } 'editor controls missing' 15
+    $children = $script:children
+    $inputs = $script:inputs
+    $combos = $script:combos
     $list = @($children | Where-Object { [RdpFullGui]::Class($_) -eq 'ListBox' })[0]
     if ($inputs.Count -ne 17 -or $combos.Count -ne 4) { throw 'editor controls missing' }
     Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD

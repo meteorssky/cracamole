@@ -81,9 +81,15 @@ try {
     Wait-For { [TelnetGui]::Find([uint32]$process.Id) -ne [IntPtr]::Zero } '找不到桌面視窗'
     $window = [TelnetGui]::Find([uint32]$process.Id)
     if (-not $process.WaitForInputIdle(10000)) { throw '控制項初始化逾時' }
-    $children = [TelnetGui]::Children($window)
-    $inputs = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Edit' })
-    $combos = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'ComboBox' })
+    Wait-For {
+        $script:children = [TelnetGui]::Children($window)
+        $script:inputs = @($script:children | Where-Object { [TelnetGui]::Class($_) -eq 'Edit' })
+        $script:combos = @($script:children | Where-Object { [TelnetGui]::Class($_) -eq 'ComboBox' })
+        $script:inputs.Count -ge 17 -and $script:combos.Count -ge 4 -and @($script:children | Where-Object { [TelnetGui]::Class($_) -eq 'ListBox' }).Count -ge 1 -and @($script:children | Where-Object { [TelnetGui]::Text($_) -eq '登出' }).Count -eq 1 -and @($script:children | Where-Object { [TelnetGui]::Text($_) -eq '核對身分' }).Count -eq 1
+    } '找不到預期的編輯控制項'
+    $children = $script:children
+    $inputs = $script:inputs
+    $combos = $script:combos
     $list = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'ListBox' })[0]
     if ($inputs.Count -ne 17 -or $combos.Count -ne 4) { throw '找不到預期的編輯控制項' }
     function Button([string]$label) { $found = @($children | Where-Object { [TelnetGui]::Text($_) -eq $label }); if ($found.Count -ne 1) { throw "找不到按鈕：$label" }; return $found[0] }
@@ -186,6 +192,24 @@ try {
         Wait-For { [TelnetGui]::EditText($inputs[4]) -eq '127.0.0.1' -and [TelnetGui]::EditText($inputs[5]) -eq '2222' -and [TelnetGui]::EditText($inputs[6]) -eq 'alice' } 'quick endpoint not populated'
         if ([IO.File]::Exists((Join-Path $testDir 'connections.json')) -or [TelnetGui]::EditText($inputs[7]) -ne '') { throw 'quick endpoint unexpectedly saved a connection or secret' }
         Click (Button '取消')
+        Set-Text $inputs[14] 'telnet://alice@127.0.0.1:2323'
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::SendMessageInt($combos[0], 0x0147, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -eq 1 -and [TelnetGui]::EditText($inputs[4]) -eq '127.0.0.1' -and [TelnetGui]::EditText($inputs[5]) -eq '2323' -and [TelnetGui]::EditText($inputs[6]) -eq 'alice' } 'telnet URI quick endpoint not populated'
+        Set-Text $inputs[7] 'temp-secret'
+        Click (Button '取消')
+        Set-Text $inputs[14] 'rdp://127.0.0.1'
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::SendMessageInt($combos[0], 0x0147, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -eq 2 -and [TelnetGui]::EditText($inputs[4]) -eq '127.0.0.1' } 'rdp URI quick endpoint not populated'
+        if ([TelnetGui]::EditText($inputs[5]) -ne '' -or [TelnetGui]::EditText($inputs[6]) -ne '' -or [TelnetGui]::EditText($inputs[7]) -ne '' -or [TelnetGui]::EditText($inputs[10]) -ne '') { throw 'rdp URI inherited prior user, port, domain or secret' }
+        Click (Button '取消')
+        Set-Text $inputs[14] 'vnc://bob@[2001:db8::5]:5901'
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::SendMessageInt($combos[0], 0x0147, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -eq 3 -and [TelnetGui]::EditText($inputs[4]) -eq '2001:db8::5' -and [TelnetGui]::EditText($inputs[5]) -eq '5901' -and [TelnetGui]::EditText($inputs[6]) -eq 'bob' -and [TelnetGui]::EditText($inputs[7]) -eq '' } 'vnc URI quick endpoint not populated'
+        Click (Button '取消')
+        Set-Text $inputs[14] 'ssh://127.0.0.1:2202'
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::SendMessageInt($combos[0], 0x0147, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -eq 0 -and [TelnetGui]::EditText($inputs[4]) -eq '127.0.0.1' -and [TelnetGui]::EditText($inputs[5]) -eq '2202' -and [TelnetGui]::EditText($inputs[6]) -eq '' -and [TelnetGui]::EditText($inputs[7]) -eq '' } 'ssh URI quick endpoint not populated'
+        Click (Button '取消')
         Set-Text $inputs[14] 'alice:secret@host:22'
         [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
         Wait-For { @($children | Where-Object { [TelnetGui]::Text($_) -eq '主機格式無效，請使用 user@host:port 或 [IPv6]:port。' }).Count -eq 1 } 'invalid quick endpoint was not rejected'
@@ -196,6 +220,10 @@ try {
         Set-Text $inputs[4] '127.0.0.1'
         Set-Text $inputs[5] '1'
         Click (Button '儲存')
+        Set-Text $inputs[14] 'rdp://127.0.0.1:1'
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::SendMessageInt($combos[0], 0x0147, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -eq 2 -and [TelnetGui]::EditText($inputs[4]) -eq '127.0.0.1' -and [TelnetGui]::EditText($inputs[5]) -eq '1' } 'different-protocol URI should open new editor instead of matching SSH'
+        Click (Button '取消')
         Set-Text $inputs[14] 'not-a-real-host'
         Wait-For { [TelnetGui]::SendMessageInt($list, 0x018B, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero } '搜尋未篩選不符合的連線'
         foreach ($label in @('連線', '編輯', '刪除', '核對身分', '複製', '複製設定')) {
@@ -509,6 +537,15 @@ try {
     $marked = @((0..($rows - 1)) | Where-Object { [TelnetGui]::ListText($list, $_).Contains('目前工作階段') })
     if ($marked.Count -ne 1 -or -not [TelnetGui]::ListText($list, $marked[0]).Contains('127.0.0.1')) { throw '目前工作階段標記錯誤' }
     $sessionFrame = @($children | Where-Object { [TelnetGui]::Class($_) -eq 'Static' -and [TelnetGui]::SendMessageInt($_, 0x0173, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero })[0]
+    if ($env:CRACAMOLE_TEST_SAVE_CONNECT -eq '1') {
+        Set-Text $inputs[14] 'ssh://127.0.0.1:1'
+        [void][TelnetGui]::SendMessageInt($inputs[14], 0x0100, [IntPtr]13, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -ne [IntPtr]::Zero } 'matching saved SSH URI did not prompt switch confirmation'
+        [void][TelnetGui]::PostMessage([TelnetGui]::FindDialog([uint32]$process.Id), 0x0111, [IntPtr]7, [IntPtr]::Zero)
+        Wait-For { [TelnetGui]::FindDialog([uint32]$process.Id) -eq [IntPtr]::Zero } 'cancelling URI switch confirmation did not close dialog'
+        if ([IO.File]::Exists((Join-Path $SyncDir 'closed'))) { throw 'cancelling URI switch disconnected active session' }
+        Set-Text $inputs[14] ''
+    }
     if (-not $RemoteClose -and -not $Expire -and -not $SwitchPort -and -not $env:CRACAMOLE_TEST_CONNECT_ONCE -and -not $env:CRACAMOLE_TEST_SAVE_CONNECT -and -not $env:CRACAMOLE_TEST_DESKTOP_KEYBOARD) {
         [void][TelnetGui]::SendMessageInt($list, 0x0186, [IntPtr]$marked[0], [IntPtr]::Zero)
         Click (Button '釘選／取消')

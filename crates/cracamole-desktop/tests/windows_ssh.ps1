@@ -93,10 +93,16 @@ try {
     Wait-For { [SshGui]::Find([uint32]$process.Id, $null) -ne [IntPtr]::Zero } 'window not found' 15
     $window = [SshGui]::Find([uint32]$process.Id, $null)
     if (-not $process.WaitForInputIdle(10000)) { throw '原生控制項初始化逾時' }
-    $children = [SshGui]::Children($window)
-    $inputs = @($children | Where-Object { [SshGui]::Class($_) -eq 'Edit' })
+    Wait-For {
+        $script:children = [SshGui]::Children($window)
+        $script:inputs = @($script:children | Where-Object { [SshGui]::Class($_) -eq 'Edit' })
+        $script:combos = @($script:children | Where-Object { [SshGui]::Class($_) -eq 'ComboBox' })
+        $script:inputs.Count -ge 17 -and $script:combos.Count -ge 4 -and @($script:children | Where-Object { [SshGui]::Class($_) -eq 'ListBox' }).Count -ge 1 -and @($script:children | Where-Object { [SshGui]::Text($_) -eq '登出' }).Count -eq 1 -and @($script:children | Where-Object { [SshGui]::Text($_) -eq '核對身分' }).Count -eq 1
+    } '找不到預期的輸入控制項' 15
+    $children = $script:children
+    $inputs = $script:inputs
     if ($inputs.Count -ne 17) { throw '找不到預期的輸入控制項' }
-    $combos = @($children | Where-Object { [SshGui]::Class($_) -eq 'ComboBox' })
+    $combos = $script:combos
     if ($combos.Count -ne 4) { throw '找不到文字編碼控制項' }
     function Button([string]$Text) {
         $buttons = @($children | Where-Object { [SshGui]::Text($_) -eq $Text })
@@ -372,8 +378,13 @@ try {
     Wait-For { [SshGui]::Find([uint32]$process.Id, $null) -ne [IntPtr]::Zero } 'restart window not found' 15
     $window = [SshGui]::Find([uint32]$process.Id, $null)
     if (-not $process.WaitForInputIdle(10000)) { throw 'restart controls timed out' }
-    $children = [SshGui]::Children($window)
-    $inputs = @($children | Where-Object { [SshGui]::Class($_) -eq 'Edit' })
+    Wait-For {
+        $script:children = [SshGui]::Children($window)
+        $script:inputs = @($script:children | Where-Object { [SshGui]::Class($_) -eq 'Edit' })
+        $script:inputs.Count -ge 17 -and @($script:children | Where-Object { [SshGui]::Class($_) -eq 'ListBox' }).Count -ge 1 -and @($script:children | Where-Object { [SshGui]::Text($_) -eq '登入' }).Count -eq 1 -and @($script:children | Where-Object { [SshGui]::Text($_) -eq '核對身分' }).Count -eq 1
+    } 'restart controls timed out' 15
+    $children = $script:children
+    $inputs = $script:inputs
     $list = @($children | Where-Object { [SshGui]::Class($_) -eq 'ListBox' })[0]
     Set-Text $inputs[1] $env:CRACAMOLE_ADMIN_PASSWORD
     Click (Button '登入')
