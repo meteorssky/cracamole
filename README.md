@@ -124,7 +124,7 @@ Remove-Item Env:CRACAMOLE_TEST_VISIBLE_TELNET
 
 環境變數與 Win32 版相同：`CRACAMOLE_ADMIN_USERNAME`／`CRACAMOLE_ADMIN_PASSWORD`、`CRACAMOLE_DESKTOP_DATA_DIR`、`CRACAMOLE_DESKTOP_SESSION_MAX_SECS`；資料目錄也相同，因此既有的桌面連線可直接使用。
 
-驗證範圍：38 項無頭 UI 測試（`cd desktop-gpui; cargo test`，設 `RUST_MIN_STACK=536870912`），涵蓋登入閘門、連線保存、群組、剪貼簿（測試平台的記憶體內假剪貼簿）、匯入／匯出，以及以本機 Telnet、SSH（russh）、RDP（`tests/rdp-fixture`，未建置時略過）與最小 RFB 伺服器進行的端對端工作階段；另可用 `CRACAMOLE_SCREENSHOT_DIR=out cargo test screenshots -- --nocapture` 以 wgpu 離屏渲染輸出畫面。離屏渲染與實際視窗（DirectX）的字型細節可能不同；**實機可見畫面、實體輸入、高 DPI 與真實 Windows／xrdp 服務仍待驗收**。`scriptsun_desktop.ps1` 預設啟動 GPUI 版；Win32 版保留為備援（`-Legacy` 或下方的 `cargo run -p cracamole-desktop`），在 GPUI 版完成實機驗收前請勿移除。
+驗證範圍：38 項無頭 UI 測試（`cd desktop-gpui; cargo test`，設 `RUST_MIN_STACK=536870912`），涵蓋登入閘門、連線保存、群組、剪貼簿（測試平台的記憶體內假剪貼簿）、匯入／匯出，以及以本機 Telnet、SSH（russh）、RDP（`tests/rdp-fixture`，未建置時略過）與最小 RFB 伺服器進行的端對端工作階段；另可用 `CRACAMOLE_SCREENSHOT_DIR=out cargo test screenshots -- --nocapture` 以 wgpu 離屏渲染輸出畫面。離屏渲染與實際視窗（DirectX）的字型細節可能不同；**實機可見畫面、實體輸入、高 DPI 與真實 Windows／xrdp 服務仍待驗收**。`scripts\run_desktop.ps1` 預設啟動 GPUI 版；Win32 版保留為備援（`-Legacy` 或下方的 `cargo run -p cracamole-desktop`），在 GPUI 版完成實機驗收前請勿移除。
 
 #### Win32 原生介面（備援）
 
