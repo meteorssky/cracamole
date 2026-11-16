@@ -103,28 +103,30 @@ pub fn style_window(window: &nwg::Window) {
     }
 }
 
-/// 卡片外框與填色（淺色為白底，深色比頁面略亮）。
-unsafe fn draw_cards(window: HWND, hdc: HDC, cards: &[Vec<nwg::ControlHandle>], dark: bool) {
-    let (fill, line) = if dark {
-        (0x0023_1F1F, 0x0046_3F3F) // #1F1F23、#3F3F46
+const CARD_PADDING: i32 = 12;
+
+fn card_fill(dark: bool) -> u32 {
+    if dark {
+        0x0023_1F1F
     } else {
-        (0x00FF_FFFF, 0x00E4_E4E4) // #FFFFFF、#E4E4E7
-    };
-    unsafe {
-        let brush = CreateSolidBrush(fill);
-        let pen = CreatePen(0, 1, line);
-        let old_brush = SelectObject(hdc, brush as _);
-        let old_pen = SelectObject(hdc, pen as _);
-        for group in cards {
-            let mut union: Option<RECT> = None;
-            for control in group {
-                let Some(child) = control.hwnd() else {
-                    continue;
-                };
-                if IsWindowVisible(child as _) == 0 {
-                    continue;
-                }
-                let mut rect: RECT = std::mem::zeroed();
+        0x00FF_FFFF
+    } // #1F1F23、#FFFFFF
+}
+
+/// 各卡片目前的範圍：群組內可見控制項的聯集，四邊外擴 `CARD_PADDING`。
+unsafe fn card_rects(window: HWND, cards: &[Vec<nwg::ControlHandle>]) -> Vec<RECT> {
+    let mut result = Vec::new();
+    for group in cards {
+        let mut union: Option<RECT> = None;
+        for control in group {
+            let Some(child) = control.hwnd() else {
+                continue;
+            };
+            if unsafe { IsWindowVisible(child as _) } == 0 {
+                continue;
+            }
+            let mut rect: RECT = unsafe { std::mem::zeroed() };
+            unsafe {
                 GetWindowRect(child as _, &mut rect);
                 MapWindowPoints(
                     std::ptr::null_mut(),
@@ -132,31 +134,69 @@ unsafe fn draw_cards(window: HWND, hdc: HDC, cards: &[Vec<nwg::ControlHandle>], 
                     &mut rect as *mut RECT as *mut _,
                     2,
                 );
-                union = Some(match union {
-                    None => rect,
-                    Some(u) => RECT {
-                        left: u.left.min(rect.left),
-                        top: u.top.min(rect.top),
-                        right: u.right.max(rect.right),
-                        bottom: u.bottom.max(rect.bottom),
-                    },
-                });
             }
-            if let Some(u) = union {
-                RoundRect(
-                    hdc,
-                    u.left - 12,
-                    u.top - 12,
-                    u.right + 12,
-                    u.bottom + 12,
-                    12,
-                    12,
-                );
-            }
+            union = Some(match union {
+                None => rect,
+                Some(u) => RECT {
+                    left: u.left.min(rect.left),
+                    top: u.top.min(rect.top),
+                    right: u.right.max(rect.right),
+                    bottom: u.bottom.max(rect.bottom),
+                },
+            });
+        }
+        if let Some(u) = union {
+            result.push(RECT {
+                left: u.left - CARD_PADDING,
+                top: u.top - CARD_PADDING,
+                right: u.right + CARD_PADDING,
+                bottom: u.bottom + CARD_PADDING,
+            });
+        }
+    }
+    result
+}
+
+/// 控制項中心是否落在任何卡片內。
+unsafe fn in_card(window: HWND, cards: &[Vec<nwg::ControlHandle>], child: isize) -> bool {
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    unsafe {
+        GetWindowRect(child as _, &mut rect);
+        MapWindowPoints(
+            std::ptr::null_mut(),
+            window,
+            &mut rect as *mut RECT as *mut _,
+            2,
+        );
+    }
+    let (x, y) = ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+    unsafe { card_rects(window, cards) }
+        .iter()
+        .any(|card| x >= card.left && x < card.right && y >= card.top && y < card.bottom)
+}
+
+fn card_brush() -> HBRUSH {
+    static DARK: OnceLock<isize> = OnceLock::new();
+    static LIGHT: OnceLock<isize> = OnceLock::new();
+    if is_dark() {
+        brush(card_fill(true), &DARK)
+    } else {
+        brush(card_fill(false), &LIGHT)
+    }
+}
+
+/// 卡片外框與填色（淺色為白底，深色比頁面略亮）。
+unsafe fn draw_cards(window: HWND, hdc: HDC, cards: &[Vec<nwg::ControlHandle>], dark: bool) {
+    let line = if dark { 0x0046_3F3F } else { 0x00E4_E4E4 }; // #3F3F46、#E4E4E7
+    unsafe {
+        let pen = CreatePen(0, 1, line);
+        let old_brush = SelectObject(hdc, card_brush() as _);
+        let old_pen = SelectObject(hdc, pen as _);
+        for card in card_rects(window, cards) {
+            RoundRect(hdc, card.left, card.top, card.right, card.bottom, 12, 12);
         }
         SelectObject(hdc, old_brush);
         SelectObject(hdc, old_pen);
-        DeleteObject(brush as _);
         DeleteObject(pen as _);
     }
 }
@@ -197,13 +237,22 @@ pub fn install(
                     0x0138 | 0x0135 if dark => {
                         SetBkMode(wparam as _, 1);
                         SetTextColor(wparam as _, if is_muted { DARK_MUTED } else { DARK_FG });
-                        Some(bg_brush() as isize)
+                        if in_card(hwnd as _, &cards, lparam) {
+                            Some(card_brush() as isize)
+                        } else {
+                            Some(bg_brush() as isize)
+                        }
                     }
                     // WM_CTLCOLOREDIT / WM_CTLCOLORLISTBOX
                     0x0133 | 0x0134 if dark => {
                         SetBkColor(wparam as _, DARK_INPUT);
                         SetTextColor(wparam as _, DARK_FG);
                         Some(input_brush() as isize)
+                    }
+                    // 淺色：卡片內的標籤改用卡片底色。
+                    0x0138 if !is_muted && in_card(hwnd as _, &cards, lparam) => {
+                        SetBkMode(wparam as _, 1);
+                        Some(card_brush() as isize)
                     }
                     0x0138 if is_muted => {
                         SetBkMode(wparam as _, 1);

@@ -2042,6 +2042,7 @@ mod windows_ui {
                     duplicate.handle,
                     pin.handle,
                 ],
+                editor.card_handles(),
             ],
         )?;
         let handler = nwg::full_bind_event_handler(&window.handle, move |event, data, handle| {

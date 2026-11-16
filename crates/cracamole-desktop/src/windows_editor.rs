@@ -335,6 +335,45 @@ impl Editor {
         Ok(editor)
     }
 
+    /// 編輯器表單的所有控制項（供卡片繪製計算範圍；隱藏的控制項會被忽略）。
+    pub fn card_handles(&self) -> Vec<nwg::ControlHandle> {
+        let mut handles: Vec<nwg::ControlHandle> = self.labels.iter().map(|l| l.handle).collect();
+        handles.extend([
+            self.name.handle,
+            self.group.handle,
+            self.group_label.handle,
+            self.choose_group.handle,
+            self.protocol.handle,
+            self.hostname.handle,
+            self.port.handle,
+            self.username.handle,
+            self.password.handle,
+            self.key_path.handle,
+            self.browse_key.handle,
+            self.passphrase.handle,
+            self.domain.handle,
+            self.security.handle,
+            self.domain_label.handle,
+            self.security_label.handle,
+            self.disable_copy.handle,
+            self.disable_paste.handle,
+            self.read_only.handle,
+            self.encoding.handle,
+            self.encoding_label.handle,
+            self.success.handle,
+            self.failure.handle,
+            self.success_label.handle,
+            self.failure_label.handle,
+            self.clear.handle,
+            self.save.handle,
+            self.save_connect.handle,
+            self.connect_once.handle,
+            self.remove_once_trust.handle,
+            self.cancel.handle,
+        ]);
+        handles
+    }
+
     pub fn show(&self, visible: bool) {
         self.visible.set(visible);
         for label in self.labels.iter().take(6) {
