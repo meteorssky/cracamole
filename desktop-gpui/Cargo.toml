@@ -21,3 +21,4 @@ image = { version = "0.25", default-features = false }
 [dev-dependencies]
 russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
 rand = "0.10"
+tempfile = "3"

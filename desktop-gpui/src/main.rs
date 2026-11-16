@@ -30,8 +30,10 @@ enum Tab {
 /// 等待使用者核對指紋的 SSH 連線。
 struct Pending {
     connection: cracamole_store::Connection,
-    public_key: String,
+    trust_param: &'static str,
+    trust_value: String,
     fingerprint: String,
+    detail: Option<String>,
 }
 
 /// 進行中的遠端工作階段。
@@ -39,11 +41,19 @@ struct Live {
     input: tokio::sync::mpsc::Sender<RemoteInput>,
     cancel: tokio_util::sync::CancellationToken,
     frame: Option<Arc<RenderImage>>,
+    /// 目前影格的像素尺寸。
+    size: (u32, u32),
+    /// 已要求遠端使用的桌面尺寸。
+    requested: (u32, u32),
+    /// 目前按下的滑鼠按鈕（Guacamole 遮罩：1 左、2 中、4 右）。
+    mask: u32,
     status: String,
     ended: bool,
 }
 
 struct Library {
+    /// 遠端畫面容器的實際範圍（繪製時量測），供座標換算與調整遠端解析度。
+    view: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     pending: Option<Pending>,
     probing: bool,
     notice: Option<String>,
@@ -108,6 +118,7 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            view: Default::default(),
             pending: None,
             probing: false,
             notice: None,
@@ -143,7 +154,7 @@ impl Library {
         let connection = remote::load_connection(public);
         self.notice = None;
         // SSH 沒有已設定的主機金鑰時，先探測並讓使用者核對指紋。
-        if connection.protocol == "ssh" && !connection.params.contains_key("host-key") {
+        if remote::needs_identity(&connection) {
             self.begin_probe(connection, window, cx);
             return;
         }
@@ -161,9 +172,9 @@ impl Library {
             .params
             .get("port")
             .and_then(|port| port.parse().ok())
-            .unwrap_or(22);
+            .unwrap_or(if connection.protocol == "rdp" { 3389 } else { 22 });
         self.probing = true;
-        let result = remote::probe_ssh(host, port);
+        let result = remote::probe(connection.protocol.clone(), host, port);
         cx.spawn_in(window, async move |this, cx| {
             let result = result.await.unwrap_or_else(|_| Err("探測已取消。".to_string()));
             let _ = this.update_in(cx, |this, window, cx| {
@@ -177,7 +188,7 @@ impl Library {
     fn on_probe(
         &mut self,
         connection: cracamole_store::Connection,
-        result: Result<remote::HostKeyInfo, String>,
+        result: Result<remote::Identity, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -195,21 +206,25 @@ impl Library {
             Ok(info) => {
                 self.pending = Some(Pending {
                     connection,
-                    public_key: info.public_key,
+                    trust_param: info.trust_param,
+                    trust_value: info.trust_value,
                     fingerprint: info.fingerprint,
+                    detail: info.detail,
                 });
             }
         }
         cx.notify();
     }
 
-    /// 使用者核對指紋後信任：金鑰只用於這一次連線，不寫入任何檔案。
+    /// 使用者核對指紋後信任：金鑰或憑證只用於這一次連線，不寫入任何檔案。
     fn trust_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pending) = self.pending.take() else {
             return;
         };
         let mut connection = pending.connection;
-        connection.params.insert("host-key".into(), pending.public_key);
+        connection
+            .params
+            .insert(pending.trust_param.into(), pending.trust_value);
         self.start_session(connection, window, cx);
     }
 
@@ -219,11 +234,21 @@ impl Library {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut session = remote::start(connection, 960, 540);
+        let view = self.view.get();
+        let (width, height) = (f32::from(view.size.width), f32::from(view.size.height));
+        let requested = if width >= 320.0 && height >= 240.0 {
+            (width as u32, height as u32)
+        } else {
+            (960, 540)
+        };
+        let mut session = remote::start(connection, requested.0, requested.1);
         self.live = Some(Live {
             input: session.input.clone(),
             cancel: session.cancel.clone(),
             frame: None,
+            size: (0, 0),
+            requested,
+            mask: 0,
             status: "連線中…".into(),
             ended: false,
         });
@@ -246,6 +271,7 @@ impl Library {
         match event {
             Event::Frame(frame) => {
                 if let Some(image) = remote::to_image(&frame) {
+                    live.size = (frame.width as u32, frame.height as u32);
                     live.frame = Some(image);
                     live.status = "已連線".into();
                 }
@@ -263,6 +289,59 @@ impl Library {
             live.cancel.cancel();
         }
         cx.notify();
+    }
+
+    /// 依顯示區大小調整遠端桌面尺寸（尺寸改變超過 8 像素才送出）。
+    fn sync_remote_size(&mut self) {
+        let view = self.view.get();
+        let (width, height) = (
+            f32::from(view.size.width) as u32,
+            f32::from(view.size.height) as u32,
+        );
+        let Some(live) = self.live.as_mut().filter(|live| !live.ended && live.frame.is_some()) else {
+            return;
+        };
+        if width < 320 || height < 240 {
+            return;
+        }
+        let (old_w, old_h) = live.requested;
+        if width.abs_diff(old_w) > 8 || height.abs_diff(old_h) > 8 {
+            if live
+                .input
+                .try_send(RemoteInput::Resize { width, height })
+                .is_ok()
+            {
+                live.requested = (width, height);
+            }
+        }
+    }
+
+    /// 滑鼠事件：`button` 為 Some((遮罩位元, 是否按下))；位置換算成遠端座標。
+    fn send_mouse(&mut self, position: Point<Pixels>, button: Option<(u32, bool)>) {
+        let view = self.view.get();
+        let Some(live) = self.live.as_mut().filter(|live| !live.ended) else {
+            return;
+        };
+        let local = (
+            f32::from(position.x - view.origin.x),
+            f32::from(position.y - view.origin.y),
+        );
+        let view_size = (f32::from(view.size.width), f32::from(view.size.height));
+        let Some((x, y)) = remote::to_remote(local, view_size, live.size) else {
+            return;
+        };
+        if let Some((bit, pressed)) = button {
+            if pressed {
+                live.mask |= bit;
+            } else {
+                live.mask &= !bit;
+            }
+        }
+        let _ = live.input.try_send(RemoteInput::Mouse {
+            x,
+            y,
+            mask: live.mask,
+        });
     }
 
     fn send_key(&mut self, keystroke: &Keystroke) {
@@ -369,8 +448,11 @@ impl Library {
             .child(
                 div()
                     .text_color(rgb(MUTED))
-                    .child(format!("尚未信任 {host} 的主機金鑰。請與伺服器管理者透過可信管道提供的指紋比對，一致後才信任。")),
+                    .child(format!("尚未信任 {host} 的身分。請與伺服器管理者透過可信管道提供的指紋比對，一致後才信任。")),
             )
+            .children(pending.detail.clone().map(|detail| {
+                div().text_size(px(13.)).text_color(rgb(MUTED)).child(format!("憑證主體：{detail}"))
+            }))
             .child(
                 div()
                     .id("fingerprint")
@@ -573,6 +655,7 @@ fn pill(id: &'static str, label: String, active: bool) -> Stateful<Div> {
 
 impl Render for Library {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_remote_size();
         let rows = self.visible(cx);
         let total = self.connections.len();
         let pinned = self.pinned.len();
@@ -784,13 +867,47 @@ impl Render for Library {
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
                             this.send_key(&event.keystroke);
                         }))
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
+                            this.send_mouse(event.position, None);
+                        }))
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, _| {
+                            this.send_mouse(event.position, Some((1, true)));
+                        }))
+                        .on_mouse_up(MouseButton::Left, cx.listener(|this, event: &MouseUpEvent, _, _| {
+                            this.send_mouse(event.position, Some((1, false)));
+                        }))
+                        .on_mouse_down(MouseButton::Middle, cx.listener(|this, event: &MouseDownEvent, _, _| {
+                            this.send_mouse(event.position, Some((2, true)));
+                        }))
+                        .on_mouse_up(MouseButton::Middle, cx.listener(|this, event: &MouseUpEvent, _, _| {
+                            this.send_mouse(event.position, Some((2, false)));
+                        }))
+                        .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _, _| {
+                            this.send_mouse(event.position, Some((4, true)));
+                        }))
+                        .on_mouse_up(MouseButton::Right, cx.listener(|this, event: &MouseUpEvent, _, _| {
+                            this.send_mouse(event.position, Some((4, false)));
+                        }))
+                        .child({
+                            let view = self.view.clone();
+                            canvas(move |bounds, _, _| view.set(bounds), |_, _, _, _| {})
+                                .absolute()
+                                .size_full()
+                        })
                         .size_full()
                         .flex()
                         .items_center()
                         .justify_center()
                         .bg(rgb(0x000000))
                         .child(match &live.frame {
-                            Some(image) => img(image.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
+                            Some(image) => {
+                                let view = self.view.get();
+                                let (_, _, w, h) = remote::display_rect(
+                                    (f32::from(view.size.width), f32::from(view.size.height)),
+                                    live.size,
+                                );
+                                img(image.clone()).w(px(w)).h(px(h)).into_any_element()
+                            }
                             None => div().text_color(rgb(MUTED)).child(live.status.clone()).into_any_element(),
                         })
                         .test_support()
@@ -1146,5 +1263,119 @@ mod tests {
             assert!(content.read(cx).live.is_none(), "重繪後 live 又出現");
         })
         .unwrap();
+    }
+
+    /// RDP 測試伺服器（tests/rdp-fixture）；未建置時回傳 None，測試略過。
+    struct RdpFixture {
+        child: std::process::Child,
+        directory: tempfile::TempDir,
+        port: u16,
+        pin: String,
+    }
+    impl Drop for RdpFixture {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn rdp_fixture() -> Option<RdpFixture> {
+        let binary = std::env::var_os("CRACAMOLE_RDP_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../tests/rdp-fixture/target/release/cracamole-rdp-fixture.exe")
+            });
+        if !binary.exists() {
+            eprintln!("略過：找不到 RDP 測試伺服器 {}", binary.display());
+            return None;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let child = std::process::Command::new(binary)
+            .arg(directory.path())
+            .arg("frames")
+            .spawn()
+            .unwrap();
+        let mut fixture = RdpFixture {
+            child,
+            directory,
+            port: 0,
+            pin: String::new(),
+        };
+        for _ in 0..400 {
+            if let Ok(text) = std::fs::read_to_string(fixture.directory.path().join("ready")) {
+                let mut lines = text.lines();
+                if let (Some(Ok(port)), Some(pin)) =
+                    (lines.next().map(str::parse::<u16>), lines.next())
+                {
+                    fixture.port = port;
+                    fixture.pin = pin.to_owned();
+                    return Some(fixture);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        panic!("RDP 測試伺服器啟動逾時");
+    }
+
+    #[gpui_kit::test]
+    fn rdp_confirms_the_certificate_then_shows_frames_and_forwards_input(cx: &mut TestAppContext) {
+        let Some(fixture) = rdp_fixture() else {
+            return;
+        };
+        cx.executor().allow_parking();
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            content.update(cx, |library, _| {
+                let mut connection = super::sample("r1", "lab-rdp", "rdp", "127.0.0.1", "fixture");
+                connection.params.insert("port".into(), fixture.port.to_string());
+                connection.params.insert("security".into(), "tls".into());
+                connection.params.insert("password".into(), "fixture-secret".into());
+                library.connections.push(connection);
+                library.selected = Some("r1".into());
+            });
+            window.render_frame(cx);
+            window.click("session-action", cx);
+        })
+        .unwrap();
+
+        wait_until(cx, "出現憑證核對", |cx| {
+            cx.read_entity(&content, |library, _| library.pending.is_some())
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let pending = content.read(cx).pending.as_ref().unwrap();
+            assert!(pending.fingerprint.eq_ignore_ascii_case(&fixture.pin));
+            assert!(pending.detail.as_deref().is_some_and(|d| !d.is_empty()));
+            assert!(content.read(cx).live.is_none());
+            window.click("trust", cx);
+        })
+        .unwrap();
+
+        wait_until(cx, "收到 RDP 畫面", |cx| {
+            cx.read_entity(&content, |library, _| {
+                library.live.as_ref().is_some_and(|live| live.frame.is_some())
+            })
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).live.as_ref().unwrap().size, (320, 240));
+            // 鍵盤：z → 伺服器記錄 scancode 0x2c。
+            window.press("z", cx);
+            // 滑鼠：移到遠端 (42, 31) 後按下並放開左鍵。
+            let bounds = window.find("session").bounds();
+            let (left, top, _, _) = super::remote::display_rect(
+                (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                (320, 240),
+            );
+            let offset = gpui_kit::point(px(left + 42.5), px(top + 31.5));
+            window.click_at("session", offset, cx);
+        })
+        .unwrap();
+        wait_until(cx, "伺服器收到按鍵與滑鼠", |_| {
+            fixture.directory.path().join("key").exists()
+                && fixture.directory.path().join("mouse").exists()
+        });
     }
 }

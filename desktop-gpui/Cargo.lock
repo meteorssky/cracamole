@@ -1546,6 +1546,7 @@ dependencies = [
  "image",
  "rand 0.10.4",
  "russh",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]
