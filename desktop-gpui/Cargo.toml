@@ -1,0 +1,14 @@
+# 獨立 workspace：GPUI 依賴很重，不併入主 workspace 的 Cargo.lock。
+[workspace]
+
+[package]
+name = "cracamole-desktop-gpui"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+gpui-kit = "0.10.0"
+cracamole-store = { path = "../crates/cracamole-store" }
+tokio = { version = "1", features = ["rt-multi-thread"] }
