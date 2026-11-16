@@ -29,7 +29,16 @@ struct Library {
     selected: Option<String>,
     tab: Tab,
     search: Entity<InputState>,
+    editing: bool,
+    protocol: &'static str,
+    error: Option<String>,
+    name: Entity<InputState>,
+    host: Entity<InputState>,
+    port: Entity<InputState>,
+    user: Entity<InputState>,
 }
+
+const PROTOCOLS: [(&str, &str); 4] = [("ssh", "22"), ("rdp", "3389"), ("vnc", "5900"), ("telnet", "23")];
 
 fn sample(id: &str, name: &str, protocol: &str, host: &str, user: &str) -> PublicConnection {
     let mut params = BTreeMap::new();
@@ -66,7 +75,67 @@ impl Library {
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         let connections = load();
         let pinned = connections.iter().take(2).map(|c| c.id.clone()).collect();
-        Self { connections, pinned, selected: None, tab: Tab::All, search }
+        let field = |window: &mut Window, cx: &mut Context<Self>, hint: &'static str| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(hint))
+        };
+        let name = field(window, cx, "連線名稱");
+        let host = field(window, cx, "主機名稱或位址");
+        let port = field(window, cx, "連接埠（留空使用預設）");
+        let user = field(window, cx, "帳號");
+        Self {
+            connections,
+            pinned,
+            selected: None,
+            tab: Tab::All,
+            search,
+            editing: false,
+            protocol: "ssh",
+            error: None,
+            name,
+            host,
+            port,
+            user,
+        }
+    }
+
+    /// 以欄位內容建立草稿並以共用規則驗證；成功時加入清單並關閉編輯器。
+    fn save(&mut self, cx: &mut Context<Self>) {
+        let text = |state: &Entity<InputState>| state.read(cx).value().trim().to_string();
+        let default_port = PROTOCOLS
+            .iter()
+            .find(|(name, _)| *name == self.protocol)
+            .map_or("", |(_, port)| *port);
+        let mut params = BTreeMap::new();
+        params.insert("hostname".to_string(), text(&self.host));
+        let port = text(&self.port);
+        params.insert(
+            "port".to_string(),
+            if port.is_empty() { default_port.to_string() } else { port },
+        );
+        let user = text(&self.user);
+        if !user.is_empty() {
+            params.insert("username".to_string(), user);
+        }
+        let draft = cracamole_store::Draft {
+            name: text(&self.name),
+            protocol: self.protocol.to_string(),
+            params,
+        };
+        match cracamole_store::validate(&draft) {
+            Err(invalid) => self.error = Some(invalid.message.to_string()),
+            Ok(()) => {
+                self.connections.push(PublicConnection {
+                    id: format!("new-{}", self.connections.len() + 1),
+                    name: draft.name,
+                    protocol: draft.protocol,
+                    params: draft.params,
+                    configured_secrets: vec![],
+                });
+                self.editing = false;
+                self.error = None;
+            }
+        }
+        cx.notify();
     }
 
     fn visible(&self, cx: &App) -> Vec<PublicConnection> {
@@ -88,6 +157,110 @@ impl Library {
                 configured_secrets: c.configured_secrets.clone(),
             })
             .collect()
+    }
+}
+
+impl Library {
+    fn editor_card(&self, cx: &mut Context<Self>) -> Div {
+        let label = |text: &'static str| div().text_size(px(13.)).text_color(rgb(MUTED)).child(text);
+        let mut protocols = div().flex().gap_2();
+        for (name, _) in PROTOCOLS {
+            let id: &'static str = match name {
+                "ssh" => "protocol-ssh",
+                "rdp" => "protocol-rdp",
+                "vnc" => "protocol-vnc",
+                _ => "protocol-telnet",
+            };
+            protocols = protocols.child(
+                pill(id, name.to_uppercase(), self.protocol == name)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.protocol = name;
+                        cx.notify();
+                    }))
+                    .test_support()
+                    .aria_label(name),
+            );
+        }
+        let button = |id: &'static str, text: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_5()
+                .h(px(38.))
+                .flex()
+                .items_center()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(if primary { ACCENT } else { BORDER }))
+                .bg(rgb(if primary { ACCENT } else { PANEL }))
+                .text_color(rgb(if primary { 0xffffff } else { TEXT }))
+                .cursor_pointer()
+                .child(text)
+        };
+        div()
+            .w(px(520.))
+            .p_6()
+            .rounded(px(16.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(CARD))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_size(px(18.)).text_color(rgb(TEXT)).child("新增連線"))
+            .child(label("協定"))
+            .child(protocols)
+            .child(label("名稱"))
+            .child(Input::new(&self.name))
+            .child(label("主機"))
+            .child(Input::new(&self.host))
+            .child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(label("連接埠"))
+                            .child(Input::new(&self.port)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(label("帳號"))
+                            .child(Input::new(&self.user)),
+                    ),
+            )
+            .children(self.error.clone().map(|message| {
+                div().text_size(px(13.)).text_color(rgb(0xf87171)).child(message)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .justify_end()
+                    .child(
+                        button("cancel", "取消", false)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.editing = false;
+                                this.error = None;
+                                cx.notify();
+                            }))
+                            .test_support()
+                            .aria_label("取消"),
+                    )
+                    .child(
+                        button("save", "儲存", true)
+                            .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
+                            .test_support()
+                            .aria_label("儲存"),
+                    ),
+            )
     }
 }
 
@@ -232,7 +405,14 @@ impl Render for Library {
                             .text_color(rgb(0xffffff))
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.9))
-                            .child("新增"),
+                            .child("新增")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.editing = true;
+                                this.error = None;
+                                cx.notify();
+                            }))
+                            .test_support()
+                            .aria_label("新增連線"),
                     ),
             )
             .child(
@@ -272,6 +452,7 @@ impl Render for Library {
             .child(div().h(px(1.)).bg(rgb(BORDER)))
             .child(list);
 
+        let editor = self.editor_card(cx);
         let subtitle = if selected_name.is_some() {
             "按「連線」開始工作階段"
         } else {
@@ -297,7 +478,9 @@ impl Render for Library {
                     .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(subtitle)),
             )
             .child(
-                div().flex_1().flex().items_center().justify_center().child(
+                div().flex_1().flex().items_center().justify_center().child(if self.editing {
+                    editor
+                } else {
                     div()
                         .w(px(520.))
                         .p_6()
@@ -320,8 +503,8 @@ impl Render for Library {
                             div()
                                 .text_color(rgb(MUTED))
                                 .child("選擇左側連線，或搜尋主機與輸入連線位址即可開始。"),
-                        ),
-                ),
+                        )
+                }),
             );
 
         div()
@@ -398,6 +581,79 @@ mod tests {
             window.click("tab-all", cx);
             window.render_frame(cx);
             assert_eq!(content.read(cx).visible(cx).len(), 5);
+        })
+        .unwrap();
+    }
+
+    fn fill(
+        content: &Entity<Library>,
+        window: &mut gpui_kit::Window,
+        cx: &mut gpui_kit::App,
+        values: [&str; 4],
+    ) {
+        let (name, host, port, user) = {
+            let library = content.read(cx);
+            (
+                library.name.clone(),
+                library.host.clone(),
+                library.port.clone(),
+                library.user.clone(),
+            )
+        };
+        for (state, value) in [name, host, port, user].into_iter().zip(values) {
+            state.update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn editor_rejects_invalid_input_and_saves_a_valid_connection(cx: &mut TestAppContext) {
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("add", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).editing);
+
+            // 缺少主機與名稱：驗證失敗且不新增。
+            window.click("save", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).error.is_some());
+            assert_eq!(content.read(cx).connections.len(), 5);
+
+            // 無效連接埠同樣被共用驗證拒絕。
+            fill(&content, window, cx, ["lab-rdp", "10.9.9.9", "99999", ""]);
+            window.click("protocol-rdp", cx);
+            window.click("save", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).error.is_some());
+            assert_eq!(content.read(cx).connections.len(), 5);
+
+            // 有效輸入：使用 RDP 預設連接埠並關閉編輯器。
+            fill(&content, window, cx, ["lab-rdp", "10.9.9.9", "", "bob"]);
+            window.click("save", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(!library.editing && library.error.is_none());
+            let saved = library.connections.last().unwrap();
+            assert_eq!(saved.protocol, "rdp");
+            assert_eq!(saved.params.get("port").map(String::as_str), Some("3389"));
+            assert_eq!(saved.params.get("username").map(String::as_str), Some("bob"));
+            assert_eq!(library.connections.len(), 6);
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn cancel_closes_the_editor_without_saving(cx: &mut TestAppContext) {
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("add", cx);
+            window.render_frame(cx);
+            window.click("cancel", cx);
+            window.render_frame(cx);
+            assert!(!content.read(cx).editing);
+            assert_eq!(content.read(cx).connections.len(), 5);
         })
         .unwrap();
     }
