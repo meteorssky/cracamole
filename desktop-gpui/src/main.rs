@@ -67,6 +67,15 @@ struct Live {
     ended: bool,
 }
 
+/// 登入設定；到期或登出後用來重新顯示登入頁。
+#[derive(Clone)]
+struct LoginConfig {
+    credentials: Option<Arc<Credentials>>,
+    startup_error: Option<String>,
+    data_dir: Option<PathBuf>,
+    lifetime: Duration,
+}
+
 /// 登入前的狀態；未登入時不載入任何連線資料。
 struct Auth {
     credentials: Option<Arc<Credentials>>,
@@ -80,6 +89,13 @@ struct Auth {
 }
 
 struct Library {
+    login_config: Option<LoginConfig>,
+    /// 登入到期時間；None 表示未登入或未啟用登入。
+    expires: Option<Instant>,
+    /// 每次登入遞增，讓舊的到期監看工作自行結束。
+    epoch: u64,
+    key_path: Entity<InputState>,
+    passphrase: Entity<InputState>,
     collapsed: BTreeSet<String>,
     /// 正在更名的群組。
     renaming: Option<String>,
@@ -150,8 +166,30 @@ impl Library {
         cx: &mut Context<Self>,
         credentials: Result<Arc<Credentials>, String>,
         data_dir: Option<PathBuf>,
+        lifetime: Duration,
     ) -> Self {
         let mut this = Self::with_connections(window, cx, Vec::new());
+        let (credentials, startup_error) = match credentials {
+            Ok(credentials) => (Some(credentials), None),
+            Err(message) => (None, Some(message)),
+        };
+        let config = LoginConfig {
+            credentials,
+            startup_error,
+            data_dir,
+            lifetime,
+        };
+        this.auth = Some(Self::make_auth(window, cx, &config, None));
+        this.login_config = Some(config);
+        this
+    }
+
+    fn make_auth(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        config: &LoginConfig,
+        error: Option<String>,
+    ) -> Auth {
         let username = cx.new(|cx| InputState::new(window, cx).placeholder("帳號"));
         let password = cx.new(|cx| InputState::new(window, cx).placeholder("密碼").masked(true));
         cx.subscribe_in(&password, window, |this, _, event: &InputEvent, window, cx| {
@@ -160,21 +198,69 @@ impl Library {
             }
         })
         .detach();
-        let (credentials, startup_error) = match credentials {
-            Ok(credentials) => (Some(credentials), None),
-            Err(message) => (None, Some(message)),
-        };
-        this.auth = Some(Auth {
-            credentials,
-            startup_error,
-            data_dir,
+        Auth {
+            credentials: config.credentials.clone(),
+            startup_error: config.startup_error.clone(),
+            data_dir: config.data_dir.clone(),
             username,
             password,
-            error: None,
+            error,
             attempts: Vec::new(),
             busy: false,
-        });
-        this
+        }
+    }
+
+    /// 登出或到期：結束工作階段、清除所有連線與機密資料、釋放私有連線庫，回到登入頁。
+    fn lock(&mut self, reason: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(config) = self.login_config.clone() else {
+            return;
+        };
+        if let Some(live) = self.live.take() {
+            live.cancel.cancel();
+        }
+        self.store = None;
+        self.expires = None;
+        self.connections.clear();
+        self.pinned.clear();
+        self.selected = None;
+        self.editing = false;
+        self.editing_id = None;
+        self.renaming = None;
+        self.pending = None;
+        self.confirm_delete = false;
+        self.collapsed.clear();
+        self.notice = None;
+        self.error = None;
+        self.clear_editor(window, cx);
+        self.search.clone().update(cx, |state, cx| state.set_value("", window, cx));
+        self.auth = Some(Self::make_auth(window, cx, &config, reason));
+        cx.notify();
+    }
+
+    fn check_expiry(&mut self, now: Instant, window: &mut Window, cx: &mut Context<Self>) {
+        if self.expires.is_some_and(|expires| now >= expires) {
+            self.lock(Some("登入已到期，請重新登入。".into()), window, cx);
+        }
+    }
+
+    /// 每秒檢查一次登入是否到期；登出、重新登入後舊的工作會自行結束。
+    fn watch_expiry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.epoch = self.epoch.wrapping_add(1);
+        let epoch = self.epoch;
+        cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let alive = this.update_in(cx, |this, window, cx| {
+                if this.epoch != epoch || this.expires.is_none() {
+                    return false;
+                }
+                this.check_expiry(Instant::now(), window, cx);
+                true
+            });
+            if !alive.unwrap_or(false) {
+                break;
+            }
+        })
+        .detach();
     }
 
     fn with_connections(
@@ -194,6 +280,11 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            login_config: None,
+            expires: None,
+            epoch: 0,
+            key_path: cx.new(|cx| InputState::new(window, cx).placeholder("私鑰檔案路徑（選填）")),
+            passphrase: cx.new(|cx| InputState::new(window, cx).placeholder("私鑰密語（選填）").masked(true)),
             collapsed: BTreeSet::new(),
             renaming: None,
             group_name: cx.new(|cx| InputState::new(window, cx).placeholder("新的群組名稱（留空＝移至未分類）")),
@@ -259,7 +350,7 @@ impl Library {
     fn on_login(
         &mut self,
         result: Result<Result<bool, cracamole_store::credentials::VerifyError>, tokio::sync::oneshot::error::RecvError>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(auth) = self.auth.as_mut() else {
@@ -294,6 +385,12 @@ impl Library {
                 self.pinned = store.pinned().unwrap_or_default().into_iter().collect();
                 self.store = Some(store);
                 self.auth = None;
+                let lifetime = self
+                    .login_config
+                    .as_ref()
+                    .map_or(Duration::from_secs(28800), |config| config.lifetime);
+                self.expires = Some(Instant::now() + lifetime);
+                self.watch_expiry(window, cx);
             }
         }
         cx.notify();
@@ -602,6 +699,31 @@ impl Library {
             return;
         }
         let full_name = if group.is_empty() { member } else { format!("{group} / {member}") };
+        let mut params = params;
+        let key_path = text(&self.key_path);
+        let passphrase = self.passphrase.read(cx).value().to_string();
+        if !key_path.is_empty() || !passphrase.is_empty() {
+            if self.protocol != "ssh" {
+                self.error = Some("私鑰檔案與密語只適用 SSH 連線。".into());
+                cx.notify();
+                return;
+            }
+            if !key_path.is_empty() {
+                match read_private_key(&key_path) {
+                    Ok(key) => {
+                        params.insert("private-key".to_string(), key);
+                    }
+                    Err(message) => {
+                        self.error = Some(message.into());
+                        cx.notify();
+                        return;
+                    }
+                }
+            }
+            if !passphrase.is_empty() {
+                params.insert("passphrase".to_string(), passphrase);
+            }
+        }
         let draft = cracamole_store::Draft {
             name: full_name,
             protocol: self.protocol.to_string(),
@@ -719,9 +841,30 @@ impl Library {
         cx.notify();
     }
 
+    /// 開啟系統檔案對話框選擇私鑰檔案；只填入路徑，內容在儲存時才讀取。
+    fn browse_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("選擇 SSH 私鑰檔案".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await {
+                if let Some(path) = paths.first() {
+                    let path = path.to_string_lossy().to_string();
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.key_path.clone().update(cx, |state, cx| state.set_value(path, window, cx));
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
     /// 清空編輯器欄位（含密碼）。
     fn clear_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for state in [&self.name, &self.group, &self.host, &self.port, &self.user, &self.secret] {
+        for state in [&self.name, &self.group, &self.host, &self.port, &self.user, &self.secret, &self.key_path, &self.passphrase] {
             state.clone().update(cx, |state, cx| state.set_value("", window, cx));
         }
     }
@@ -1092,6 +1235,27 @@ impl Library {
         cx.notify();
     }
 
+    fn logout_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.login_config.is_none() || self.auth.is_some() {
+            return div().into_any_element();
+        }
+        div()
+            .id("logout")
+            .ml_auto()
+            .px_3()
+            .py_1()
+            .rounded(px(8.))
+            .text_size(px(13.))
+            .text_color(rgb(MUTED))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(CARD)))
+            .child("登出")
+            .on_click(cx.listener(|this, _, window, cx| this.lock(None, window, cx)))
+            .test_support()
+            .aria_label("登出")
+            .into_any_element()
+    }
+
     /// 連線中才顯示：把本機剪貼簿貼到遠端。
     fn paste_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(live) = self.live.as_ref().filter(|live| !live.ended) else {
@@ -1260,7 +1424,17 @@ impl Library {
             .flex()
             .flex_col()
             .gap_3()
+            .max_h_full()
+            .min_h_0()
             .child(div().text_size(px(18.)).text_color(rgb(TEXT)).child(if self.editing_id.is_some() { "編輯連線" } else { "新增連線" }))
+            .child(
+                div()
+                    .id("editor-body")
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .min_h_0()
+                    .overflow_y_scroll()
             .child(label("協定"))
             .child(protocols)
             .child(label("群組（選填）"))
@@ -1271,6 +1445,38 @@ impl Library {
             .child(Input::new(&self.host))
             .child(label("密碼（選填，保存於私有連線庫）"))
             .child(Input::new(&self.secret))
+            .children((self.protocol == "ssh").then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(label("SSH 私鑰檔案（選填）"))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(div().flex_1().child(Input::new(&self.key_path)))
+                            .child(
+                                div()
+                                    .id("browse-key")
+                                    .px_4()
+                                    .h(px(36.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(10.))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .bg(rgb(PANEL))
+                                    .cursor_pointer()
+                                    .child("瀏覽…")
+                                    .on_click(cx.listener(|this, _, window, cx| this.browse_key(window, cx)))
+                                    .test_support()
+                                    .aria_label("瀏覽私鑰檔案"),
+                            ),
+                    )
+                    .child(label("私鑰密語（選填）"))
+                    .child(Input::new(&self.passphrase))
+            }))
             .child(
                 div()
                     .flex()
@@ -1293,6 +1499,7 @@ impl Library {
                             .child(label("帳號"))
                             .child(Input::new(&self.user)),
                     ),
+            )
             )
             .children(self.error.clone().map(|message| {
                 div().text_size(px(13.)).text_color(rgb(0xf87171)).child(message)
@@ -1322,6 +1529,31 @@ impl Library {
                     ),
             )
     }
+}
+
+/// 工作階段存活秒數：1 至 28800 的整數，預設 8 小時；其他值視為設定錯誤。
+fn session_lifetime(value: Option<&str>) -> Result<Duration, &'static str> {
+    match value {
+        None => Ok(Duration::from_secs(28800)),
+        Some(text) => match text.parse::<u64>() {
+            Ok(seconds) if (1..=28800).contains(&seconds) => Ok(Duration::from_secs(seconds)),
+            _ => Err("CRACAMOLE_DESKTOP_SESSION_MAX_SECS 必須是 1 至 28800 的整數"),
+        },
+    }
+}
+
+/// 讀取私鑰檔案：1 至 8192 位元組的 UTF-8 文字。
+fn read_private_key(path: &str) -> Result<String, &'static str> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|_| "無法開啟私鑰檔案。")?;
+    let mut bytes = Vec::new();
+    file.take(8193)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "無法讀取私鑰檔案。")?;
+    if bytes.is_empty() || bytes.len() > 8192 {
+        return Err("私鑰檔案必須是 1 至 8192 位元組的文字。");
+    }
+    String::from_utf8(bytes).map_err(|_| "私鑰檔案必須是 UTF-8 文字。")
 }
 
 /// 連線名稱的群組：`群組/成員`；沒有群組（或群組名稱為空）時回傳 (None, 原名稱)。
@@ -1462,7 +1694,8 @@ impl Render for Library {
                     .gap_2()
                     .p_4()
                     .child(div().size(px(10.)).rounded_full().bg(rgb(ACCENT)))
-                    .child(div().text_size(px(20.)).text_color(rgb(TEXT)).child("cracamole")),
+                    .child(div().text_size(px(20.)).text_color(rgb(TEXT)).child("cracamole"))
+                    .child(self.logout_button(cx)),
             )
             .child(
                 div()
@@ -1586,7 +1819,7 @@ impl Render for Library {
                     ),
             )
             .child(
-                div().flex_1().flex().items_center().justify_center().child(if let Some(live) = &self.live {
+                div().flex_1().min_h_0().flex().items_center().justify_center().child(if let Some(live) = &self.live {
                     div()
                         .id("session")
                         .track_focus(&self.focus)
@@ -1696,10 +1929,15 @@ fn main() {
         .or_else(|| {
             std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("cracamole-desktop"))
         });
+    let lifetime = session_lifetime(std::env::var("CRACAMOLE_DESKTOP_SESSION_MAX_SECS").ok().as_deref());
+    let (credentials, lifetime) = match lifetime {
+        Ok(lifetime) => (credentials, lifetime),
+        Err(message) => (Err(message.to_string()), Duration::from_secs(28800)),
+    };
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
-            let view = cx.new(|cx| Library::locked(window, cx, credentials, data_dir));
+            let view = cx.new(|cx| Library::locked(window, cx, credentials, data_dir, lifetime));
             cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
         })
         .expect("window");
@@ -2279,7 +2517,7 @@ mod tests {
                 cx,
                 move |window, cx| {
                     cx.new(|cx| {
-                        Library::locked(window, cx, Ok(std::sync::Arc::new(credentials)), Some(dir))
+                        Library::locked(window, cx, Ok(std::sync::Arc::new(credentials)), Some(dir), std::time::Duration::from_secs(60))
                     })
                 },
             )
@@ -2683,6 +2921,209 @@ mod tests {
             let library = content.read(cx);
             assert_eq!(library.group.read(cx).value().as_ref(), "lab");
             assert_eq!(library.name.read(cx).value().as_ref(), "node-1");
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn session_lifetime_accepts_only_one_to_28800_seconds() {
+        use super::session_lifetime;
+        use std::time::Duration;
+        assert_eq!(session_lifetime(None).unwrap(), Duration::from_secs(28800));
+        assert_eq!(session_lifetime(Some("1")).unwrap(), Duration::from_secs(1));
+        assert_eq!(session_lifetime(Some("28800")).unwrap(), Duration::from_secs(28800));
+        for invalid in ["0", "28801", "-1", "1.5", "", "abc", " 5"] {
+            assert!(session_lifetime(Some(invalid)).is_err(), "{invalid:?}");
+        }
+    }
+
+    /// 以記憶體內的登入流程開啟視窗並登入；回傳 (視窗, 內容, 資料目錄暫存)。
+    fn logged_in(
+        cx: &mut TestAppContext,
+        lifetime_secs: u64,
+    ) -> (gpui_kit::AnyWindowHandle, Entity<Library>, tempfile::TempDir) {
+        use gpui_kit::component::input::InputState;
+        let credentials = super::remote::block_on(super::Credentials::new(
+            "admin".into(),
+            "correct-horse-battery".into(),
+        ))
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().join("desktop");
+        let (window, content) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            let (window, content) = gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Point::default(),
+                        size: size(px(1200.), px(760.)),
+                    })),
+                    ..Default::default()
+                },
+                cx,
+                move |window, cx| {
+                    cx.new(|cx| {
+                        Library::locked(
+                            window,
+                            cx,
+                            Ok(std::sync::Arc::new(credentials)),
+                            Some(data_dir),
+                            std::time::Duration::from_secs(lifetime_secs),
+                        )
+                    })
+                },
+            )
+            .expect("open test window");
+            (gpui_kit::AnyWindowHandle::from(window), content)
+        });
+        log_in(cx, window, &content);
+        let _ = InputState::new;
+        (window, content, directory)
+    }
+
+    fn log_in(cx: &mut TestAppContext, window: gpui_kit::AnyWindowHandle, content: &Entity<Library>) {
+        use gpui_kit::component::input::InputState;
+        cx.update_window(window, |_, window, cx| {
+            let (u, p) = {
+                let auth = content.read(cx).auth.as_ref().unwrap();
+                (auth.username.clone(), auth.password.clone())
+            };
+            u.update(cx, |s: &mut InputState, cx| s.set_value("admin", window, cx));
+            p.update(cx, |s: &mut InputState, cx| s.set_value("correct-horse-battery", window, cx));
+            window.render_frame(cx);
+            window.click("login", cx);
+        })
+        .unwrap();
+        wait_until(cx, "登入完成", |cx| {
+            cx.read_entity(content, |library, _| library.auth.is_none())
+        });
+    }
+
+    #[gpui_kit::test]
+    fn expiry_ends_the_session_clears_data_and_allows_signing_in_again(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let (port, _received) = telnet_fixture();
+        let (window, content, _dir) = logged_in(cx, 60);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            content.update(cx, |library, _| {
+                let mut connection = super::sample("t1", "lab-telnet", "telnet", "127.0.0.1", "");
+                connection.params.insert("port".into(), port.to_string());
+                library.connections.push(connection);
+                library.selected = Some("t1".into());
+            });
+            window.render_frame(cx);
+            window.click("session-action", cx);
+        })
+        .unwrap();
+        wait_until(cx, "收到第一張畫面", |cx| {
+            cx.read_entity(&content, |library, _| {
+                library.live.as_ref().is_some_and(|live| live.frame.is_some())
+            })
+        });
+
+        cx.update_window(window, |_, window, cx| {
+            // 到期前：仍維持登入與連線。
+            let early = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            content.update(cx, |library, cx| library.check_expiry(early, window, cx));
+            assert!(content.read(cx).auth.is_none() && content.read(cx).live.is_some());
+
+            // 到期後：結束連線、清除資料與連線庫，回到登入頁。
+            let late = std::time::Instant::now() + std::time::Duration::from_secs(61);
+            content.update(cx, |library, cx| library.check_expiry(late, window, cx));
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.live.is_none() && library.store.is_none());
+            assert!(library.connections.is_empty() && library.selected.is_none());
+            assert_eq!(
+                library.auth.as_ref().unwrap().error.as_deref(),
+                Some("登入已到期，請重新登入。")
+            );
+            assert!(window.try_find("login").is_some() && window.try_find("add").is_none());
+        })
+        .unwrap();
+
+        // 可以重新登入（私有連線庫已釋放）。
+        log_in(cx, window, &content);
+        cx.read_entity(&content, |library, _| assert!(library.store.is_some() && library.expires.is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn logout_returns_to_the_login_page_without_a_message(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let (window, content, _dir) = logged_in(cx, 60);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("logout", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.store.is_none() && library.expires.is_none());
+            assert!(library.auth.as_ref().unwrap().error.is_none());
+            assert!(window.try_find("login").is_some() && window.try_find("logout").is_none());
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn ssh_private_key_and_passphrase_are_stored_only_for_ssh(cx: &mut TestAppContext) {
+        use gpui_kit::component::input::InputState;
+        cx.executor().allow_parking();
+        let (window, content, directory) = logged_in(cx, 600);
+        let key_file = directory.path().join("id_test");
+        std::fs::write(&key_file, "-----BEGIN FIXTURE KEY-----\nabc\n-----END FIXTURE KEY-----\n").unwrap();
+        let big_file = directory.path().join("id_big");
+        std::fs::write(&big_file, vec![b'x'; 9000]).unwrap();
+
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("add", cx);
+            window.render_frame(cx);
+            assert!(window.try_find("browse-key").is_some(), "SSH 才顯示私鑰欄位");
+            let (name, host, key, pass) = {
+                let l = content.read(cx);
+                (l.name.clone(), l.host.clone(), l.key_path.clone(), l.passphrase.clone())
+            };
+            name.update(cx, |s: &mut InputState, cx| s.set_value("keyed", window, cx));
+            host.update(cx, |s: &mut InputState, cx| s.set_value("10.4.4.4", window, cx));
+
+            // 檔案不存在、過大：拒絕且不新增。
+            for (path, _what) in [("Z:/no/such/key", "missing"), (big_file.to_str().unwrap(), "oversize")] {
+                key.update(cx, |s: &mut InputState, cx| s.set_value(path, window, cx));
+                window.click("save", cx);
+                window.render_frame(cx);
+                assert!(content.read(cx).error.is_some() && content.read(cx).connections.is_empty());
+            }
+
+            // 非 SSH 協定帶私鑰：拒絕。
+            window.click("protocol-rdp", cx);
+            key.update(cx, |s: &mut InputState, cx| s.set_value(key_file.to_str().unwrap(), window, cx));
+            window.render_frame(cx);
+            window.click("save", cx);
+            window.render_frame(cx);
+            assert_eq!(
+                content.read(cx).error.as_deref(),
+                Some("私鑰檔案與密語只適用 SSH 連線。")
+            );
+            assert!(content.read(cx).connections.is_empty());
+
+            // SSH：讀入私鑰並保存；公開資料只標記為已設定。
+            window.click("protocol-ssh", cx);
+            pass.update(cx, |s: &mut InputState, cx| s.set_value("pp-123", window, cx));
+            window.click("save", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.error.is_none(), "{:?}", library.error);
+            let saved = &library.connections[0];
+            assert!(saved.configured_secrets.iter().any(|s| s == "private-key"));
+            assert!(saved.configured_secrets.iter().any(|s| s == "passphrase"));
+            assert!(!saved.params.contains_key("private-key"));
+            let store = library.store.clone().unwrap();
+            let full = super::remote::block_on(store.get(&saved.id)).unwrap().unwrap();
+            assert!(full.params["private-key"].contains("BEGIN FIXTURE KEY"));
+            assert_eq!(full.params["passphrase"], "pp-123");
+            // 儲存後路徑與密語欄位已清空。
+            assert!(library.key_path.read(cx).value().is_empty());
+            assert!(library.passphrase.read(cx).value().is_empty());
         })
         .unwrap();
     }
