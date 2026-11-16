@@ -89,6 +89,10 @@ struct Auth {
 }
 
 struct Library {
+    /// 匯入前的預覽（已通過共用驗證，尚未寫入）。
+    import_preview: Option<Vec<cracamole_store::Draft>>,
+    /// 由位址帶入、表單沒有欄位的參數（例如 RDP 網域），儲存新連線時併入。
+    extra_params: BTreeMap<String, String>,
     login_config: Option<LoginConfig>,
     /// 登入到期時間；None 表示未登入或未啟用登入。
     expires: Option<Instant>,
@@ -226,6 +230,8 @@ impl Library {
         self.editing = false;
         self.editing_id = None;
         self.renaming = None;
+        self.import_preview = None;
+        self.extra_params.clear();
         self.pending = None;
         self.confirm_delete = false;
         self.collapsed.clear();
@@ -269,7 +275,13 @@ impl Library {
         connections: Vec<PublicConnection>,
     ) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜尋名稱、主機或協定"));
-        cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        cx.subscribe_in(&search, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.open_uri(window, cx);
+            }
+            cx.notify();
+        })
+        .detach();
         let secret = cx.new(|cx| InputState::new(window, cx).placeholder("密碼（選填）").masked(true));
         let pinned = connections.iter().take(2).map(|c| c.id.clone()).collect();
         let field = |window: &mut Window, cx: &mut Context<Self>, hint: &'static str| {
@@ -280,6 +292,8 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            import_preview: None,
+            extra_params: BTreeMap::new(),
             login_config: None,
             expires: None,
             epoch: 0,
@@ -700,6 +714,11 @@ impl Library {
         }
         let full_name = if group.is_empty() { member } else { format!("{group} / {member}") };
         let mut params = params;
+        if self.editing_id.is_none() {
+            for (key, value) in &self.extra_params {
+                params.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
         let key_path = text(&self.key_path);
         let passphrase = self.passphrase.read(cx).value().to_string();
         if !key_path.is_empty() || !passphrase.is_empty() {
@@ -768,6 +787,7 @@ impl Library {
             Ok(()) => {
                 self.editing = false;
                 self.editing_id = None;
+                self.extra_params.clear();
                 self.error = None;
                 self.clear_editor(window, cx);
             }
@@ -838,6 +858,126 @@ impl Library {
         self.pinned.retain(|p| p != &id);
         self.selected = None;
         self.notice = None;
+        cx.notify();
+    }
+
+    /// 搜尋框輸入連線位址：已有相同目的地就選取，否則以位址預填新增表單。
+    fn open_uri(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.search.read(cx).value().to_string();
+        if !looks_like_uri(&text) || self.auth.is_some() || self.live.is_some() {
+            return;
+        }
+        let Some(draft) = uri_target(&text) else {
+            self.notice = Some("無法解析連線位址；不可包含密碼、路徑或查詢。".into());
+            cx.notify();
+            return;
+        };
+        self.notice = None;
+        self.search.clone().update(cx, |state, cx| state.set_value("", window, cx));
+        if let Some(existing) = find_destination(&self.connections, &draft) {
+            self.selected = Some(existing.id.clone());
+            self.tab = Tab::All;
+            self.notice = Some("已選取相同目的地的既有連線。".into());
+            cx.notify();
+            return;
+        }
+        let value = |key: &str| draft.params.get(key).cloned().unwrap_or_default();
+        let fields = [
+            (draft.name.clone(), &self.name),
+            (String::new(), &self.group),
+            (value("hostname"), &self.host),
+            (value("port"), &self.port),
+            (value("username"), &self.user),
+            (String::new(), &self.secret),
+            (String::new(), &self.key_path),
+            (String::new(), &self.passphrase),
+        ];
+        for (text, state) in fields {
+            state.clone().update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+        self.protocol = PROTOCOLS
+            .iter()
+            .find(|(name, _)| *name == draft.protocol)
+            .map_or("ssh", |(name, _)| *name);
+        self.extra_params = draft
+            .params
+            .iter()
+            .filter(|(key, _)| !["hostname", "port", "username"].contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        self.editing = true;
+        self.editing_id = None;
+        self.confirm_delete = false;
+        self.error = None;
+        cx.notify();
+    }
+
+    /// 把目前清單中的連線匯出到剪貼簿（不含機密）；`uris` 為 true 時只輸出端點位址。
+    fn export_visible(&mut self, uris: bool, cx: &mut Context<Self>) {
+        let rows: Vec<PublicConnection> = self.visible(cx);
+        let result = if uris {
+            cracamole_store::portable::export_uris(&rows)
+        } else {
+            cracamole_store::portable::export(&rows)
+        };
+        self.notice = Some(match result {
+            Ok(text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                format!("已複製 {} 筆{}到剪貼簿（不含機密）。", rows.len(), if uris { "位址" } else { "設定" })
+            }
+            Err(_) => "無法產生交換資料；請確認連線不超過 100 筆且資料大小符合限制。".into(),
+        });
+        cx.notify();
+    }
+
+    /// 讀取剪貼簿並驗證；通過後顯示預覽，由使用者確認才寫入。
+    fn start_import(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            self.notice = Some("剪貼簿沒有文字。".into());
+            cx.notify();
+            return;
+        };
+        match cracamole_store::portable::import(&text) {
+            Ok(drafts) => {
+                self.notice = None;
+                self.import_preview = Some(drafts);
+            }
+            Err(_) => self.notice = Some("交換資料格式無效、包含機密或超過限制。".into()),
+        }
+        cx.notify();
+    }
+
+    /// 確認匯入：整批原子寫入私有連線庫（或僅加入記憶體清單）。
+    fn confirm_import(&mut self, cx: &mut Context<Self>) {
+        let Some(drafts) = self.import_preview.take() else {
+            return;
+        };
+        let count = drafts.len();
+        let outcome: Result<(), String> = if let Some(store) = self.store.clone() {
+            match remote::block_on(store.import_new(drafts)) {
+                Ok(_) => {
+                    self.connections = remote::block_on(store.list()).unwrap_or_default();
+                    Ok(())
+                }
+                Err(windows_store::SaveError::Invalid(invalid)) => Err(invalid.message.to_string()),
+                Err(windows_store::SaveError::Io(_)) => Err("無法儲存到私有連線庫。".to_string()),
+            }
+        } else {
+            for draft in drafts {
+                self.connections.push(PublicConnection {
+                    id: format!("new-{}", self.connections.len() + 1),
+                    name: draft.name,
+                    protocol: draft.protocol,
+                    params: draft.params,
+                    configured_secrets: vec![],
+                });
+            }
+            Ok(())
+        };
+        self.notice = Some(match outcome {
+            Ok(()) => format!("已匯入 {count} 筆連線。"),
+            Err(message) => message,
+        });
         cx.notify();
     }
 
@@ -1235,6 +1375,115 @@ impl Library {
         cx.notify();
     }
 
+    /// 匯出（JSON／位址）與匯入。
+    fn tools_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let tool = |id: &'static str, text: &'static str| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .text_size(px(13.))
+                .text_color(rgb(MUTED))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(CARD)))
+                .child(text)
+        };
+        div()
+            .flex()
+            .gap_2()
+            .px_4()
+            .pb_3()
+            .child(
+                tool("export-json", "複製設定")
+                    .on_click(cx.listener(|this, _, _, cx| this.export_visible(false, cx)))
+                    .test_support()
+                    .aria_label("複製設定"),
+            )
+            .child(
+                tool("export-uris", "複製位址")
+                    .on_click(cx.listener(|this, _, _, cx| this.export_visible(true, cx)))
+                    .test_support()
+                    .aria_label("複製位址"),
+            )
+            .child(
+                tool("import", "匯入")
+                    .on_click(cx.listener(|this, _, _, cx| this.start_import(cx)))
+                    .test_support()
+                    .aria_label("匯入"),
+            )
+            .into_any_element()
+    }
+
+    /// 匯入預覽：顯示已驗證的項目，確認後才整批寫入。
+    fn import_card(&self, drafts: &[cracamole_store::Draft], cx: &mut Context<Self>) -> Div {
+        let button = |id: &'static str, text: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_5()
+                .h(px(38.))
+                .flex()
+                .items_center()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(if primary { ACCENT } else { BORDER }))
+                .bg(rgb(if primary { ACCENT } else { PANEL }))
+                .text_color(rgb(if primary { 0xffffff } else { TEXT }))
+                .cursor_pointer()
+                .child(text)
+        };
+        let mut rows = div().id("import-rows").flex().flex_col().gap_1().max_h(px(320.)).overflow_y_scroll();
+        for draft in drafts {
+            let host = draft.params.get("hostname").cloned().unwrap_or_default();
+            rows = rows.child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .text_size(px(13.))
+                    .text_color(rgb(TEXT))
+                    .child(div().w(px(56.)).text_color(rgb(protocol_color(&draft.protocol))).child(draft.protocol.to_uppercase()))
+                    .child(div().flex_1().child(draft.name.clone()))
+                    .child(div().text_color(rgb(MUTED)).child(host)),
+            );
+        }
+        div()
+            .w(px(560.))
+            .p_6()
+            .rounded(px(16.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(CARD))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_size(px(18.)).text_color(rgb(TEXT)).child(format!("匯入 {} 筆連線", drafts.len())))
+            .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child("內容已通過驗證，不含機密；確認後整批新增，任何一筆失敗都不會寫入。"))
+            .child(rows)
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .justify_end()
+                    .child(
+                        button("import-cancel", "取消", false)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.import_preview = None;
+                                cx.notify();
+                            }))
+                            .test_support()
+                            .aria_label("取消匯入"),
+                    )
+                    .child(
+                        button("import-confirm", "全部匯入", true)
+                            .on_click(cx.listener(|this, _, _, cx| this.confirm_import(cx)))
+                            .test_support()
+                            .aria_label("全部匯入"),
+                    ),
+            )
+    }
+
     fn logout_button(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.login_config.is_none() || self.auth.is_some() {
             return div().into_any_element();
@@ -1531,6 +1780,51 @@ impl Library {
     }
 }
 
+/// 是否為連線位址輸入（含 `://`）。
+fn looks_like_uri(text: &str) -> bool {
+    text.trim().contains("://")
+}
+
+/// 解析單一端點 URI（ssh／telnet／rdp／vnc）；拒絕密碼、路徑、查詢與多筆。
+fn uri_target(text: &str) -> Option<cracamole_store::Draft> {
+    let text = text.trim();
+    // 與 Win32 版相同：RDP 的 `網域\帳號` 先把反斜線編碼，主機仍由共用解析器驗證。
+    let normalized = match text.strip_prefix("rdp://").and_then(|rest| rest.split_once('@')) {
+        Some((user, host)) => format!("rdp://{}@{host}", user.replace('\\', "%5C")),
+        None => text.to_string(),
+    };
+    let mut drafts = cracamole_store::portable::import_uris(&normalized).ok()?;
+    (drafts.len() == 1).then(|| drafts.remove(0))
+}
+
+fn default_port(protocol: &str) -> &'static str {
+    PROTOCOLS.iter().find(|(name, _)| *name == protocol).map_or("", |(_, port)| *port)
+}
+
+/// 清單中是否已有相同目的地（協定、主機、連接埠；位址有帳號時帳號也要相同）。
+fn find_destination<'a>(
+    connections: &'a [PublicConnection],
+    draft: &cracamole_store::Draft,
+) -> Option<&'a PublicConnection> {
+    let host = draft.params.get("hostname")?;
+    let port = draft
+        .params
+        .get("port")
+        .map(String::as_str)
+        .unwrap_or_else(|| default_port(&draft.protocol));
+    let user = draft.params.get("username");
+    connections.iter().find(|c| {
+        c.protocol == draft.protocol
+            && c.params.get("hostname").is_some_and(|h| h.eq_ignore_ascii_case(host))
+            && c.params
+                .get("port")
+                .map(String::as_str)
+                .unwrap_or_else(|| default_port(&c.protocol))
+                == port
+            && user.is_none_or(|user| c.params.get("username") == Some(user))
+    })
+}
+
 /// 工作階段存活秒數：1 至 28800 的整數，預設 8 小時；其他值視為設定錯誤。
 fn session_lifetime(value: Option<&str>) -> Result<Duration, &'static str> {
     match value {
@@ -1654,6 +1948,7 @@ impl Render for Library {
                 None => ungrouped.push(c),
             }
         }
+        let uri_text = self.search.read(cx).value().to_string();
         let mut list = div()
             .id("list")
             .flex()
@@ -1662,6 +1957,25 @@ impl Render for Library {
             .p_2()
             .overflow_y_scroll()
             .flex_1();
+        if looks_like_uri(&uri_text) {
+            list = list.child(
+                div()
+                    .id("uri-open")
+                    .mx_1()
+                    .px_3()
+                    .py_2()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(ACCENT))
+                    .bg(rgb(0x1e1b3a))
+                    .text_color(rgb(TEXT))
+                    .cursor_pointer()
+                    .child(format!("以此位址連線或新增：{}", uri_text.trim()))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_uri(window, cx)))
+                    .test_support()
+                    .aria_label("以位址連線或新增"),
+            );
+        }
         if !groups.is_empty() && !ungrouped.is_empty() {
             list = list.child(self.group_header(None, ungrouped.len(), false, cx));
         }
@@ -1720,6 +2034,7 @@ impl Render for Library {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.editing = true;
                                 this.editing_id = None;
+                                this.extra_params.clear();
                                 this.confirm_delete = false;
                                 this.error = None;
                                 cx.notify();
@@ -1728,6 +2043,10 @@ impl Render for Library {
                             .aria_label("新增連線"),
                     ),
             )
+            .child(self.tools_row(cx))
+            .children(self.notice.clone().map(|notice| {
+                div().px_4().pb_2().text_size(px(13.)).text_color(rgb(MUTED)).child(notice)
+            }))
             .child(
                 div()
                     .px_4()
@@ -1874,6 +2193,8 @@ impl Render for Library {
                         .into_any_element()
                 } else if let Some(pending) = &self.pending {
                     self.trust_card(pending, cx).into_any_element()
+                } else if let Some(drafts) = &self.import_preview {
+                    self.import_card(drafts, cx).into_any_element()
                 } else if let Some(old) = &self.renaming {
                     self.rename_card(old, cx).into_any_element()
                 } else if self.editing {
@@ -3126,5 +3447,179 @@ mod tests {
             assert!(library.passphrase.read(cx).value().is_empty());
         })
         .unwrap();
+    }
+
+    #[test]
+    fn endpoint_uris_are_parsed_strictly_and_matched_to_existing_connections() {
+        use super::{find_destination, looks_like_uri, uri_target};
+        assert!(looks_like_uri(" ssh://a ") && !looks_like_uri("prod web"));
+        let draft = uri_target("rdp://CORP\\alice@10.0.2.15:3390").unwrap();
+        assert_eq!(draft.protocol, "rdp");
+        assert_eq!(draft.params["hostname"], "10.0.2.15");
+        assert_eq!(draft.params["port"], "3390");
+        assert_eq!(draft.params["username"], "alice");
+        assert_eq!(draft.params["domain"], "CORP");
+        // 拒絕密碼、路徑、查詢、多筆與不支援的協定。
+        for bad in [
+            "ssh://u:pw@host",
+            "ssh://host/path",
+            "ssh://host?x=1",
+            "ssh://a\nssh://b",
+            "ftp://host",
+            "ssh://host:0",
+            "ssh://host:99999",
+        ] {
+            assert!(uri_target(bad).is_none(), "{bad:?}");
+        }
+
+        let connections = vec![
+            super::sample("1", "web", "ssh", "Prod.Example", "deploy"),
+            super::sample("2", "mac", "vnc", "10.0.2.30", "studio"),
+        ];
+        // 主機不分大小寫、預設連接埠視為相同；位址帶帳號時帳號也要相同。
+        let hit = |uri: &str| find_destination(&connections, &uri_target(uri).unwrap()).map(|c| c.id.clone());
+        // 沒有連接埠參數的既有連線視為預設連接埠；不同連接埠則不配對。
+        assert_eq!(hit("ssh://prod.example").as_deref(), Some("1"));
+        assert_eq!(hit("ssh://prod.example:2222").as_deref(), None);
+        let mut with_port = connections;
+        with_port[0].params.insert("port".into(), "22".into());
+        with_port[1].params.insert("port".into(), "5900".into());
+        let hit = |uri: &str| find_destination(&with_port, &uri_target(uri).unwrap()).map(|c| c.id.clone());
+        assert_eq!(hit("ssh://prod.example").as_deref(), Some("1"));
+        assert_eq!(hit("ssh://deploy@prod.example:22").as_deref(), Some("1"));
+        assert_eq!(hit("ssh://other@prod.example").as_deref(), None);
+        assert_eq!(hit("vnc://10.0.2.30").as_deref(), Some("2"));
+        assert_eq!(hit("rdp://10.0.2.30").as_deref(), None, "協定不同不誤配");
+    }
+
+    #[gpui_kit::test]
+    fn uri_input_selects_an_existing_destination_or_prefills_the_editor(cx: &mut TestAppContext) {
+        use gpui_kit::component::input::InputState;
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let search = content.read(cx).search.clone();
+            assert!(window.try_find("uri-open").is_none());
+
+            // 無法解析：顯示提示、不開表單。
+            search.update(cx, |s: &mut InputState, cx| s.set_value("ssh://u:pw@h", window, cx));
+            window.render_frame(cx);
+            window.click("uri-open", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).notice.is_some() && !content.read(cx).editing);
+
+            // 已有相同目的地（範例的 prod-web-01 沒有連接埠，視為預設 22）：選取它。
+            search.update(cx, |s: &mut InputState, cx| s.set_value("ssh://deploy@10.0.1.11", window, cx));
+            window.render_frame(cx);
+            window.click("uri-open", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).selected.as_deref(), Some("1"));
+            assert!(!content.read(cx).editing);
+            assert!(content.read(cx).search.read(cx).value().is_empty());
+
+            // 新目的地：以位址預填新增表單，RDP 網域保留到儲存。
+            search.update(cx, |s: &mut InputState, cx| s.set_value("rdp://CORP\\bob@10.7.7.7:3390", window, cx));
+            window.render_frame(cx);
+            window.click("uri-open", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.editing && library.editing_id.is_none());
+            assert_eq!(library.protocol, "rdp");
+            assert_eq!(library.host.read(cx).value().as_ref(), "10.7.7.7");
+            assert_eq!(library.port.read(cx).value().as_ref(), "3390");
+            assert_eq!(library.user.read(cx).value().as_ref(), "bob");
+            window.click("save", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert!(library.error.is_none(), "{:?}", library.error);
+            let saved = library.connections.last().unwrap();
+            assert_eq!(saved.params.get("domain").map(String::as_str), Some("CORP"));
+            assert!(library.extra_params.is_empty());
+        })
+        .unwrap();
+    }
+
+    /// 注意：使用測試平台的記憶體內剪貼簿，不接觸 Windows 系統剪貼簿。
+    #[gpui_kit::test]
+    fn export_and_import_go_through_the_clipboard_with_a_confirmation_step(cx: &mut TestAppContext) {
+        use gpui_kit::ClipboardItem;
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("export-json", cx);
+            window.render_frame(cx);
+            let json = cx.read_from_clipboard().and_then(|item| item.text()).unwrap();
+            assert!(json.contains("prod-web-01") && json.contains("10.0.1.11"));
+            assert!(!json.contains("secret") && !json.contains("password"));
+
+            window.click("export-uris", cx);
+            let uris = cx.read_from_clipboard().and_then(|item| item.text()).unwrap();
+            assert!(uris.lines().any(|line| line.starts_with("ssh://deploy@10.0.1.11")), "{uris}");
+
+            // 匯入：預覽 → 取消不寫入；確認才整批新增。
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                "ssh://ops@10.8.0.1\nvnc://10.8.0.2:5901\n".into(),
+            ));
+            window.click("import", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).import_preview.as_ref().map(Vec::len), Some(2));
+            window.click("import-cancel", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).import_preview.is_none());
+            assert_eq!(content.read(cx).connections.len(), 5);
+
+            window.click("import", cx);
+            window.render_frame(cx);
+            window.click("import-confirm", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).connections.len(), 7);
+            assert_eq!(content.read(cx).notice.as_deref(), Some("已匯入 2 筆連線。"));
+
+            // 含機密或格式不符：拒絕，不顯示預覽。
+            for bad in [
+                r#"{"format":"x"}"#,
+                "ssh://u:pw@host",
+                "not a connection",
+            ] {
+                cx.write_to_clipboard(ClipboardItem::new_string(bad.into()));
+                window.click("import", cx);
+                window.render_frame(cx);
+                assert!(content.read(cx).import_preview.is_none(), "{bad}");
+                assert_eq!(
+                    content.read(cx).notice.as_deref(),
+                    Some("交換資料格式無效、包含機密或超過限制。")
+                );
+            }
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn import_writes_the_whole_batch_into_the_private_store(cx: &mut TestAppContext) {
+        use gpui_kit::ClipboardItem;
+        cx.executor().allow_parking();
+        let (window, content, directory) = logged_in(cx, 600);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                "ssh://ops@10.8.0.1
+telnet://10.8.0.3
+".into(),
+            ));
+            window.click("import", cx);
+            window.render_frame(cx);
+            assert_eq!(content.read(cx).import_preview.as_ref().map(Vec::len), Some(2));
+            // 預覽階段尚未寫入。
+            assert!(content.read(cx).connections.is_empty());
+            window.click("import-confirm", cx);
+            window.render_frame(cx);
+            let library = content.read(cx);
+            assert_eq!(library.connections.len(), 2);
+            let store = library.store.clone().unwrap();
+            assert_eq!(super::remote::block_on(store.list()).unwrap().len(), 2);
+        })
+        .unwrap();
+        let persisted = std::fs::read_to_string(directory.path().join("desktop").join("connections.json")).unwrap();
+        assert!(persisted.contains("10.8.0.1") && persisted.contains("10.8.0.3"));
     }
 }
