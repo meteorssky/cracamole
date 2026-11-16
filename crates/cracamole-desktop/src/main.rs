@@ -454,7 +454,7 @@ mod windows_ui {
             for button in [group_rename, export_settings, import_settings] {
                 button.set_size(120, 28);
             }
-            let columns = ((width.saturating_sub(340) + 8) / 108).clamp(1, 5);
+            let columns = ((width.saturating_sub(340) + 8) / 124).clamp(1, 5);
             let toolbar_rows = 9u32.div_ceil(columns);
             let stage_top = 128 + toolbar_rows * 40 + 16;
             stage.set_position(316, stage_top as i32);
@@ -503,7 +503,7 @@ mod windows_ui {
             group_buttons[2].set_size(120, 28);
             list.set_position(24, 288);
             list.set_size(list_width, height.saturating_sub(312).max(64));
-            let columns = ((width.saturating_sub(340) + 8) / 108).clamp(1, 5);
+            let columns = ((width.saturating_sub(340) + 8) / 124).clamp(1, 5);
             for (index, button) in [
                 buttons[0], buttons[2], buttons[1], buttons[3], buttons[4], buttons[5], buttons[6],
                 buttons[7], buttons[8],
@@ -511,9 +511,9 @@ mod windows_ui {
             .iter()
             .enumerate()
             {
-                button.set_size(100, 32);
+                button.set_size(116, 32);
                 button.set_position(
-                    316 + (index as u32 % columns * 108) as i32,
+                    316 + (index as u32 % columns * 124) as i32,
                     128 + (index as u32 / columns * 40) as i32,
                 );
             }
@@ -539,7 +539,7 @@ mod windows_ui {
         list.set_size(list_width, list_height);
         let row = list_top as i32 + list_height as i32 + gap as i32;
         for (index, button) in [buttons[0], buttons[2], buttons[1]].iter().enumerate() {
-            button.set_size(100, button_height);
+            button.set_size(104, button_height);
             button.set_position(
                 24 + (index as u32 % columns * 108) as i32,
                 row + (index as u32 / columns * step) as i32,
@@ -547,7 +547,7 @@ mod windows_ui {
         }
         let action_y = row + (top_rows * step + gap) as i32;
         for (index, button) in buttons[3..].iter().enumerate() {
-            button.set_size(100, button_height);
+            button.set_size(104, button_height);
             button.set_position(
                 24 + (index as u32 % columns * 108) as i32,
                 action_y + (index as u32 / columns * step) as i32,
@@ -1535,6 +1535,18 @@ mod windows_ui {
         let credentials = Rc::new(runtime.block_on(Credentials::new(username.clone(), password))?);
         nwg::init()?;
         nwg::Font::set_global_family("Segoe UI")?;
+        let mut body_font = nwg::Font::default();
+        nwg::Font::builder()
+            .family("Segoe UI")
+            .size(19)
+            .build(&mut body_font)?;
+        nwg::Font::set_global_default(Some(body_font));
+        let mut title_font = nwg::Font::default();
+        nwg::Font::builder()
+            .family("Segoe UI Semibold")
+            .size(30)
+            .weight(600)
+            .build(&mut title_font)?;
         let mut window = nwg::Window::default();
         let mut heading = nwg::Label::default();
         let mut explanation = nwg::Label::default();
@@ -1553,6 +1565,7 @@ mod windows_ui {
             .position((24, 24))
             .size((560, 30))
             .parent(&window)
+            .font(Some(&title_font))
             .build(&mut heading)?;
         nwg::Label::builder()
             .text("請以管理員帳號登入。桌面介面仍在開發中。")
@@ -1560,6 +1573,27 @@ mod windows_ui {
             .size((570, 45))
             .parent(&window)
             .build(&mut explanation)?;
+        // 次要說明文字採用較淡的前景色（對應 NSH 的 muted-foreground），對比仍達 WCAG AA。
+        let muted_handle = explanation.handle;
+        let muted_handler =
+            nwg::bind_raw_event_handler(&window.handle, 0x10002, move |_, message, hdc, label| {
+                // WM_CTLCOLORSTATIC
+                if message == 0x0138
+                    && muted_handle
+                        .hwnd()
+                        .is_some_and(|hwnd| hwnd as isize == label)
+                {
+                    unsafe {
+                        use windows_sys::Win32::Graphics::Gdi::{
+                            GetSysColorBrush, SetBkMode, SetTextColor,
+                        };
+                        SetBkMode(hdc as _, 1);
+                        SetTextColor(hdc as _, 0x005B_5252);
+                        return Some(GetSysColorBrush(15) as isize);
+                    }
+                }
+                None
+            })?;
         nwg::Label::builder()
             .text("帳號")
             .position((24, 132))
@@ -6190,6 +6224,7 @@ mod windows_ui {
                 None
             })?;
         nwg::dispatch_thread_events();
+        nwg::unbind_raw_event_handler(&muted_handler)?;
         for handler in editor_key_handlers {
             nwg::unbind_raw_event_handler(&handler)?;
         }
