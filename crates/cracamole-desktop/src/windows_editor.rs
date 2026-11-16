@@ -76,7 +76,7 @@ impl Editor {
             nwg::Label::builder()
                 .text(text)
                 .position((x, y))
-                .size((70, 24))
+                .size((if x < 100 { 88 } else { 70 }, 26))
                 .parent(window)
                 .build(&mut label)?;
             labels.push(label);
@@ -236,13 +236,13 @@ impl Editor {
         nwg::CheckBox::builder()
             .text("唯讀（禁止遠端輸入）")
             .position((340, 356))
-            .size((245, 26))
+            .size((270, 26))
             .parent(window)
             .build(&mut read_only)?;
         nwg::CheckBox::builder()
             .text("清除已保存的密碼、私鑰和密語")
-            .position((315, 402))
-            .size((275, 26))
+            .position((300, 402))
+            .size((320, 26))
             .parent(window)
             .build(&mut clear)?;
         nwg::Button::builder()
