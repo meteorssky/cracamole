@@ -93,6 +93,8 @@ struct Auth {
 
 struct Library {
     /// 選取的 SSH 連線已保存的主機公鑰（獨立信任檔）。
+    /// 側邊欄是否收合成窄邊條，讓遠端畫面使用整個視窗寬度。
+    sidebar_collapsed: bool,
     saved_trust: Option<String>,
     confirm_forget: bool,
     /// 匯入前的預覽（已通過共用驗證，尚未寫入）。
@@ -300,6 +302,7 @@ impl Library {
         let port = field(window, cx, "連接埠（留空使用預設）");
         let user = field(window, cx, "帳號");
         Self {
+            sidebar_collapsed: false,
             saved_trust: None,
             confirm_forget: false,
             import_preview: None,
@@ -1615,6 +1618,46 @@ impl Library {
             )
     }
 
+    /// 收合或展開側邊欄。
+    fn sidebar_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        let collapsed = self.sidebar_collapsed;
+        div()
+            .id("sidebar-toggle")
+            .px_2()
+            .py_1()
+            .rounded(px(8.))
+            .text_size(px(14.))
+            .text_color(rgb(MUTED))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(CARD)))
+            .child(if collapsed { "▶" } else { "◀" })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.sidebar_collapsed = !this.sidebar_collapsed;
+                cx.notify();
+            }))
+            .test_support()
+            .aria_label(if collapsed { "展開側邊欄" } else { "收合側邊欄" })
+            .into_any_element()
+    }
+
+    /// 收合後的窄邊條：只留展開按鈕與品牌標記。
+    fn sidebar_rail(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .w(px(52.))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_3()
+            .py_4()
+            .bg(rgb(PANEL))
+            .border_r_1()
+            .border_color(rgb(BORDER))
+            .child(div().size(px(10.)).rounded_full().bg(rgb(ACCENT)))
+            .child(self.sidebar_toggle(cx))
+    }
+
     fn logout_button(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.login_config.is_none() || self.auth.is_some() {
             return div().into_any_element();
@@ -2172,7 +2215,8 @@ impl Render for Library {
                     .p_4()
                     .child(div().size(px(10.)).rounded_full().bg(rgb(ACCENT)))
                     .child(div().text_size(px(20.)).text_color(rgb(TEXT)).child("cracamole"))
-                    .child(self.logout_button(cx)),
+                    .child(self.logout_button(cx))
+                    .child(self.sidebar_toggle(cx)),
             )
             .child(
                 div()
@@ -2404,7 +2448,11 @@ impl Render for Library {
             .flex()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            .child(sidebar)
+            .child(if self.sidebar_collapsed {
+                self.sidebar_rail(cx).into_any_element()
+            } else {
+                sidebar.into_any_element()
+            })
             .child(stage)
             .into_any_element()
     }
@@ -3972,5 +4020,33 @@ telnet://10.8.0.3
         wait_until(cx, "直接連線", |cx| {
             cx.read_entity(&content, |l, _| l.live.as_ref().is_some_and(|live| live.frame.is_some()))
         });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_collapses_to_a_rail_and_expands_again(cx: &mut TestAppContext) {
+        let (window, content) = open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let expanded_width = window.find("session-action").bounds().origin.x;
+            assert!(window.try_find("add").is_some() && window.try_find("row-1").is_some());
+
+            // 收合：側邊欄內容消失，只剩展開按鈕；右側舞台變寬。
+            window.click("sidebar-toggle", cx);
+            window.render_frame(cx);
+            assert!(content.read(cx).sidebar_collapsed);
+            assert!(window.try_find("add").is_none() && window.try_find("row-1").is_none());
+            assert!(window.try_find("sidebar-toggle").is_some());
+            assert!(window.try_find("session-action").is_some());
+            let collapsed_x = window.find("session-action").bounds().origin.x;
+            assert!(collapsed_x >= expanded_width, "收合後舞台應該更寬，連線按鈕不會往左移");
+
+            // 收合時資料與選取狀態不受影響；再展開即可回到原樣。
+            window.click("sidebar-toggle", cx);
+            window.render_frame(cx);
+            assert!(!content.read(cx).sidebar_collapsed);
+            assert!(window.try_find("add").is_some() && window.try_find("row-1").is_some());
+            assert_eq!(content.read(cx).connections.len(), 5);
+        })
+        .unwrap();
     }
 }

@@ -137,4 +137,13 @@ fn screenshots() {
         library
     });
     save(&mut cx, import.into(), &dir, "06-import");
+
+    // 7. 側邊欄收合
+    let collapsed = open(&mut cx, |window, cx| {
+        let mut library = populated(window, cx);
+        library.sidebar_collapsed = true;
+        library.selected = Some("2".into());
+        library
+    });
+    save(&mut cx, collapsed.into(), &dir, "07-collapsed");
 }
