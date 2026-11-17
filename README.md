@@ -124,26 +124,26 @@ Remove-Item Env:CRACAMOLE_TEST_VISIBLE_TELNET
 
 環境變數與 Win32 版相同：`CRACAMOLE_ADMIN_USERNAME`／`CRACAMOLE_ADMIN_PASSWORD`、`CRACAMOLE_DESKTOP_DATA_DIR`、`CRACAMOLE_DESKTOP_SESSION_MAX_SECS`；資料目錄也相同，因此既有的桌面連線可直接使用。
 
-驗證範圍：38 項無頭 UI 測試（`cd desktop-gpui; cargo test`，設 `RUST_MIN_STACK=536870912`），涵蓋登入閘門、連線保存、群組、剪貼簿（測試平台的記憶體內假剪貼簿）、匯入／匯出，以及以本機 Telnet、SSH（russh）、RDP（`tests/rdp-fixture`，未建置時略過）與最小 RFB 伺服器進行的端對端工作階段；另可用 `CRACAMOLE_SCREENSHOT_DIR=out cargo test screenshots -- --nocapture` 以 wgpu 離屏渲染輸出畫面。離屏渲染與實際視窗（DirectX）的字型細節可能不同；**實機可見畫面、實體輸入、高 DPI 與真實 Windows／xrdp 服務仍待驗收**。`scripts\run_desktop.ps1` 預設啟動 GPUI 版；Win32 版保留為備援（`-Legacy` 或下方的 `cargo run -p cracamole-desktop`），在 GPUI 版完成實機驗收前請勿移除。
+驗證範圍：38 項無頭 UI 測試（`cd desktop-gpui; cargo test`，設 `RUST_MIN_STACK=536870912`），涵蓋登入閘門、連線保存、群組、剪貼簿（測試平台的記憶體內假剪貼簿）、匯入／匯出，以及以本機 Telnet、SSH（russh）、RDP（`tests/rdp-fixture`，未建置時略過）與最小 RFB 伺服器進行的端對端工作階段；另可用 `CRACAMOLE_SCREENSHOT_DIR=out cargo test screenshots -- --nocapture` 以 wgpu 離屏渲染輸出畫面。離屏渲染與實際視窗（DirectX）的字型細節可能不同；**實機可見畫面、實體輸入、高 DPI 與真實 Windows／xrdp 服務仍待驗收**。`scripts\run_desktop.ps1` 預設啟動 GPUI 版；`cargo run -p cracamole-desktop` 現在也是同一個預設入口：它是一個小型啟動器，會（必要時先建置並）啟動 GPUI 版。Win32 版保留為備援，執行檔改名為 `cracamole-desktop-win32`（`-Legacy`、`cargo run -p cracamole-desktop --bin cracamole-desktop-win32 --locked`，或設定 `CRACAMOLE_DESKTOP_UI=win32` 後執行預設入口）；既有 Win32 自動化測試都針對該執行檔，在 GPUI 版完成實機驗收前請勿移除。
 
 #### Win32 原生介面（備援）
 
 在 Windows 安裝 Rust 與 MSVC 建置工具，並在啟動程式的環境中設定至少 12 字元的 `CRACAMOLE_ADMIN_PASSWORD`；`CRACAMOLE_ADMIN_USERNAME` 可省略，預設為 `admin`。在 repository 根目錄執行：
 
 ```powershell
-cargo run -p cracamole-desktop --locked
+cargo run -p cracamole-desktop --bin cracamole-desktop-win32 --locked
 ```
 
 也可建置 Windows x64 的最佳化執行檔：
 
 ```powershell
-cargo build -p cracamole-desktop --release --locked
-& '.\target\release\cracamole-desktop.exe'
+cargo build -p cracamole-desktop --bin cracamole-desktop-win32 --release --locked
+& '.\target\release\cracamole-desktop-win32.exe'
 ```
 
 啟動執行檔前同樣須在該程序環境中設定管理員密碼。Windows x64 本機已以 release 執行檔測試錯誤設定、登入與連線管理、Telnet，以及 loopback fixture 的 RDP TLS／NLA；這不代表已完成真實遠端服務或實體輸入的驗收。
 
-若已用 `cargo build -p cracamole-desktop --locked` 建置除錯版，想在 PowerShell 中輸入密碼而不將字元顯示在畫面上，可在 repository 根目錄執行下列指令。程式關閉後會還原原本的程序環境變數；程式運行時仍會透過環境變數取得明文密碼。
+若已用 `cargo build -p cracamole-desktop --bin cracamole-desktop-win32 --locked` 建置除錯版，想在 PowerShell 中輸入密碼而不將字元顯示在畫面上，可在 repository 根目錄執行下列指令。程式關閉後會還原原本的程序環境變數；程式運行時仍會透過環境變數取得明文密碼。
 
 ```powershell
 $desktopPassword = Read-Host '請輸入管理員密碼（至少 12 字元）' -AsSecureString
@@ -151,7 +151,7 @@ $desktopPreviousPassword = [Environment]::GetEnvironmentVariable('CRACAMOLE_ADMI
 $desktopPasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($desktopPassword)
 try {
     $env:CRACAMOLE_ADMIN_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($desktopPasswordPtr)
-    & '.\target\debug\cracamole-desktop.exe'
+    & '.\target\debug\cracamole-desktop-win32.exe'
 } finally {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($desktopPasswordPtr)
     [Environment]::SetEnvironmentVariable('CRACAMOLE_ADMIN_PASSWORD', $desktopPreviousPassword, 'Process')
@@ -167,13 +167,13 @@ try {
 $previousRustFlags = $env:RUSTFLAGS
 try {
     $env:RUSTFLAGS = '-C target-feature=+crt-static'
-    cargo build -p cracamole-desktop --release --locked --target-dir target/windows-static
+    cargo build -p cracamole-desktop --bin cracamole-desktop-win32 --release --locked --target-dir target/windows-static
     if ($LASTEXITCODE -ne 0) { throw '建置失敗' }
 } finally {
     if ($null -eq $previousRustFlags) { Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue }
     else { $env:RUSTFLAGS = $previousRustFlags }
 }
-& '.\target\windows-static\release\cracamole-desktop.exe'
+& '.\target\windows-static\release\cracamole-desktop-win32.exe'
 ```
 
 本機建置的靜態 CRT 版本，其 PE 直接匯入表沒有 `VCRUNTIME140.dll` 或通用 CRT DLL，仍需 Windows 系統程式庫；已在 Windows x64 測試啟動、登入／Telnet、本機 SSH 的密碼／私鑰及 Big5，與本機 RDP TLS／NLA fixture。尚未在乾淨安裝的 Windows 驗證，不能排除其他動態載入需求。
@@ -181,7 +181,7 @@ try {
 可使用下列方式，讓原生 SSH 自動化改測指定的已建置執行檔：
 
 ```powershell
-$env:CRACAMOLE_TEST_DESKTOP_BINARY = (Resolve-Path 'target/windows-static/release/cracamole-desktop.exe').Path
+$env:CRACAMOLE_TEST_DESKTOP_BINARY = (Resolve-Path 'target/windows-static/release/cracamole-desktop-win32.exe').Path
 cargo test -p cracamole-desktop --test windows_ssh --locked
 Remove-Item Env:CRACAMOLE_TEST_DESKTOP_BINARY
 ```
@@ -208,7 +208,7 @@ SSH／Telnet 可選擇 UTF-8、Big5 等核心支援的終端機編碼。Telnet �
 
 ```powershell
 $env:CRACAMOLE_REQUIRE_ISOLATED_CLIPBOARD = '1'
-cargo test -p cracamole-desktop --bin cracamole-desktop windows_clipboard::tests::isolated_windows_clipboard_round_trip --locked -- --exact --nocapture
+cargo test -p cracamole-desktop --bin cracamole-desktop-win32 windows_clipboard::tests::isolated_windows_clipboard_round_trip --locked -- --exact --nocapture
 Remove-Item Env:CRACAMOLE_REQUIRE_ISOLATED_CLIPBOARD
 ```
 
@@ -218,7 +218,7 @@ Remove-Item Env:CRACAMOLE_REQUIRE_ISOLATED_CLIPBOARD
 
 ```powershell
 $env:CRACAMOLE_ALLOW_INTERACTIVE_CLIPBOARD_TEST = '1'
-cargo test -p cracamole-desktop --bin cracamole-desktop windows_clipboard::tests::interactive_windows_clipboard_round_trip --locked -- --ignored --exact --nocapture
+cargo test -p cracamole-desktop --bin cracamole-desktop-win32 windows_clipboard::tests::interactive_windows_clipboard_round_trip --locked -- --ignored --exact --nocapture
 Remove-Item Env:CRACAMOLE_ALLOW_INTERACTIVE_CLIPBOARD_TEST
 ```
 
@@ -228,7 +228,7 @@ Remove-Item Env:CRACAMOLE_ALLOW_INTERACTIVE_CLIPBOARD_TEST
 cargo build --manifest-path tests/rdp-fixture/Cargo.toml --target-dir target/rdp-fixture --locked
 $env:CRACAMOLE_ALLOW_INTERACTIVE_RDP_CLIPBOARD_TEST = '1'
 try {
-    & 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/windows-static/release/cracamole-desktop.exe').Path -Fixture (Resolve-Path 'target/rdp-fixture/debug/cracamole-rdp-fixture.exe').Path -Nla -InteractiveClipboard
+    & 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/windows-static/release/cracamole-desktop-win32.exe').Path -Fixture (Resolve-Path 'target/rdp-fixture/debug/cracamole-rdp-fixture.exe').Path -Nla -InteractiveClipboard
 } finally {
     Remove-Item Env:CRACAMOLE_ALLOW_INTERACTIVE_RDP_CLIPBOARD_TEST -ErrorAction SilentlyContinue
 }
@@ -258,13 +258,13 @@ Windows x64 也已使用本機 fixture 的 NLA／CredSSP 模式驗證不符指�
 
 ```powershell
 cargo build --manifest-path tests/rdp-fixture/Cargo.toml --target-dir target/rdp-fixture --locked
-cargo build -p cracamole-desktop --locked
+cargo build -p cracamole-desktop --bin cracamole-desktop-win32 --locked
 $env:CRACAMOLE_RDP_FIXTURE = (Resolve-Path 'target/rdp-fixture/debug/cracamole-rdp-fixture.exe').Path
 cargo test -p cracamole-desktop --test rdp_live --locked -- --ignored
-& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE
-& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Nla
-& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Auto
-& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Nla -Auto
+& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop-win32.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE
+& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop-win32.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Nla
+& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop-win32.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Auto
+& 'crates/cracamole-desktop/tests/windows_rdp_full.ps1' -Binary (Resolve-Path 'target/debug/cracamole-desktop-win32.exe').Path -Fixture $env:CRACAMOLE_RDP_FIXTURE -Nla -Auto
 ```
 
 SSH 可見畫面另可在互動桌面執行以下測試：

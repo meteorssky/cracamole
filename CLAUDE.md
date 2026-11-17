@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cracamole 是不使用 Java 的遠端連線系統，採 Rust Web 服務與純 JavaScript 前端，Windows 原生介面開發中。第一版採單一管理員，提供登入、連線新增／編輯／刪除、本機保存及 SSH／Telnet／RDP。現有 13 個 crate（含 `proto-vnc`），`cracamole-store` 共用帳密驗證與連線設定；`cracamole-desktop` 提供基本連線編輯、指紋核對與預覽，使用獨立私有資料目錄。TLS 與 NLA 模式已與獨立 loopback RDP 測試伺服器驗證工作階段、影格與輸入；Windows x64 可見桌面已比對縮放前後各九個 RDP 測試影格像素及 SSH 測試文字與背景。Windows x64 互動測試已驗證系統剪貼簿 Unicode 文字讀寫；真實 Windows／xrdp 服務及其 NLA 互通性、遠端剪貼簿交換、完整鍵鼠相容性及更廣泛的可見畫面尚未驗收。`cracamole-web` 是完整 Web 系統入口，內嵌私人 loopback daemon。舊版「保留官方 Java webapp」範圍已被使用者取消，不能恢復為部署依賴。完整 MVP 仍待長時間 fuzz、資源／安全及 arm64 等驗收；不要把本機測試全綠當成全部完成。見 `docs/java-free-mvp.md` 與 `docs/MVP-STATUS.md`。
 
+Windows 桌面預設入口為現代化的 GPUI 版（獨立 workspace `desktop-gpui/`，`scripts/run_desktop.ps1` 或 `cargo run -p cracamole-desktop` 啟動器）；Win32 原生版保留為備援，執行檔為 `cracamole-desktop-win32`，既有原生自動化測試皆針對它。GPUI 版以 38 項無頭測試及離屏 wgpu 渲染驗證，實機畫面、高 DPI、實體輸入與系統剪貼簿尚待使用者驗收；其測試需設 `RUST_MIN_STACK=536870912`。
+
 Windows 桌面版一次性 SSH 可在核對指紋後，將目的地與公鑰獨立保存在私有資料目錄的 `ssh-identities.json`，不保存連線或帳密；信任衝突不得自動取代。清除方式與限制見 README。
 
 常用指令：

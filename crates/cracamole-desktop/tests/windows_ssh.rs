@@ -114,7 +114,7 @@ async fn exercise(private_key_auth: bool, big5: bool) {
     let port = server.addr.port().to_string();
     let binary = std::env::var_os("CRACAMOLE_TEST_DESKTOP_BINARY")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| env!("CARGO_BIN_EXE_cracamole-desktop").into())
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_cracamole-desktop-win32").into())
         .canonicalize()
         .expect("找不到指定的原生桌面測試執行檔");
     let synchronization = tempfile::tempdir().unwrap();

@@ -1,4 +1,5 @@
 #![recursion_limit = "512"]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 //! cracamole 桌面介面（GPUI 版）原型：連線庫畫面。
 //! 資料來自 `cracamole-store`（`CRACAMOLE_DESKTOP_DATA_DIR`），未設定時顯示範例連線。
 
@@ -2429,7 +2430,14 @@ fn main() {
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
-        gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
+        let options = WindowOptions {
+            titlebar: Some(gpui_kit::TitlebarOptions {
+                title: Some("cracamole".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, move |window, cx| {
             let view = cx.new(|cx| Library::locked(window, cx, credentials, data_dir, lifetime));
             cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
         })

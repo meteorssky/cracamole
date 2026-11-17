@@ -15,7 +15,7 @@ fn native_rdp_certificate_confirmation() {
             "-File",
             concat!(env!("CARGO_MANIFEST_DIR"), "/tests/windows_rdp.ps1"),
             "-Binary",
-            env!("CARGO_BIN_EXE_cracamole-desktop"),
+            env!("CARGO_BIN_EXE_cracamole-desktop-win32"),
         ])
         .output()
         .expect("啟動 Windows 原生 RDP 憑證測試");

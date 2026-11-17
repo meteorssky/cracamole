@@ -3,6 +3,16 @@ name = "cracamole-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "cracamole-desktop"
+
+# 預設入口是啟動 GPUI 版的啟動器；Win32 原生版為備援。
+[[bin]]
+name = "cracamole-desktop"
+path = "src/launcher.rs"
+
+[[bin]]
+name = "cracamole-desktop-win32"
+path = "src/main.rs"
 
 [dependencies]
 base64 = "0.23"

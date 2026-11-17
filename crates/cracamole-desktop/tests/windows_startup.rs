@@ -14,7 +14,7 @@ async fn invalid_session_lifetime_reports_startup_failure_without_creating_data(
         "-File",
         concat!(env!("CARGO_MANIFEST_DIR"), "/tests/windows_startup.ps1"),
         "-Binary",
-        env!("CARGO_BIN_EXE_cracamole-desktop"),
+        env!("CARGO_BIN_EXE_cracamole-desktop-win32"),
     ]);
     let output = tokio::time::timeout(Duration::from_secs(40), command.output())
         .await

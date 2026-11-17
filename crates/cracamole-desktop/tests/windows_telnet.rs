@@ -65,7 +65,7 @@ async fn native_ssh_handshake_timeout_shows_status() {
                 "-File",
                 concat!(env!("CARGO_MANIFEST_DIR"), "/tests/windows_telnet.ps1"),
                 "-Binary",
-                env!("CARGO_BIN_EXE_cracamole-desktop"),
+                env!("CARGO_BIN_EXE_cracamole-desktop-win32"),
                 "-Port",
                 &port.to_string(),
             ])
@@ -100,7 +100,7 @@ async fn native_ssh_unknown_hostname_shows_status() {
                 "-File",
                 concat!(env!("CARGO_MANIFEST_DIR"), "/tests/windows_telnet.ps1"),
                 "-Binary",
-                env!("CARGO_BIN_EXE_cracamole-desktop"),
+                env!("CARGO_BIN_EXE_cracamole-desktop-win32"),
                 "-Port",
                 "22",
             ])
@@ -198,7 +198,7 @@ async fn exercise(
             "-File",
             script,
             "-Binary",
-            env!("CARGO_BIN_EXE_cracamole-desktop"),
+            env!("CARGO_BIN_EXE_cracamole-desktop-win32"),
             "-Port",
             &port.to_string(),
         ])

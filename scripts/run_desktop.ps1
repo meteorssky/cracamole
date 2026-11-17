@@ -17,8 +17,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $profileDir = if ($Release) { 'release' } else { 'debug' }
 if ($Legacy) {
-    $binary = Join-Path $root "target\$profileDir\cracamole-desktop.exe"
-    $build = @('build', '-p', 'cracamole-desktop', '--locked')
+    $binary = Join-Path $root "target\$profileDir\cracamole-desktop-win32.exe"
+    $build = @("build", "-p", "cracamole-desktop", "--bin", "cracamole-desktop-win32", "--locked")
 } else {
     $binary = Join-Path $root "desktop-gpui\target\$profileDir\cracamole-desktop-gpui.exe"
     $build = @('build', '--manifest-path', (Join-Path $root 'desktop-gpui\Cargo.toml'))
